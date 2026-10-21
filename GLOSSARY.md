@@ -144,6 +144,14 @@ _Avoid_: Hộp quà, bùa tài nguyên, resource chest
 Cơ chế tự động gửi lệnh mở đạo cụ tài nguyên qua API `Common.ashx?id=48` (`lBoxID`) ngay khi phát hiện căn cứ không đủ tài nguyên để tiến hành nâng cấp hoặc hạ cấp công trình.
 _Avoid_: Cắn rương, auto open box
 
+**Chu Kỳ Lặp**:
+Khoảng thời gian nghỉ (đơn vị: Giây) giữa các lượt thực thi hoặc kiểm tra định kỳ của các tác vụ chạy nền (Thảo Phạt, Gọi Dân, Bình Man, Xây Dựng, Nghiên Cứu Kỹ Thuật), có ngưỡng sàn an toàn tối thiểu 3.0s.
+_Avoid_: Tần suất, frequency, loop duration
+
+**Độ Trễ Ngẫu Nhiên**:
+Khoảng biến thiên thời gian ngẫu nhiên (± 1~2s) được cộng/trừ vào Chu Kỳ Lặp trước mỗi lượt chờ (`wait_cycle`), nhằm mô phỏng nhịp điệu thao tác của người thật và ngăn chặn các thuật toán phát hiện bot tự động từ phía máy chủ.
+_Avoid_: Jitter, lag ngẫu nhiên, random sleep
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

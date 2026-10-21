@@ -71,6 +71,20 @@ class BaseTaskRunner(threading.Thread):
     def wait(self, seconds: float) -> bool:
         return self.stop_event.wait(seconds)
 
+    def wait_cycle(self, seconds: float, jitter: float = 2.0) -> bool:
+        """Chờ một chu kỳ lặp với cơ chế giãn cách ngẫu nhiên nhẹ (Jitter) chống phát hiện bot.
+
+        Nếu seconds <= 3.0, giữ nguyên (tối thiểu 1.0s).
+        Nếu seconds > 3.0, thêm ngẫu nhiên trong khoảng [-jitter, +jitter], đảm bảo tối thiểu 3.0s.
+        Trả về True nếu stop_event được kích hoạt.
+        """
+        if seconds <= 3.0:
+            actual_wait = max(1.0, seconds)
+        else:
+            import random
+            actual_wait = max(3.0, seconds + random.uniform(-jitter, jitter))
+        return self.stop_event.wait(actual_wait)
+
 
 class GoiDanAutoRunner(BaseTaskRunner):
     def __init__(self, task: GoiDan, interval: float, log_cb, status_cb):
@@ -94,7 +108,7 @@ class GoiDanAutoRunner(BaseTaskRunner):
             except Exception as e:
                 self.log(f"❌ Lỗi ngoại lệ: {e}")
 
-            if self.wait(self.interval):
+            if self.wait_cycle(self.interval):
                 break
         self.status_cb("Đã dừng")
         self.log("⏹️ Nhiệm vụ Gọi Dân đã dừng.")
@@ -122,7 +136,7 @@ class BinhManAutoRunner(BaseTaskRunner):
             except Exception as e:
                 self.log(f"❌ Lỗi ngoại lệ: {e}")
 
-            if self.wait(self.interval):
+            if self.wait_cycle(self.interval):
                 break
         self.status_cb("Đã dừng")
         self.log("⏹️ Nhiệm vụ Bình Man đã dừng.")
@@ -172,7 +186,7 @@ class BuildingAutoRunner(BaseTaskRunner):
             except Exception as e:
                 self.log(f"❌ Lỗi ngoại lệ: {e}")
 
-            if self.wait(self.interval):
+            if self.wait_cycle(self.interval):
                 break
         self.status_cb("Đã dừng")
         self.log("⏹️ Nhiệm vụ Xây Dựng đã dừng.")
@@ -204,7 +218,7 @@ class ResearchAutoRunner(BaseTaskRunner):
             except Exception as e:
                 self.log(f"❌ Lỗi ngoại lệ: {e}")
 
-            if self.wait(self.interval):
+            if self.wait_cycle(self.interval):
                 break
         self.status_cb("Đã dừng")
         self.log("⏹️ Nhiệm vụ Nghiên Cứu đã dừng.")
@@ -453,10 +467,12 @@ class Dashboard(tk.Tk):
                 "box_type_idx": self.bld_box_combo.current() if hasattr(self, "bld_box_combo") else 0,
                 "box_max": self.bld_box_max_var.get() if hasattr(self, "bld_box_max_var") else "5",
                 "auto_fallback_box": bool(self.bld_box_fallback_var.get()) if hasattr(self, "bld_box_fallback_var") else True,
+                "interval": self.bld_interval_var.get() if hasattr(self, "bld_interval_var") else "20",
                 "plans": [],
             },
             "research": {
                 "art_speedup": bool(self.res_art_var.get()) if hasattr(self, "res_art_var") else False,
+                "interval": self.res_interval_var.get() if hasattr(self, "res_interval_var") else "30",
                 "techs": [],
             },
             "thao_phat": {
@@ -468,17 +484,20 @@ class Dashboard(tk.Tk):
                 "auto_recruit": bool(self.tp_auto_recruit_var.get()) if hasattr(self, "tp_auto_recruit_var") else True,
                 "auto_morale": bool(self.tp_auto_morale_var.get()) if hasattr(self, "tp_auto_morale_var") else True,
                 "min_morale": self.tp_min_morale_var.get() if hasattr(self, "tp_min_morale_var") else "95",
+                "interval": self.tp_interval_var.get() if hasattr(self, "tp_interval_var") else "10",
             },
             "goi_dan": {
                 "mode_idx": self.gd_mode_combo.current() if hasattr(self, "gd_mode_combo") else 0,
                 "radius": self.gd_radius_var.get() if hasattr(self, "gd_radius_var") else "5",
                 "auto_recover": bool(self.gd_recover_var.get()) if hasattr(self, "gd_recover_var") else True,
+                "interval": self.gd_interval_var.get() if hasattr(self, "gd_interval_var") else "10",
             },
             "binh_man": {
                 "radius": self.bm_radius_var.get() if hasattr(self, "bm_radius_var") else "5",
                 "min_army": self.bm_min_army_var.get() if hasattr(self, "bm_min_army_var") else "3000",
                 "min_hp": self.bm_min_hp_var.get() if hasattr(self, "bm_min_hp_var") else "50",
                 "auto_comfort": bool(self.bm_comfort_var.get()) if hasattr(self, "bm_comfort_var") else True,
+                "interval": self.bm_interval_var.get() if hasattr(self, "bm_interval_var") else "15",
             },
             "logistics": {
                 "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
@@ -564,6 +583,8 @@ class Dashboard(tk.Tk):
                 self.bld_box_max_var.set(str(bld_data["box_max"]))
             if hasattr(self, "bld_box_fallback_var") and "auto_fallback_box" in bld_data:
                 self.bld_box_fallback_var.set(bool(bld_data["auto_fallback_box"]))
+            if hasattr(self, "bld_interval_var") and "interval" in bld_data:
+                self.bld_interval_var.set(str(bld_data["interval"]))
             plans_list = bld_data.get("plans")
             cities_data = bld_data.get("cities")
 
@@ -614,6 +635,8 @@ class Dashboard(tk.Tk):
             res_data = data["research"]
             if hasattr(self, "res_art_var") and "art_speedup" in res_data:
                 self.res_art_var.set(bool(res_data["art_speedup"]))
+            if hasattr(self, "res_interval_var") and "interval" in res_data:
+                self.res_interval_var.set(str(res_data["interval"]))
             techs_list = res_data.get("techs") or res_data.get("plans")
 
         if techs_list and hasattr(self, "res_tree"):
@@ -660,6 +683,8 @@ class Dashboard(tk.Tk):
                 self.tp_auto_morale_var.set(bool(tp_data["auto_morale"]))
             if hasattr(self, "tp_min_morale_var") and "min_morale" in tp_data:
                 self.tp_min_morale_var.set(str(tp_data["min_morale"]))
+            if hasattr(self, "tp_interval_var") and "interval" in tp_data:
+                self.tp_interval_var.set(str(tp_data["interval"]))
             loaded_sections.append("Thảo Phạt")
 
         # 4. Gọi Dân
@@ -674,6 +699,8 @@ class Dashboard(tk.Tk):
                 self.gd_radius_var.set(str(gd_data["radius"]))
             if hasattr(self, "gd_recover_var") and "auto_recover" in gd_data:
                 self.gd_recover_var.set(bool(gd_data["auto_recover"]))
+            if hasattr(self, "gd_interval_var") and "interval" in gd_data:
+                self.gd_interval_var.set(str(gd_data["interval"]))
             loaded_sections.append("Gọi Dân")
 
         # 5. Bình Man
@@ -687,6 +714,8 @@ class Dashboard(tk.Tk):
                 self.bm_min_hp_var.set(str(bm_data["min_hp"]))
             if hasattr(self, "bm_comfort_var") and "auto_comfort" in bm_data:
                 self.bm_comfort_var.set(bool(bm_data["auto_comfort"]))
+            if hasattr(self, "bm_interval_var") and "interval" in bm_data:
+                self.bm_interval_var.set(str(bm_data["interval"]))
             loaded_sections.append("Bình Man")
 
         # 6. Hậu Cần
@@ -803,7 +832,11 @@ class Dashboard(tk.Tk):
 
         tk.Label(row2, text="Sĩ khí tối thiểu:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
         self.tp_min_morale_var = tk.StringVar(value="95")
-        ttk.Entry(row2, textvariable=self.tp_min_morale_var, width=5).pack(side="left", padx=(0, 12))
+        ttk.Entry(row2, textvariable=self.tp_min_morale_var, width=5).pack(side="left", padx=(0, 10))
+
+        tk.Label(row2, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.tp_interval_var = tk.StringVar(value="10")
+        ttk.Entry(row2, textvariable=self.tp_interval_var, width=4).pack(side="left", padx=(0, 10))
 
         tk.Label(row2, text="(Tự động tính toán thời gian hành quân để xuất quân tối ưu)", bg=BG, fg="#888888", font=("Segoe UI", 8, "italic")).pack(side="left", padx=4)
 
@@ -1015,6 +1048,11 @@ class Dashboard(tk.Tk):
             except ValueError:
                 min_morale = 95
 
+            try:
+                tp_interval = max(3.0, float(self.tp_interval_var.get() or "10"))
+            except ValueError:
+                tp_interval = 10.0
+
             target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
             auto_recruit = bool(self.tp_auto_recruit_var.get()) if hasattr(self, "tp_auto_recruit_var") else True
             auto_morale = bool(self.tp_auto_morale_var.get()) if hasattr(self, "tp_auto_morale_var") else True
@@ -1029,6 +1067,7 @@ class Dashboard(tk.Tk):
                 min_morale=min_morale,
                 auto_recruit=auto_recruit,
                 auto_morale=auto_morale,
+                check_interval=tp_interval,
                 stop_event=self._tp_stop_event,
                 log_callback=lambda msg: self.after(0, self._append_tp_log, msg),
                 status_callback=lambda st: None,
@@ -1081,9 +1120,13 @@ class Dashboard(tk.Tk):
             activeforeground=FG,
         ).grid(row=1, column=2, columnspan=2, sticky="w", padx=4, pady=4)
 
+        tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        self.gd_interval_var = tk.StringVar(value="10")
+        ttk.Entry(top, textvariable=self.gd_interval_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
+
         # Điều khiển
         ctrl_frame = tk.Frame(top, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=2, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=3, padx=16)
         self.gd_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Gọi Dân", style="Success.TButton", command=self._toggle_goidan)
         self.gd_start_btn.pack(side="top", pady=2)
         self.gd_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_goidan_once)
@@ -1138,9 +1181,13 @@ class Dashboard(tk.Tk):
             task = self._create_goidan_task()
             if not task:
                 return
+            try:
+                gd_interval = max(3.0, float(self.gd_interval_var.get() or "10"))
+            except ValueError:
+                gd_interval = 10.0
             self._gd_runner = GoiDanAutoRunner(
                 task,
-                interval=10.0,
+                interval=gd_interval,
                 log_cb=lambda m: self.after(0, self._append_gd_log, m),
                 status_cb=lambda s: None,
             )
@@ -1181,8 +1228,12 @@ class Dashboard(tk.Tk):
         self.bm_mantypes_var = tk.StringVar(value="7,8,9,10")
         ttk.Entry(top, textvariable=self.bm_mantypes_var, width=18).grid(row=2, column=3, sticky="w", padx=4, pady=4)
 
+        tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        self.bm_interval_var = tk.StringVar(value="15")
+        ttk.Entry(top, textvariable=self.bm_interval_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=4)
+
         ctrl_frame = tk.Frame(top, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=3, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=4, padx=16)
         self.bm_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Bình Man", style="Success.TButton", command=self._toggle_binhman)
         self.bm_start_btn.pack(side="top", pady=2)
         self.bm_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
@@ -1244,9 +1295,13 @@ class Dashboard(tk.Tk):
             task = self._create_binhman_task()
             if not task:
                 return
+            try:
+                bm_interval = max(3.0, float(self.bm_interval_var.get() or "15"))
+            except ValueError:
+                bm_interval = 15.0
             self._bm_runner = BinhManAutoRunner(
                 task,
-                interval=15.0,
+                interval=bm_interval,
                 log_cb=lambda m: self.after(0, self._append_bm_log, m),
                 status_cb=lambda s: None,
             )
@@ -1305,6 +1360,10 @@ class Dashboard(tk.Tk):
             selectcolor=CARD,
             activebackground=BG,
         ).pack(side="left", padx=4)
+
+        tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(8, 2))
+        self.bld_interval_var = tk.StringVar(value="20")
+        ttk.Entry(top, textvariable=self.bld_interval_var, width=4).pack(side="left", padx=(0, 6))
 
         self.bld_start_btn = ttk.Button(top, text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton", command=self._toggle_building)
         self.bld_start_btn.pack(side="right", padx=4)
@@ -1891,9 +1950,14 @@ class Dashboard(tk.Tk):
                 messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 công trình cần nâng cấp trong các căn cứ đã chọn!")
                 return
 
+            try:
+                bld_interval = max(3.0, float(self.bld_interval_var.get() or "20"))
+            except ValueError:
+                bld_interval = 20.0
+
             self._bld_runner = BuildingAutoRunner(
                 tasks,
-                interval=20.0,
+                interval=bld_interval,
                 log_cb=lambda m: self.after(0, self._append_bld_log, m),
                 status_cb=lambda s: None,
             )
@@ -1934,6 +1998,10 @@ class Dashboard(tk.Tk):
             selectcolor=BG,
             activebackground=CARD,
         ).pack(side="left", padx=6)
+
+        tk.Label(res_top, text="Chu kỳ (s):", bg=CARD, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(6, 2))
+        self.res_interval_var = tk.StringVar(value="30")
+        ttk.Entry(res_top, textvariable=self.res_interval_var, width=4).pack(side="left", padx=(0, 6))
 
         self.res_start_btn = ttk.Button(res_top, text="▶️ Bắt đầu", style="Success.TButton", command=self._toggle_research)
         self.res_start_btn.pack(side="right", padx=4)
@@ -2215,9 +2283,14 @@ class Dashboard(tk.Tk):
                 auto_art_of_war=self.res_art_var.get(),
                 notify=lambda m: self.after(0, self._append_logis_log, m),
             )
+            try:
+                res_interval = max(3.0, float(self.res_interval_var.get() or "30"))
+            except ValueError:
+                res_interval = 30.0
+
             self._res_runner = ResearchAutoRunner(
                 task,
-                interval=30.0,
+                interval=res_interval,
                 log_cb=lambda m: self.after(0, self._append_logis_log, m),
                 status_cb=lambda s: None,
             )

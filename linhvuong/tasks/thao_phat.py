@@ -359,6 +359,15 @@ class ThaoPhatAutoRunner:
         """Chờ `seconds` giây. Trả về True nếu stop_event được kích hoạt (người dùng bấm dừng)."""
         return self.stop_event.wait(seconds)
 
+    def wait_cycle(self, seconds: float, jitter: float = 2.0) -> bool:
+        """Chờ một chu kỳ lặp với cơ chế giãn cách ngẫu nhiên nhẹ (Jitter) chống phát hiện bot."""
+        if seconds <= 3.0:
+            actual_wait = max(1.0, seconds)
+        else:
+            import random
+            actual_wait = max(3.0, seconds + random.uniform(-jitter, jitter))
+        return self.stop_event.wait(actual_wait)
+
     def stop(self) -> None:
         self.stop_event.set()
 
@@ -403,7 +412,7 @@ class ThaoPhatAutoRunner:
                         if desc != last_logged_busy:
                             last_logged_busy = desc
                             self.log(f"⏳ Tướng chưa rảnh rỗi: {desc}. Đang chờ (timer chạy ngầm)...")
-                        if self.wait(self.check_interval):
+                        if self.wait_cycle(self.check_interval):
                             break
                         continue
                     last_logged_busy = None
@@ -743,18 +752,18 @@ class ThaoPhatAutoRunner:
                         self.log(f"🏁 [Lượt {cycle}] Hoàn thành lượt {cycle}: ✅ Tất cả tướng đã hoàn thành nhiệm vụ và trở về thành an toàn!")
                         break
                     else:
-                        if self.wait(self.check_interval):
+                        if self.wait_cycle(self.check_interval):
                             break
 
                 if self.stop_event.is_set():
                     break
 
                 # Nghỉ ngắn trước khi bắt đầu chu kỳ kế tiếp
-                self.wait(min(3.0, self.check_interval))
+                self.wait_cycle(min(3.0, self.check_interval))
 
             except Exception as e:
                 self.log(f"❌ Ngoại lệ trong vòng lặp Thảo Phạt: {e}. Thử lại sau {int(self.check_interval)}s...")
-                if self.wait(self.check_interval):
+                if self.wait_cycle(self.check_interval):
                     break
 
         self.log("\n⏹️ ĐÃ DỪNG TÍNH NĂNG THẢO PHẠT TỰ ĐỘNG.")

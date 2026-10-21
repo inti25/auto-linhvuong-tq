@@ -558,6 +558,86 @@ def test_dashboard_multi_city_profile_sync(tmp_path):
         dash.destroy()
 
 
+def test_dashboard_configurable_intervals_and_profile_sync(tmp_path):
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra giá trị mặc định của 5 biến interval
+        assert dash.tp_interval_var.get() == "10"
+        assert dash.gd_interval_var.get() == "10"
+        assert dash.bm_interval_var.get() == "15"
+        assert dash.bld_interval_var.get() == "20"
+        assert dash.res_interval_var.get() == "30"
+
+        # 2. Thay đổi giá trị tùy chỉnh
+        dash.tp_interval_var.set("8")
+        dash.gd_interval_var.set("12")
+        dash.bm_interval_var.set("25")
+        dash.bld_interval_var.set("18")
+        dash.res_interval_var.set("45")
+
+        # 3. Thu thập và kiểm tra profile dictionary
+        profile = dash._collect_unified_profile()
+        assert profile["thao_phat"]["interval"] == "8"
+        assert profile["goi_dan"]["interval"] == "12"
+        assert profile["binh_man"]["interval"] == "25"
+        assert profile["building"]["interval"] == "18"
+        assert profile["research"]["interval"] == "45"
+
+        # 4. Lưu ra file và reset giao diện
+        prof_file = tmp_path / "interval_profile.json"
+        saved = dash._save_unified_profile(prof_file)
+        assert saved.exists()
+
+        dash.tp_interval_var.set("10")
+        dash.gd_interval_var.set("10")
+        dash.bm_interval_var.set("15")
+        dash.bld_interval_var.set("20")
+        dash.res_interval_var.set("30")
+
+        # 5. Nạp lại profile và kiểm tra khôi phục
+        ok, msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+        assert dash.tp_interval_var.get() == "8"
+        assert dash.gd_interval_var.get() == "12"
+        assert dash.bm_interval_var.get() == "25"
+        assert dash.bld_interval_var.get() == "18"
+        assert dash.res_interval_var.get() == "45"
+    finally:
+        dash.destroy()
+
+
+def test_base_task_runner_and_thao_phat_wait_cycle():
+    from linhvuong.dashboard import BaseTaskRunner
+    from linhvuong.tasks.thao_phat import ThaoPhatAutoRunner
+    from unittest.mock import MagicMock
+
+    # 1. BaseTaskRunner.wait_cycle
+    b_runner = BaseTaskRunner("TestRunner", lambda m: None, lambda s: None)
+    with patch.object(b_runner.stop_event, "wait", return_value=False) as mock_wait:
+        # Với seconds <= 3.0, actual_wait = max(1.0, seconds)
+        b_runner.wait_cycle(2.0)
+        assert mock_wait.call_args[0][0] == 2.0
+
+        b_runner.wait_cycle(0.5)
+        assert mock_wait.call_args[0][0] == 1.0
+
+        # Với seconds > 3.0, actual_wait trong khoảng [seconds - jitter, seconds + jitter]
+        b_runner.wait_cycle(10.0, jitter=2.0)
+        called_sec = mock_wait.call_args[0][0]
+        assert 8.0 <= called_sec <= 12.0
+
+    # 2. ThaoPhatAutoRunner.wait_cycle
+    tp_runner = ThaoPhatAutoRunner(gateway=MagicMock(), check_interval=10.0)
+    with patch.object(tp_runner.stop_event, "wait", return_value=False) as mock_tp_wait:
+        tp_runner.wait_cycle(2.5)
+        assert mock_tp_wait.call_args[0][0] == 2.5
+
+        tp_runner.wait_cycle(15.0, jitter=2.0)
+        called_sec = mock_tp_wait.call_args[0][0]
+        assert 13.0 <= called_sec <= 17.0
+
+
+
 
 
 
