@@ -328,6 +328,69 @@ def test_research_task_even_research_ordering():
     assert calls_even == ["2", "4", "3", "1"]
 
 
+def test_research_task_on_sync_data_callback():
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=37": {"ret": 0, "tech": {}},
+            "City.ashx?id=50": {"ret": 0},
+            "City.ashx?id=5": {"ret": 0, "infos": [[5, 6, "大学殿", 20]]},
+            "Build.ashx?id=2": {
+                "ret": 0,
+                "list": [
+                    [1, "Tech1", 5],
+                    [2, "Tech2", 3],
+                ],
+            },
+            "OPT.ashx?id=44": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [TechPlan(tech_id=1, target_level=10)]
+    synced_events = []
+
+    def on_sync(city_id, levels, tech_status):
+        synced_events.append((city_id, levels, tech_status))
+
+    task = ResearchTask(gw, city_id=21936, plans=plans, on_sync_data=on_sync)
+    res = task.run_once()
+    assert res == "researching"
+    assert len(synced_events) == 1
+    assert synced_events[0][0] == 21936
+    assert synced_events[0][1] == {1: 5, 2: 3}
+    assert synced_events[0][2] is None  # not busy
+
+
+def test_research_task_syncs_on_first_cycle_even_if_busy():
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=37": {"ret": 0, "tech": [1, 5, 120]},  # đang nghiên cứu tech 1
+            "City.ashx?id=50": {"ret": 0},
+            "City.ashx?id=5": {"ret": 0, "infos": [[5, 6, "大学殿", 20]]},
+            "Build.ashx?id=2": {
+                "ret": 0,
+                "list": [
+                    [1, "Tech1", 5],
+                    [2, "Tech2", 3],
+                ],
+            },
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [TechPlan(tech_id=2, target_level=10)]
+    synced_events = []
+
+    def on_sync(city_id, levels, tech_status):
+        synced_events.append((city_id, levels, tech_status))
+
+    task = ResearchTask(gw, city_id=21936, plans=plans, auto_art_of_war=False, on_sync_data=on_sync)
+    res = task.run_once()
+    assert res == "research_busy"
+    assert len(synced_events) == 1
+    assert synced_events[0][0] == 21936
+    assert synced_events[0][1] == {1: 5, 2: 3}
+    assert synced_events[0][2] == (True, 1)  # is_busy=True, tech_id=1
+
+
 
 
 

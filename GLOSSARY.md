@@ -170,6 +170,14 @@ _Avoid_: Profile độc lập, file cấu hình riêng, isolated profile
 Tính năng trên giao diện đăng nhập cho phép lưu trữ và chuyển đổi nhanh giữa danh sách các tài khoản Linh Vương đã đăng nhập (kèm Server ID và Proxy riêng biệt tương ứng) mà không cần nhập lại thông tin thủ công.
 _Avoid_: Account switcher, đổi acc, quản lý tài khoản
 
+**Đồng Bộ Dữ Liệu Thực Tế**:
+Tiến trình tự động cập nhật cấp độ và trạng thái kiến trúc, kỹ thuật từ phản hồi của máy chủ về bộ nhớ và giao diện bot sau mỗi chu kỳ thi công mà không phát sinh thêm lệnh truy vấn dư thừa.
+_Avoid_: Refresh dữ liệu, reload thực tế, fetch lặp
+
+**Bảo Toàn Thứ Tự Ưu Tiên**:
+Nguyên tắc bất biến duy trì chính xác vị trí sắp xếp của các đối tượng trong Hàng Đợi Xây Dựng và Hàng Đợi Nghiên Cứu qua các lần nạp dữ liệu thực tế, chuyển đổi căn cứ hoặc nạp hồ sơ cấu hình.
+_Avoid_: Reset thứ tự, xếp lại theo server, auto-sort mặc định
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

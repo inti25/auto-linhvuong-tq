@@ -790,6 +790,66 @@ def test_building_task_even_upgrade_ordering():
     assert calls_even == ["2", "5", "3", "1", "4"]
 
 
+def test_building_task_on_sync_data_callback():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "buildings": [
+                    {"pid": 1, "gid": 1, "level": 12},
+                    {"pid": 2, "gid": 2, "level": 8},
+                ],
+            },
+            "City.ashx?id=20": {"ret": 0},
+            "OPT.ashx?id=65": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=15)]
+    synced_events = []
+
+    def on_sync(city_id, real_map):
+        synced_events.append((city_id, real_map))
+
+    task = BuildingTask(gw, city_id=101, plans=plans, on_sync_data=on_sync)
+    res = task.run_once()
+    assert res == "upgrading"
+    assert len(synced_events) == 1
+    assert synced_events[0][0] == 101
+    assert synced_events[0][1][1]["level"] == 12
+    assert synced_events[0][1][2]["level"] == 8
+
+
+def test_building_task_syncs_on_first_cycle_even_if_slots_busy():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": [{"slot": 1, "bid": 1}, {"slot": 2, "bid": 2}, {"slot": 3, "bid": 3}]},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phu", 10],
+                    [2, 2, "Tuong Thanh", 5],
+                ],
+            },
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=15)]
+    synced_events = []
+
+    def on_sync(city_id, real_map):
+        synced_events.append((city_id, real_map))
+
+    task = BuildingTask(gw, city_id=101, plans=plans, max_slots=3, auto_speedup=False, on_sync_data=on_sync)
+    res = task.run_once()
+    assert res == "slots_busy"
+    assert len(synced_events) == 1
+    assert synced_events[0][0] == 101
+    assert synced_events[0][1][1]["level"] == 10
+    assert synced_events[0][1][2]["level"] == 5
+
+
 
 
 

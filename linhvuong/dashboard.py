@@ -143,13 +143,25 @@ class BinhManAutoRunner(BaseTaskRunner):
 
 
 class BuildingAutoRunner(BaseTaskRunner):
-    def __init__(self, task_or_tasks: Union[BuildingTask, list[BuildingTask]], interval: float, log_cb, status_cb):
+    def __init__(
+        self,
+        task_or_tasks: Union[BuildingTask, list[BuildingTask]],
+        interval: float,
+        log_cb,
+        status_cb,
+        sync_cb: Optional[Callable[[int, dict], None]] = None,
+    ):
         super().__init__("Xây Dựng", log_cb, status_cb)
         if isinstance(task_or_tasks, list):
             self.tasks: list[BuildingTask] = task_or_tasks
         else:
             self.tasks: list[BuildingTask] = [task_or_tasks]
         self.interval = interval
+        self.sync_cb = sync_cb
+        if sync_cb:
+            for t in self.tasks:
+                if not getattr(t, "on_sync_data", None):
+                    t.on_sync_data = sync_cb
 
     @property
     def task(self) -> Optional[BuildingTask]:
@@ -193,10 +205,20 @@ class BuildingAutoRunner(BaseTaskRunner):
 
 
 class ResearchAutoRunner(BaseTaskRunner):
-    def __init__(self, task: ResearchTask, interval: float, log_cb, status_cb):
+    def __init__(
+        self,
+        task: ResearchTask,
+        interval: float,
+        log_cb,
+        status_cb,
+        sync_cb: Optional[Callable[[int, dict, Optional[tuple]], None]] = None,
+    ):
         super().__init__("Nghiên Cứu", log_cb, status_cb)
         self.task = task
         self.interval = interval
+        self.sync_cb = sync_cb
+        if sync_cb and not getattr(self.task, "on_sync_data", None):
+            self.task.on_sync_data = sync_cb
 
     def run(self):
         self.status_cb("Đang chạy...")
@@ -1817,69 +1839,172 @@ class Dashboard(tk.Tk):
             except Exception:
                 pass
 
-    def _update_city_buildings_ui(self, buildings, city_id: Optional[int] = None):
-        target_city_id = city_id or self._current_bld_city_id
+    def _sync_city_buildings_data(self, target_city_id: Optional[int], buildings, from_auto_cycle: bool = False):
+        target_city_id = target_city_id or self._current_bld_city_id
         if not buildings:
-            self._append_bld_log("ℹ️ Server không trả về dữ liệu công trình.")
+            if not from_auto_cycle:
+                self._append_bld_log("ℹ️ Server không trả về dữ liệu công trình.")
             return
 
-        existing_targets = {}
-        cached_plans = self._city_building_plans.get(target_city_id, [])
-        for p in cached_plans:
-            existing_targets[int(p["pid"])] = ("☑" if p.get("enabled", True) else "☐", int(p.get("target_level", 20)))
+        # 1. Chuẩn hóa dữ liệu server: pid -> {"gid": int, "level": int, "name": str}
+        real_map: dict[int, dict] = {}
+        if isinstance(buildings, dict):
+            for pid_k, b_info in buildings.items():
+                try:
+                    pid = int(pid_k)
+                    if isinstance(b_info, dict):
+                        real_map[pid] = {
+                            "gid": int(b_info.get("gid", 0)),
+                            "level": int(b_info.get("level", 0)),
+                            "name": b_info.get("name", ""),
+                        }
+                    elif isinstance(b_info, (list, tuple)) and len(b_info) >= 4:
+                        real_map[pid] = {
+                            "gid": int(b_info[1]),
+                            "level": int(b_info[3]),
+                            "name": str(b_info[2]) if len(b_info) > 2 else "",
+                        }
+                except (ValueError, TypeError):
+                    pass
+        elif isinstance(buildings, (list, tuple)):
+            for b in buildings:
+                if isinstance(b, dict):
+                    pid = int(b.get("pid", 0))
+                    real_map[pid] = {
+                        "gid": int(b.get("gid", 0)),
+                        "level": int(b.get("level", 0)),
+                        "name": b.get("name", ""),
+                    }
+                elif isinstance(b, (list, tuple)) and len(b) >= 4:
+                    pid = int(b[0])
+                    real_map[pid] = {
+                        "gid": int(b[1]),
+                        "level": int(b[3]),
+                        "name": str(b[2]) if len(b) > 2 else "",
+                    }
 
-        if target_city_id == self._current_bld_city_id:
-            for iid in self.bld_tree.get_children(""):
-                vals = self.bld_tree.item(iid, "values")
-                if vals and len(vals) >= 5:
-                    try:
-                        p_id = int(vals[1])
-                        existing_targets[p_id] = (vals[0], int(vals[4]))
-                    except (ValueError, IndexError):
-                        pass
-
-        new_plans = []
-        for b in buildings:
-            pid = 0
-            gid = 0
-            name = ""
-            cur_lvl = 0
-            if isinstance(b, dict):
-                pid = int(b.get("pid", 0))
-                gid = int(b.get("gid", 0))
-                cur_lvl = int(b.get("level", 0))
-                name = b.get("name", "")
-            elif isinstance(b, (list, tuple)) and len(b) >= 4:
-                pid = int(b[0])
-                gid = int(b[1])
-                name = str(b[2])
-                cur_lvl = int(b[3])
-            else:
-                continue
-
-            std_name = BUILDING_NAMES.get(gid, name or f"Công trình {gid}")
-            enabled, target_lvl = existing_targets.get(pid, ("☑", max(cur_lvl + 1, 20)))
-            new_plans.append({
-                "pid": pid,
-                "gid": gid,
-                "name": std_name,
-                "cur_lvl": cur_lvl,
-                "target_level": target_lvl,
-                "enabled": enabled == "☑",
-            })
-
-        if target_city_id is not None:
-            self._city_building_plans[target_city_id] = new_plans
-
-        if target_city_id == self._current_bld_city_id or self._current_bld_city_id is None:
-            self._render_bld_tree_from_plans(new_plans)
+        if not real_map:
+            return
 
         base_name = str(target_city_id) if target_city_id else ""
         if self.roster and target_city_id:
             b = self.roster.base_by_id(target_city_id)
             if b:
                 base_name = b.name
-        self._append_bld_log(f"🔄 Đã nạp thành công {len(new_plans)} công trình thực tế của {base_name}.")
+
+        # 2. Lấy danh sách quy hoạch hiện tại (cache hoặc treeview) để bảo toàn thứ tự 100%
+        cached_plans = list(self._city_building_plans.get(target_city_id, []))
+        if not cached_plans and target_city_id == self._current_bld_city_id and hasattr(self, "bld_tree"):
+            for iid in self.bld_tree.get_children(""):
+                vals = self.bld_tree.item(iid, "values")
+                name = self.bld_tree.item(iid, "text")
+                if vals and len(vals) >= 5:
+                    try:
+                        cached_plans.append({
+                            "pid": int(vals[1]),
+                            "gid": int(vals[2]),
+                            "name": name,
+                            "cur_lvl": int(vals[3]),
+                            "target_level": int(vals[4]),
+                            "enabled": vals[0] == "☑",
+                        })
+                    except (ValueError, IndexError):
+                        pass
+
+        # 3. Bảo toàn thứ tự: Duyệt theo danh sách hiện hữu
+        seen_pids = set()
+        new_plans = []
+        level_changes = []
+
+        if not cached_plans:
+            # Chưa từng có kế hoạch: Khởi tạo mới theo danh sách server
+            for pid, r_info in real_map.items():
+                gid = int(r_info.get("gid", 1))
+                name = BUILDING_NAMES.get(gid, r_info.get("name") or f"Công trình {gid}")
+                lvl = int(r_info.get("level", 0))
+                new_plans.append({
+                    "pid": pid,
+                    "gid": gid,
+                    "name": name,
+                    "cur_lvl": lvl,
+                    "target_level": max(lvl + 1, 20),
+                    "enabled": True,
+                })
+        else:
+            for p in cached_plans:
+                pid = int(p.get("pid", 0))
+                seen_pids.add(pid)
+                plan_entry = dict(p)
+                if pid in real_map:
+                    r_info = real_map[pid]
+                    old_lvl = int(p.get("cur_lvl", 0))
+                    new_lvl = int(r_info.get("level", 0))
+                    if new_lvl != old_lvl:
+                        level_changes.append((pid, plan_entry.get("name") or f"Ô {pid}", old_lvl, new_lvl))
+                    plan_entry["cur_lvl"] = new_lvl
+                    if r_info.get("gid"):
+                        plan_entry["gid"] = r_info["gid"]
+                        plan_entry["name"] = BUILDING_NAMES.get(r_info["gid"], r_info.get("name") or plan_entry.get("name", ""))
+                new_plans.append(plan_entry)
+
+            # Các ô đất mới trên server chưa có trong quy hoạch: đưa xuống cuối danh sách
+            for pid, r_info in real_map.items():
+                if pid not in seen_pids:
+                    gid = int(r_info.get("gid", 1))
+                    name = BUILDING_NAMES.get(gid, r_info.get("name") or f"Công trình {gid}")
+                    lvl = int(r_info.get("level", 0))
+                    new_plans.append({
+                        "pid": pid,
+                        "gid": gid,
+                        "name": name,
+                        "cur_lvl": lvl,
+                        "target_level": lvl,
+                        "enabled": False,
+                    })
+
+        # Lưu lại cache
+        if target_city_id is not None:
+            self._city_building_plans[target_city_id] = new_plans
+
+        # 4. Cập nhật giao diện in-place nếu căn cứ này đang hiển thị
+        if (target_city_id == self._current_bld_city_id or self._current_bld_city_id is None) and hasattr(self, "bld_tree"):
+            tree_children = self.bld_tree.get_children("")
+            if not tree_children:
+                self._render_bld_tree_from_plans(new_plans)
+            else:
+                for p in new_plans:
+                    pid_str = str(p["pid"])
+                    cur_lvl = p["cur_lvl"]
+                    target_lvl = p["target_level"]
+                    tag = self._get_bld_row_tag(cur_lvl, target_lvl)
+                    en = "☑" if p.get("enabled", True) else "☐"
+                    if self.bld_tree.exists(pid_str):
+                        vals = list(self.bld_tree.item(pid_str, "values"))
+                        if len(vals) >= 5:
+                            vals[2] = p["gid"]
+                            vals[3] = cur_lvl
+                            self.bld_tree.item(pid_str, text=p["name"], values=vals, tags=(tag,))
+                    else:
+                        self.bld_tree.insert(
+                            "",
+                            "end",
+                            iid=pid_str,
+                            text=p["name"],
+                            values=(en, p["pid"], p["gid"], cur_lvl, target_lvl),
+                            tags=(tag,),
+                        )
+
+        # 5. Ghi nhật ký phản hồi trực quan
+        if level_changes:
+            ch_str = ", ".join([f"{name} (cấp {ol}➔{nl})" for _, name, ol, nl in level_changes[:3]])
+            if len(level_changes) > 3:
+                ch_str += f", +{len(level_changes)-3} công trình khác"
+            self._append_bld_log(f"🔄 [{base_name}] Đã đồng bộ thực tế: {ch_str}")
+        elif not from_auto_cycle:
+            self._append_bld_log(f"🔄 Đã nạp thành công {len(new_plans)} công trình thực tế của {base_name} (bảo toàn thứ tự ưu tiên).")
+
+    def _update_city_buildings_ui(self, buildings, city_id: Optional[int] = None):
+        self._sync_city_buildings_data(city_id, buildings, from_auto_cycle=False)
 
     def _load_build_plans(self):
         plan_path = Path("build_plans.json") if Path("build_plans.json").exists() else Path("build_plans.example.json")
@@ -2009,6 +2134,7 @@ class Dashboard(tk.Tk):
                     even_upgrade=bool(self.bld_even_var.get()) if hasattr(self, "bld_even_var") else False,
                     notify=lambda m, cname=base_name: self.after(0, self._append_bld_log, f"[{cname}] {m}"),
                     city_name=base_name,
+                    on_sync_data=lambda target_cid, rdata: self.after(0, self._sync_city_buildings_data, target_cid, rdata, True),
                 )
                 tasks.append(task)
 
@@ -2026,12 +2152,14 @@ class Dashboard(tk.Tk):
                 interval=bld_interval,
                 log_cb=lambda m: self.after(0, self._append_bld_log, m),
                 status_cb=lambda s: None,
+                sync_cb=lambda target_cid, rdata: self.after(0, self._sync_city_buildings_data, target_cid, rdata, True),
             )
             self._bld_runner.start()
             self.bld_start_btn.configure(text="⏹️ Dừng Nâng Cấp", style="Danger.TButton")
         else:
             self._bld_runner.stop()
             self.bld_start_btn.configure(text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton")
+            self._save_current_bld_tree_to_cache()
 
     # =========================================================================
     # TAB 6: ĐẠI HỌC & HẬU CẦN
@@ -2256,26 +2384,52 @@ class Dashboard(tk.Tk):
         except Exception as e:
             self.after(0, lambda: self._append_logis_log(f"❌ Lỗi tải kỹ thuật thành: {e}"))
 
-    def _update_city_techs_ui(self, levels_map: dict):
+    def _sync_city_techs_data(self, city_id: int, levels_map: dict, tech_status: Optional[tuple] = None, from_auto_cycle: bool = False):
         if not levels_map:
-            self._append_logis_log("ℹ️ Server không trả về dữ liệu kỹ thuật.")
+            if not from_auto_cycle:
+                self._append_logis_log("ℹ️ Server không trả về dữ liệu kỹ thuật.")
             return
 
+        level_changes = []
         for iid in self.res_tree.get_children(""):
             try:
                 tid = int(iid)
-                cur_lvl = levels_map.get(tid, 0)
-                vals = list(self.res_tree.item(iid, "values"))
-                if len(vals) >= 3:
-                    if len(vals) == 3:
-                        vals.append(cur_lvl)
-                    else:
-                        vals[3] = cur_lvl
-                    self.res_tree.item(iid, values=vals)
+                if tid in levels_map:
+                    cur_lvl = int(levels_map[tid])
+                    vals = list(self.res_tree.item(iid, "values"))
+                    tname = self.res_tree.item(iid, "text")
+                    if len(vals) >= 3:
+                        old_lvl = int(vals[3]) if len(vals) > 3 else 0
+                        if len(vals) == 3:
+                            vals.append(cur_lvl)
+                        else:
+                            vals[3] = cur_lvl
+                        if old_lvl != cur_lvl and old_lvl > 0:
+                            level_changes.append((tid, tname, old_lvl, cur_lvl))
+                        self.res_tree.item(iid, values=vals)
             except (ValueError, IndexError):
                 pass
 
-        self._append_logis_log(f"🔄 Đã nạp thành công cấp độ thực tế của {len(levels_map)} kỹ thuật.")
+        if level_changes:
+            ch_str = ", ".join([f"{name} (cấp {ol}➔{nl})" for _, name, ol, nl in level_changes[:3]])
+            if len(level_changes) > 3:
+                ch_str += f", +{len(level_changes)-3} kỹ thuật khác"
+            self._append_logis_log(f"🔄 Đã đồng bộ kỹ thuật thực tế: {ch_str}")
+        elif not from_auto_cycle:
+            self._append_logis_log(f"🔄 Đã nạp thành công cấp độ thực tế của {len(levels_map)} kỹ thuật (bảo toàn thứ tự ưu tiên).")
+
+        if tech_status and tech_status[0]:
+            tid = tech_status[1]
+            tname = TECH_NAMES.get(tid, f"Kỹ thuật {tid}")
+            if not from_auto_cycle:
+                self._append_logis_log(f"🔬 Viện Đại Học đang nghiên cứu: {tname}")
+
+    def _update_city_techs_ui(self, levels_map: dict):
+        sel_idx = self.res_city_combo.current() if hasattr(self, "res_city_combo") else -1
+        city_id = 0
+        if self.roster and self.roster.cities and 0 <= sel_idx < len(self.roster.cities):
+            city_id = self.roster.cities[sel_idx].id
+        self._sync_city_techs_data(city_id, levels_map, tech_status=None, from_auto_cycle=False)
 
     def _move_res_up(self):
         sel = self.res_tree.selection()
@@ -2411,6 +2565,7 @@ class Dashboard(tk.Tk):
                 auto_art_of_war=self.res_art_var.get(),
                 even_research=bool(self.res_even_var.get()) if hasattr(self, "res_even_var") else False,
                 notify=lambda m: self.after(0, self._append_logis_log, m),
+                on_sync_data=lambda target_cid, levels, t_stat: self.after(0, self._sync_city_techs_data, target_cid, levels, t_stat, True),
             )
             try:
                 res_interval = max(3.0, float(self.res_interval_var.get() or "30"))
@@ -2422,6 +2577,7 @@ class Dashboard(tk.Tk):
                 interval=res_interval,
                 log_cb=lambda m: self.after(0, self._append_logis_log, m),
                 status_cb=lambda s: None,
+                sync_cb=lambda target_cid, levels, t_stat: self.after(0, self._sync_city_techs_data, target_cid, levels, t_stat, True),
             )
             self._res_runner.start()
             self.res_start_btn.configure(text="⏹️ Dừng", style="Danger.TButton")

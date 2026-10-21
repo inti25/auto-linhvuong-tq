@@ -100,6 +100,7 @@ class BuildingTask:
         even_upgrade: bool = False,
         notify: Callable[[str], None] = print,
         city_name: str = "",
+        on_sync_data: Optional[Callable[[int, dict[int, dict]], None]] = None,
     ):
         self.gateway = gateway
         self.city_id = city_id
@@ -116,6 +117,7 @@ class BuildingTask:
         self.auto_fallback_box = auto_fallback_box
         self.even_upgrade = even_upgrade
         self.notify = notify
+        self.on_sync_data = on_sync_data
         self.skipped_pids: set[int] = set()
         self.deferred_pids: set[int] = set()
 
@@ -346,16 +348,46 @@ class BuildingTask:
                     self.speedup_slot(slot_idx)
                 active_slots = self.get_active_upgrade_slots()
                 if len(active_slots) >= self.max_slots:
+                    if not getattr(self, "_synced_once", False):
+                        try:
+                            rb = self.get_real_buildings()
+                            self._synced_once = True
+                            if self.on_sync_data:
+                                self.on_sync_data(self.city_id, rb)
+                        except Exception:
+                            pass
                     return "slots_busy"
             else:
+                if not getattr(self, "_synced_once", False):
+                    try:
+                        rb = self.get_real_buildings()
+                        self._synced_once = True
+                        if self.on_sync_data:
+                            self.on_sync_data(self.city_id, rb)
+                    except Exception:
+                        pass
                 return "slots_busy"
 
         available_slots = self.max_slots - len(active_slots)
         if available_slots <= 0:
+            if not getattr(self, "_synced_once", False):
+                try:
+                    rb = self.get_real_buildings()
+                    self._synced_once = True
+                    if self.on_sync_data:
+                        self.on_sync_data(self.city_id, rb)
+                except Exception:
+                    pass
             return "slots_busy"
 
         # 4. Lấy danh sách công trình thực tế
         real_buildings = self.get_real_buildings()
+        self._synced_once = True
+        if self.on_sync_data:
+            try:
+                self.on_sync_data(self.city_id, real_buildings)
+            except Exception:
+                pass
 
         # Trích xuất danh sách pid đang được nâng cấp dở
         busy_pids = set()

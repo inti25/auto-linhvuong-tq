@@ -70,6 +70,7 @@ class ResearchTask:
         auto_art_of_war: bool = False,
         even_research: bool = False,
         notify: Callable[[str], None] = print,
+        on_sync_data: Optional[Callable[[int, dict[int, int], Optional[tuple]], None]] = None,
     ):
         self.gateway = gateway
         self.city_id = city_id
@@ -77,6 +78,9 @@ class ResearchTask:
         self.auto_art_of_war = auto_art_of_war
         self.even_research = even_research
         self.notify = notify
+        self.on_sync_data = on_sync_data
+        self._cached_levels: dict[int, int] = {}
+        self._synced_once: bool = False
 
     def is_research_ongoing(self) -> tuple[bool, Optional[int]]:
         """Kiểm tra xem hiện tại có công nghệ nào đang được nghiên cứu không qua City.ashx?id=37."""
@@ -173,7 +177,26 @@ class ResearchTask:
     def run_once(self) -> str:
         # 1. Kiểm tra xem viện Đại Học có đang bận nghiên cứu không
         is_busy, current_tech_id = self.is_research_ongoing()
+        tech_status = (is_busy, current_tech_id) if is_busy else None
+
         if is_busy:
+            # Nếu bận nhưng chưa đọc cấp độ lần nào, đọc 1 lần để UI có cấp độ khởi tạo
+            if not getattr(self, "_synced_once", False):
+                try:
+                    lvls = self.get_current_tech_levels()
+                    if lvls:
+                        self._cached_levels = lvls
+                        self._synced_once = True
+                        if self.on_sync_data:
+                            self.on_sync_data(self.city_id, lvls, tech_status)
+                except Exception:
+                    pass
+            elif self.on_sync_data and getattr(self, "_cached_levels", None):
+                try:
+                    self.on_sync_data(self.city_id, self._cached_levels, tech_status)
+                except Exception:
+                    pass
+
             if self.auto_art_of_war:
                 self.use_art_of_war()
                 return "art_of_war_used"
@@ -184,6 +207,14 @@ class ResearchTask:
         if not current_levels:
             self.notify(f"⚠️ Không đọc được thông tin kỹ thuật từ thành ID={self.city_id} (kiểm tra lại Viện Đại Học).")
             return "tech_read_failed"
+
+        self._cached_levels = current_levels
+        self._synced_once = True
+        if self.on_sync_data:
+            try:
+                self.on_sync_data(self.city_id, current_levels, tech_status)
+            except Exception:
+                pass
 
         # 3. Lọc theo thứ tự ưu tiên các kỹ thuật chưa đạt cấp mục tiêu
         eligible_plans = []

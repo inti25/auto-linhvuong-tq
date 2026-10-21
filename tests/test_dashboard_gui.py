@@ -715,6 +715,84 @@ def test_dashboard_even_upgrade_and_research_profile_sync():
         dash.destroy()
 
 
+def test_dashboard_sync_city_buildings_data_preserves_queue_order():
+    dash = safe_dashboard()
+    try:
+        dash._current_bld_city_id = 15230
+        dash.bld_tree.delete(*dash.bld_tree.get_children())
+
+        # Thiết lập thứ tự người dùng tùy biến: 6 -> 1 -> 3
+        custom_plans = [
+            {"pid": 6, "gid": 6, "name": "Đại Học Điện", "cur_lvl": 5, "target_level": 20, "enabled": True},
+            {"pid": 1, "gid": 1, "name": "Quan Phủ", "cur_lvl": 10, "target_level": 20, "enabled": True},
+            {"pid": 3, "gid": 3, "name": "Nhà Dân", "cur_lvl": 8, "target_level": 15, "enabled": True},
+        ]
+        dash._city_building_plans[15230] = list(custom_plans)
+        dash._render_bld_tree_from_plans(custom_plans)
+
+        children_before = dash.bld_tree.get_children("")
+        assert list(children_before) == ["6", "1", "3"]
+
+        # Giả lập server trả về dữ liệu thực tế theo thứ tự mặc định 1, 2, 3, 6 (có ô 2 mới xây thêm)
+        server_buildings = [
+            {"pid": 1, "gid": 1, "level": 11, "name": "Quan Phủ"},
+            {"pid": 2, "gid": 2, "level": 3, "name": "Tường Thành"},  # Ô mới
+            {"pid": 3, "gid": 3, "level": 8, "name": "Nhà Dân"},
+            {"pid": 6, "gid": 6, "level": 6, "name": "Đại Học Điện"},
+        ]
+
+        dash._sync_city_buildings_data(15230, server_buildings, from_auto_cycle=True)
+
+        # 1. Kiểm tra thứ tự trên Treeview: 6 -> 1 -> 3 phải giữ nguyên, 2 thêm vào cuối
+        children_after = dash.bld_tree.get_children("")
+        assert list(children_after) == ["6", "1", "3", "2"]
+
+        # 2. Cấp độ thực tế được cập nhật in-place
+        vals_6 = dash.bld_tree.item("6", "values")
+        vals_1 = dash.bld_tree.item("1", "values")
+        vals_2 = dash.bld_tree.item("2", "values")
+
+        assert int(vals_6[3]) == 6   # cur_lvl của ô 6 tăng từ 5 lên 6
+        assert int(vals_1[3]) == 11  # cur_lvl của ô 1 tăng từ 10 lên 11
+        assert vals_2[0] == "☐"      # Ô 2 mới mặc định bỏ chọn
+        assert int(vals_2[3]) == 3   # cur_lvl ô 2 là 3
+        assert int(vals_2[4]) == 3   # target_level ô 2 mặc định bằng cấp hiện tại
+
+        # 3. Cache _city_building_plans[15230] cũng bảo toàn trọn vẹn thứ tự
+        cached = dash._city_building_plans[15230]
+        cached_pids = [p["pid"] for p in cached]
+        assert cached_pids == [6, 1, 3, 2]
+        assert cached[0]["cur_lvl"] == 6
+        assert cached[1]["cur_lvl"] == 11
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_sync_city_techs_data_preserves_queue_order():
+    dash = safe_dashboard()
+    try:
+        # Di chuyển tech 8 (trận pháp) lên vị trí đầu tiên
+        dash.res_tree.selection_set("8")
+        dash.res_tree.move("8", "", 0)
+        first_item = dash.res_tree.get_children("")[0]
+        assert first_item == "8"
+
+        # Đồng bộ dữ liệu thực tế từ server
+        levels = {8: 15, 1: 12}
+        dash._sync_city_techs_data(15230, levels, tech_status=(True, 8), from_auto_cycle=True)
+
+        # Thứ tự cây không bị reset
+        assert dash.res_tree.get_children("")[0] == "8"
+
+        vals_8 = dash.res_tree.item("8", "values")
+        assert int(vals_8[3]) == 15
+
+        vals_1 = dash.res_tree.item("1", "values")
+        assert int(vals_1[3]) == 12
+    finally:
+        dash.destroy()
+
+
 
 
 
