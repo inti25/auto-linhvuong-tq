@@ -1,0 +1,16 @@
+{
+  "server": 53,
+  "username": "ten_dang_nhap",
+  "proxy": "socks5://127.0.0.1:1080",
+  "proxy_user": "proxy_username",
+  "proxy_pass": "proxy_password",
+  "generals": [1, 2],
+  "origin": [0, 0],
+  "radius": 30,
+  "man_types": [7],
+  "skip_capital_radius": 0,
+  "return_threshold": 30,
+  "scan_delay": 0.2,
+  "scan_step": 5,
+  "loop_interval": 5
+}
