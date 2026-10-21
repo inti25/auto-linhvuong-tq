@@ -152,6 +152,14 @@ _Avoid_: Tần suất, frequency, loop duration
 Khoảng biến thiên thời gian ngẫu nhiên (± 1~2s) được cộng/trừ vào Chu Kỳ Lặp trước mỗi lượt chờ (`wait_cycle`), nhằm mô phỏng nhịp điệu thao tác của người thật và ngăn chặn các thuật toán phát hiện bot tự động từ phía máy chủ.
 _Avoid_: Jitter, lag ngẫu nhiên, random sleep
 
+**Hồ Sơ Tài Khoản Riêng Biệt**:
+Tập tin cấu hình tổng hợp (`auto_profile_{username}_{server_id}.json`) được gắn định danh duy nhất cho từng tài khoản và máy chủ, lưu trữ toàn bộ trạng thái chọn căn cứ, hàng đợi quy hoạch công trình, kỹ thuật viện đại học và thiết lập chiến dịch riêng mà không bị ghi đè khi chạy song song nhiều tài khoản trong cùng một thư mục.
+_Avoid_: Profile độc lập, file cấu hình riêng, isolated profile
+
+**Trình Chuyển Đổi Tài Khoản**:
+Tính năng trên giao diện đăng nhập cho phép lưu trữ và chuyển đổi nhanh giữa danh sách các tài khoản Linh Vương đã đăng nhập (kèm Server ID và Proxy riêng biệt tương ứng) mà không cần nhập lại thông tin thủ công.
+_Avoid_: Account switcher, đổi acc, quản lý tài khoản
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

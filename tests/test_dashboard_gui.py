@@ -637,6 +637,30 @@ def test_base_task_runner_and_thao_phat_wait_cycle():
         assert 13.0 <= called_sec <= 17.0
 
 
+def test_dashboard_account_bound_profile(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    session = MagicMock()
+    with patch("threading.Thread"):
+        dash = Dashboard(session, 53, username="quilia")
+        dash.withdraw()
+        try:
+            # 1. Kiểm tra tiêu đề cửa sổ mang username
+            assert "quilia" in dash.title()
+            assert "53" in dash.title()
+            assert dash.title() == "LinhVuong - S53 - [quilia]"
+
+            # 2. Kiểm tra tên profile mặc định là file riêng của account
+            assert dash.default_profile_name == "auto_profile_quilia_53.json"
+            assert dash.profile_path_var.get() == "auto_profile_quilia_53.json"
+
+            # 3. Lưu profile mặc định và kiểm tra đúng file riêng được tạo
+            saved = dash._save_unified_profile()
+            assert saved.name == "auto_profile_quilia_53.json"
+            assert (tmp_path / "auto_profile_quilia_53.json").exists()
+        finally:
+            dash.destroy()
+
+
 
 
 

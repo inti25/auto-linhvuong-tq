@@ -229,9 +229,17 @@ class ResearchAutoRunner(BaseTaskRunner):
 # =============================================================================
 
 class Dashboard(tk.Tk):
-    def __init__(self, session, server_id: int):
+    def __init__(self, session, server_id: int, username: str = ""):
         super().__init__()
-        self.title(f"LinhVuong - Server {server_id}")
+        self.session = session
+        self.server_id = server_id
+        self.username = username
+        if username:
+            self.title(f"LinhVuong - S{server_id} - [{username}]")
+            self.default_profile_name = f"auto_profile_{username}_{server_id}.json"
+        else:
+            self.title(f"LinhVuong - Server {server_id}")
+            self.default_profile_name = "auto_profile.json"
         self.configure(bg=BG)
         self.geometry("1100x700")
         self.minsize(1060, 650)
@@ -375,11 +383,18 @@ class Dashboard(tk.Tk):
         self.notebook.add(t6, text="🔬 Đại Học & Hậu Cần")
         self._build_research_and_logistics_tab(t6)
 
-        # Tự động nạp hồ sơ cấu hình tổng hợp mặc định nếu có
-        default_prof = Path("auto_profile.json")
-        if default_prof.exists():
+        # Tự động nạp hồ sơ cấu hình tổng hợp mặc định theo tài khoản
+        acc_prof = Path(self.default_profile_name)
+        if acc_prof.exists():
             try:
-                self._load_unified_profile(default_prof)
+                self._load_unified_profile(acc_prof)
+            except Exception:
+                pass
+        elif Path("auto_profile.json").exists():
+            try:
+                self._load_unified_profile(Path("auto_profile.json"))
+                if hasattr(self, "profile_path_var"):
+                    self.profile_path_var.set(self.default_profile_name)
             except Exception:
                 pass
 
@@ -394,7 +409,7 @@ class Dashboard(tk.Tk):
         profile_frame.pack(fill="x", pady=(2, 6))
 
         tk.Label(profile_frame, text="📁 Hồ Sơ Cấu Hình:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(4, 6))
-        self.profile_path_var = tk.StringVar(value="auto_profile.json")
+        self.profile_path_var = tk.StringVar(value=self.default_profile_name)
         ttk.Label(profile_frame, textvariable=self.profile_path_var, style="Dark.TLabel", font=("Consolas", 10)).pack(side="left", padx=(0, 12))
 
         ttk.Button(profile_frame, text="💾 Lưu Cấu Hình Tổng", style="Action.TButton", command=self._save_unified_profile_dialog).pack(side="left", padx=3)
@@ -733,7 +748,8 @@ class Dashboard(tk.Tk):
         return loaded_sections
 
     def _save_unified_profile(self, filepath: Optional[Path] = None) -> Path:
-        target = filepath or Path("auto_profile.json")
+        def_name = getattr(self, "default_profile_name", "auto_profile.json")
+        target = filepath or Path(self.profile_path_var.get() if hasattr(self, "profile_path_var") and self.profile_path_var.get() else def_name)
         profile = self._collect_unified_profile()
         target.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
         if hasattr(self, "profile_path_var"):
@@ -741,7 +757,8 @@ class Dashboard(tk.Tk):
         return target
 
     def _load_unified_profile(self, filepath: Optional[Path] = None) -> tuple[bool, str]:
-        target = filepath or Path("auto_profile.json")
+        def_name = getattr(self, "default_profile_name", "auto_profile.json")
+        target = filepath or Path(self.profile_path_var.get() if hasattr(self, "profile_path_var") and self.profile_path_var.get() else def_name)
         if not target.exists():
             return False, f"Không tìm thấy file: {target.name}"
         try:

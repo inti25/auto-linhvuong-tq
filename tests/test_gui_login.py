@@ -119,6 +119,75 @@ def test_login_window_succeeded_persists_proxy_and_authen(temp_settings):
         assert saved["proxy_pass"] == "proxy_p"
         assert win.session is session
         assert win.server_id == 57
+        assert win.username == "testuser"
+        # Đảm bảo accounts dict và last_account được lưu
+        assert "accounts" in saved
+        assert "testuser @ S57" in saved["accounts"]
+        assert saved["last_account"] == "testuser @ S57"
+    finally:
+        try:
+            win.destroy()
+        except Exception:
+            pass
+
+
+def test_login_window_account_switcher_and_multi_account_persistence(temp_settings):
+    # Khởi tạo setting sẵn 2 tài khoản
+    init_data = {
+        "server": 53,
+        "username": "quilia",
+        "proxy": "socks5://171.244.41.79:6060",
+        "proxy_user": "fotober",
+        "proxy_pass": "pass1",
+        "last_account": "quilia @ S53",
+        "accounts": {
+            "quilia @ S53": {
+                "server": 53,
+                "username": "quilia",
+                "proxy": "socks5://171.244.41.79:6060",
+                "proxy_user": "fotober",
+                "proxy_pass": "pass1",
+            },
+            "inti00 @ S57": {
+                "server": 57,
+                "username": "inti00",
+                "proxy": "socks5://127.0.0.1:1080",
+                "proxy_user": "user2",
+                "proxy_pass": "pass2",
+            },
+        },
+    }
+    temp_settings.write_text(json.dumps(init_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    win = safe_login_window()
+    win.withdraw()
+    try:
+        # Kiểm tra nạp đúng cả 2 tài khoản vào combobox
+        vals = win.saved_acc_combo["values"]
+        assert "quilia @ S53" in vals
+        assert "inti00 @ S57" in vals
+
+        # Ban đầu chọn last_account là quilia
+        assert win.user_var.get() == "quilia"
+        assert win.server_var.get() == "53"
+        assert win.proxy_user_var.get() == "fotober"
+
+        # Đổi sang inti00 @ S57
+        win.saved_acc_combo.set("inti00 @ S57")
+        win._on_saved_acc_selected()
+        assert win.user_var.get() == "inti00"
+        assert win.server_var.get() == "57"
+        assert win.proxy_user_var.get() == "user2"
+
+        # Xóa tài khoản inti00 @ S57
+        win._delete_saved_acc()
+        assert "inti00 @ S57" not in win.saved_acc_combo["values"]
+        assert "quilia @ S53" in win.saved_acc_combo["values"]
+
+        # Kiểm tra file json đã được cập nhật không còn inti00
+        saved = json.loads(temp_settings.read_text(encoding="utf-8"))
+        assert "inti00 @ S57" not in saved["accounts"]
+        assert "quilia @ S53" in saved["accounts"]
     finally:
         try:
             win.destroy()

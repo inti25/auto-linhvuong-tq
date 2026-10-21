@@ -7,8 +7,9 @@ from linhvuong.dashboard import Dashboard
 def main():
     login_res = ask_login()
     if login_res:
-        session, server_id = login_res
-        app = Dashboard(session, server_id)
+        session, server_id, *rest = login_res
+        username = rest[0] if rest else ""
+        app = Dashboard(session, server_id, username=username)
         app.mainloop()
 
 

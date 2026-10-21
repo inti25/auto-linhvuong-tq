@@ -50,6 +50,16 @@ class LoginWindow(tk.Tk):
         self.proxy_var = tk.StringVar()
         self.proxy_user_var = tk.StringVar()
         self.proxy_pass_var = tk.StringVar()
+        self.accounts_dict = {}
+
+        # Dòng 1: Chọn tài khoản đã lưu (Account Switcher)
+        ttk.Label(card, text="Đã lưu").grid(row=1, column=0, sticky="w", pady=4, padx=(0, 14))
+        acc_frame = tk.Frame(card, bg=CARD)
+        acc_frame.grid(row=1, column=1, sticky="ew", pady=4)
+        self.saved_acc_combo = ttk.Combobox(acc_frame, state="readonly", width=22)
+        self.saved_acc_combo.pack(side="left", fill="x", expand=True)
+        self.saved_acc_combo.bind("<<ComboboxSelected>>", self._on_saved_acc_selected)
+        ttk.Button(acc_frame, text="🗑️", width=3, command=self._delete_saved_acc).pack(side="left", padx=(4, 0))
 
         fields = [
             ("Server ID", self.server_var, ""),
@@ -59,7 +69,7 @@ class LoginWindow(tk.Tk):
             ("Proxy User", self.proxy_user_var, ""),
             ("Proxy Pass", self.proxy_pass_var, "•"),
         ]
-        for row, (label, var, show) in enumerate(fields, start=1):
+        for row, (label, var, show) in enumerate(fields, start=2):
             ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 14))
             ttk.Entry(card, textvariable=var, show=show, width=28).grid(row=row, column=1, pady=4)
 
@@ -70,20 +80,20 @@ class LoginWindow(tk.Tk):
             font=("Segoe UI", 8),
             wraplength=310,
         )
-        proxy_hint.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 4))
+        proxy_hint.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 4))
 
         ttk.Label(
             card,
             text="Địa chỉ: http://sg<Server ID>.dipan.com/",
             foreground="#8a90b0",
             font=("Segoe UI", 8),
-        ).grid(row=8, column=0, columnspan=2, sticky="w")
-        self.url_hint = card.grid_slaves(row=8)[0]
+        ).grid(row=9, column=0, columnspan=2, sticky="w")
+        self.url_hint = card.grid_slaves(row=9)[0]
         self.server_var.trace_add("write", self._update_hint)
         self.proxy_var.trace_add("write", self._on_proxy_change)
 
         self.btn = ttk.Button(card, text="Đăng nhập", style="Login.TButton", command=self._submit)
-        self.btn.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(14, 6))
+        self.btn.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(14, 6))
         self.status = tk.StringVar()
         tk.Label(
             card,
@@ -92,7 +102,7 @@ class LoginWindow(tk.Tk):
             fg="#ff8a8a",
             wraplength=320,
             font=("Segoe UI", 9),
-        ).grid(row=10, column=0, columnspan=2)
+        ).grid(row=11, column=0, columnspan=2)
 
         self._load_settings()
         self.bind("<Return>", lambda e: self._submit())
@@ -124,18 +134,94 @@ class LoginWindow(tk.Tk):
                     finally:
                         self._updating_proxy = False
 
+    def _refresh_saved_accounts_combo(self, select_key=None):
+        if not hasattr(self, "saved_acc_combo"):
+            return
+        keys = list(self.accounts_dict.keys())
+        self.saved_acc_combo["values"] = keys
+        if keys:
+            if select_key and select_key in keys:
+                self.saved_acc_combo.set(select_key)
+            else:
+                self.saved_acc_combo.current(0)
+        else:
+            self.saved_acc_combo.set("")
+
+    def _on_saved_acc_selected(self, *_):
+        key = self.saved_acc_combo.get().strip()
+        if not key or key not in self.accounts_dict:
+            return
+        acc = self.accounts_dict[key]
+        self.server_var.set(str(acc.get("server", "")))
+        self.user_var.set(acc.get("username", ""))
+        self.proxy_var.set(acc.get("proxy", ""))
+        self.proxy_user_var.set(acc.get("proxy_user", ""))
+        self.proxy_pass_var.set(acc.get("proxy_pass", ""))
+
+    def _delete_saved_acc(self):
+        key = self.saved_acc_combo.get().strip()
+        if not key or key not in self.accounts_dict:
+            return
+        del self.accounts_dict[key]
+        self._refresh_saved_accounts_combo()
+        if self.saved_acc_combo.get():
+            self._on_saved_acc_selected()
+        else:
+            self.user_var.set("")
+            self.proxy_var.set("")
+            self.proxy_user_var.set("")
+            self.proxy_pass_var.set("")
+        self._persist_current_accounts()
+
+    def _persist_current_accounts(self):
+        data = {
+            "server": self.server_var.get().strip(),
+            "username": self.user_var.get().strip(),
+            "proxy": self.proxy_var.get().strip(),
+            "proxy_user": self.proxy_user_var.get().strip(),
+            "proxy_pass": self.proxy_pass_var.get(),
+            "last_account": self.saved_acc_combo.get().strip() if hasattr(self, "saved_acc_combo") else "",
+            "accounts": self.accounts_dict,
+        }
+        SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def _load_settings(self):
+        self.accounts_dict = {}
         if SETTINGS.exists():
             try:
                 data = json.loads(SETTINGS.read_text(encoding="utf-8"))
-                self.server_var.set(str(data.get("server", "")))
-                self.user_var.set(data.get("username", ""))
+                raw_accounts = data.get("accounts")
+                if isinstance(raw_accounts, dict) and raw_accounts:
+                    self.accounts_dict = dict(raw_accounts)
+                elif data.get("username"):
+                    srv = data.get("server", "")
+                    usr = data.get("username", "")
+                    k = f"{usr} @ S{srv}"
+                    self.accounts_dict[k] = {
+                        "server": srv,
+                        "username": usr,
+                        "proxy": data.get("proxy", ""),
+                        "proxy_user": data.get("proxy_user", ""),
+                        "proxy_pass": data.get("proxy_pass", ""),
+                    }
+
+                last_key = data.get("last_account", "")
+                self._refresh_saved_accounts_combo(last_key)
+
+                if last_key and last_key in self.accounts_dict:
+                    self._on_saved_acc_selected()
+                elif self.accounts_dict:
+                    self._on_saved_acc_selected()
+                else:
+                    self.server_var.set(str(data.get("server", "")))
+                    self.user_var.set(data.get("username", ""))
+                    self.proxy_var.set(data.get("proxy", ""))
+                    self.proxy_user_var.set(data.get("proxy_user", ""))
+                    self.proxy_pass_var.set(data.get("proxy_pass", ""))
+
                 pwd = data.get("password") or data.get("passwrod")
                 if pwd:
                     self.pass_var.set(pwd)
-                self.proxy_var.set(data.get("proxy", ""))
-                self.proxy_user_var.set(data.get("proxy_user", ""))
-                self.proxy_pass_var.set(data.get("proxy_pass", ""))
             except Exception:
                 pass
 
@@ -209,23 +295,38 @@ class LoginWindow(tk.Tk):
         self.btn.state(["!disabled"])
 
     def _succeeded(self, session, server_id, username, proxy_raw, proxy_user, proxy_pass):
-        data = {"server": server_id, "username": username}
-        if proxy_raw:
-            data["proxy"] = proxy_raw
-        if proxy_user:
-            data["proxy_user"] = proxy_user
-        if proxy_pass:
-            data["proxy_pass"] = proxy_pass
+        acc_key = f"{username} @ S{server_id}"
+        if not hasattr(self, "accounts_dict") or not isinstance(self.accounts_dict, dict):
+            self.accounts_dict = {}
+        self.accounts_dict[acc_key] = {
+            "server": server_id,
+            "username": username,
+            "proxy": proxy_raw or "",
+            "proxy_user": proxy_user or "",
+            "proxy_pass": proxy_pass or "",
+        }
+        data = {
+            "server": server_id,
+            "username": username,
+            "proxy": proxy_raw or "",
+            "proxy_user": proxy_user or "",
+            "proxy_pass": proxy_pass or "",
+            "last_account": acc_key,
+            "accounts": self.accounts_dict,
+        }
         SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.session, self.server_id = session, server_id
+        self.session, self.server_id, self.username = session, server_id, username
         self.destroy()
 
 
 def ask_login():
-    """Hiện cửa sổ đăng nhập; trả (session, server_id) hoặc None nếu đóng cửa sổ."""
+    """Hiện cửa sổ đăng nhập; trả (session, server_id, username) hoặc None nếu đóng cửa sổ."""
     win = LoginWindow()
     win.mainloop()
-    return (win.session, win.server_id) if win.session else None
+    if win.session:
+        user = getattr(win, "username", win.user_var.get().strip())
+        return (win.session, win.server_id, user)
+    return None
 
 
 if __name__ == "__main__":
