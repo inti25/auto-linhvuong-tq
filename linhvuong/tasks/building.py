@@ -18,12 +18,41 @@ from ..gateway import GatewayClient
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
 
 
+BUILDING_NAMES = {
+    1: "Thái Phủ",
+    2: "Tường Lũy",
+    3: "Kho Lương",
+    4: "Doanh Trại",
+    5: "Trường Luyện Binh",
+    6: "Dịch Trạm",
+    7: "Tiệm Rèn",
+    8: "Viện Đại Học",
+    9: "Thị Trường",
+    10: "Chiêu Hiền Quán",
+    11: "Thần Miếu",
+    12: "Sứ Quán",
+    13: "Thái Y Viện",
+    14: "Quân Giới Phủ",
+    15: "Hồng Kê Quán",
+    16: "Nhà Dân",
+    21: "Ruộng Lúa",
+    22: "Xưởng Gỗ",
+    23: "Mỏ Đá",
+    24: "Mỏ Sắt",
+}
+
+
 @dataclass
 class BuildingPlan:
     pid: int  # Vị trí ô đất trong thành (1..32)
     gid: int  # Loại công trình (1: Thái Phủ, 8: Đại Học, 21: Ruộng...)
     target_level: int  # Cấp độ mục tiêu cần đạt (1..33)
     name: str = ""
+    enabled: bool = True
+
+    def __post_init__(self):
+        if not self.name:
+            self.name = BUILDING_NAMES.get(self.gid, f"Công trình {self.gid}")
 
 
 class BuildingTask:
@@ -156,6 +185,8 @@ class BuildingTask:
         # 5. Tìm công trình ưu tiên tiếp theo cần nâng cấp
         target_plan: Optional[BuildingPlan] = None
         for plan in self.plans:
+            if not getattr(plan, "enabled", True):
+                continue
             current = real_buildings.get(plan.pid, {"gid": plan.gid, "level": 0})
             if current["level"] < plan.target_level:
                 target_plan = plan

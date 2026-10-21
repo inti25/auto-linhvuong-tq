@@ -1,10 +1,10 @@
-"""Danh sách thành trì, tướng và biên chế quân đội (chỉ đọc).
+"""Danh sách thành, doanh trại, tướng và biên chế quân đội.
 
-Nguồn: Common.ashx?id=29 (thành), id=32 type=1/2 (văn/võ tướng theo thành), id=76 (biên chế).
-Ý nghĩa các cột là SUY RA từ dữ liệu server 57, chưa có tài liệu chính thức:
-- tướng: [id, tên, _, loại, _, _, cấp, sĩ khí, thể lực, thể lực tối đa, ...]
-- biên chế (id=76): [id, tên, _, _, _, bộ binh, kỵ binh, cung binh, ...]; thứ tự bộ/kỵ/cung theo
-  tên ref_bo_binh, ref_ky_binh, ref_cung_binh trong ZMan, cần đối chiếu với giao diện game.
+Nguồn:
+- Common.ashx?id=29: Danh sách Thành chính.
+- City.ashx?id=7: Danh sách chi tiết Thành và Doanh trại kèm tọa độ và cấp độ.
+- Common.ashx?id=32 type=1 (Văn quan) / type=2 (Võ tướng): Tướng trong Thành và Doanh trại (id âm).
+- Common.ashx?id=76: Chi tiết biên chế quân đội (bộ binh, kỵ binh, cung binh).
 """
 
 from dataclasses import dataclass, field
@@ -17,6 +17,20 @@ from .gateway import GatewayClient
 class City:
     id: int
     name: str
+    type: str = "Thành"  # "Thành" hoặc "Doanh trại"
+    pos_x: int = 0
+    pos_y: int = 0
+    level: int = 0
+
+    @property
+    def is_camp(self) -> bool:
+        return self.type == "Doanh trại" or self.id < 0
+
+    @property
+    def display_name(self) -> str:
+        prefix = "[Trại]" if self.is_camp else "[Thành]"
+        coords = f" | {self.pos_x},{self.pos_y}" if (self.pos_x or self.pos_y) else ""
+        return f"{prefix} {self.name} (ID: {self.id}{coords})"
 
 
 GENERAL_STATUS_NAMES = {
@@ -47,13 +61,13 @@ GENERAL_STATUS_NAMES = {
 class General:
     id: int
     name: str
-    role: str  # "van" (văn tướng/mưu sĩ) hoặc "vo" (võ tướng)
+    role: str  # "van" (Văn quan) hoặc "vo" (Võ tướng)
     level: int
     morale: int
     stamina: int
     stamina_max: int
-    status: int = 0  # 0: rảnh rỗi, != 0: bận (di chuyển / chiến đấu / thảo phạt...)
-    upgrading_time: int = 0  # thời gian nâng sỹ khí còn lại (giây)
+    status: int = 0  # 0: rảnh rỗi, != 0: bận
+    upgrading_time: int = 0  # thời gian nâng sĩ khí còn lại (giây)
 
     @property
     def is_idle(self) -> bool:
@@ -66,6 +80,10 @@ class General:
         if self.upgrading_time > 0:
             return f"Nâng SK ({self.upgrading_time}s)"
         return "Rảnh rỗi"
+
+    @property
+    def role_text(self) -> str:
+        return "Văn quan" if self.role == "van" else "Võ tướng"
 
 
 @dataclass(frozen=True)
@@ -82,12 +100,18 @@ class Army:
 @dataclass
 class Roster:
     cities: list[City] = field(default_factory=list)
+    camps: list[City] = field(default_factory=list)
     _generals: dict[int, list[General]] = field(default_factory=dict)
     _armies: dict[int, Army] = field(default_factory=dict)
     _upgrading_time: dict[int, int] = field(default_factory=dict)
 
-    def generals_of(self, city_id: int) -> list[General]:
-        return list(self._generals.get(city_id, []))
+    @property
+    def bases(self) -> list[City]:
+        """Tất cả căn cứ gồm cả Thành và Doanh trại."""
+        return self.cities + self.camps
+
+    def generals_of(self, base_id: int) -> list[General]:
+        return list(self._generals.get(base_id, []))
 
     def army_of(self, general_id: int) -> Optional[Army]:
         return self._armies.get(general_id)
@@ -101,11 +125,39 @@ _ROLES = {1: "van", 2: "vo"}
 
 def fetch_roster(gateway: GatewayClient) -> Roster:
     roster = Roster()
+    # 1. Lấy danh sách Thành chính từ Common.ashx?id=29
     resp = gateway.call("Common.ashx", 29, {}) or {}
-    roster.cities = [City(int(c[0]), str(c[1])) for c in resp.get("city", [])]
-    city_ids = {c.id for c in roster.cities}
+    cities_map = {}
+    for c in resp.get("city", []):
+        cid = int(c[0])
+        cities_map[cid] = City(id=cid, name=str(c[1]), type="Thành")
+    roster.cities = list(cities_map.values())
 
-    # Lấy thông tin chi tiết biên chế, sĩ khí đội quân và thời gian nâng sỹ khí (API 76)
+    # 2. Bổ sung Doanh trại và tọa độ từ City.ashx?id=7 nếu có
+    camps_map = {}
+    resp_c7 = gateway.call("City.ashx", 7, {"_": ""}) or {}
+    infos = resp_c7.get("infos") or resp_c7.get("citys", [])
+    if isinstance(infos, list):
+        for item in infos:
+            if isinstance(item, list) and len(item) > 7:
+                cid = int(item[1])
+                cname = str(item[2])
+                cx = int(item[4])
+                cy = int(item[5])
+                clevel = int(item[7])
+                ctype_val = int(item[8]) if len(item) > 8 else 1
+                is_camp = ctype_val not in (1, 2, 3, 4)
+                if is_camp:
+                    camps_map[cid] = City(
+                        id=cid, name=cname, type="Doanh trại", pos_x=cx, pos_y=cy, level=clevel
+                    )
+                elif cid in cities_map:
+                    cities_map[cid] = City(
+                        id=cid, name=cname, type="Thành", pos_x=cx, pos_y=cy, level=clevel
+                    )
+        roster.cities = list(cities_map.values())
+
+    # 3. Lấy thông tin chi tiết biên chế, sĩ khí đội quân và thời gian nâng sĩ khí (API 76)
     morale_map = {}
     upgrading_map = {}
     for city in roster.cities:
@@ -121,12 +173,29 @@ def fetch_roster(gateway: GatewayClient) -> Roster:
                     upgrading_map[gid] = up_t
                     roster._upgrading_time[gid] = up_t
 
+    # 4. Quét danh sách Văn quan (type=1) và Võ tướng (type=2) từ Common.ashx?id=32
+    city_ids = {c.id for c in roster.cities}
     for type_ in (1, 2):
         resp = gateway.call("Common.ashx", 32, {"type": str(type_)}) or {}
         for entry in resp.get("list", []):
             cid = int(entry[0])
-            if cid not in city_ids:  # bỏ Trại (id âm)
-                continue
+            cname = str(entry[1])
+            cx = int(entry[2]) if len(entry) > 2 else 0
+            cy = int(entry[3]) if len(entry) > 3 else 0
+
+            # Nếu là Doanh trại (cid âm hoặc chưa có trong danh sách thành)
+            if cid < 0:
+                if cid not in camps_map:
+                    camps_map[cid] = City(
+                        id=cid, name=cname, type="Doanh trại", pos_x=cx, pos_y=cy
+                    )
+            elif cid not in city_ids:
+                if cid not in cities_map:
+                    cities_map[cid] = City(
+                        id=cid, name=cname, type="Thành", pos_x=cx, pos_y=cy
+                    )
+                city_ids.add(cid)
+
             for g in entry[4]:
                 gid = int(g[0])
                 morale_val = morale_map.get(gid, int(g[7]))
@@ -144,4 +213,6 @@ def fetch_roster(gateway: GatewayClient) -> Roster:
                     )
                 )
 
+    roster.cities = list(cities_map.values())
+    roster.camps = list(camps_map.values())
     return roster

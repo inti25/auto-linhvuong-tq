@@ -90,3 +90,23 @@ def test_general_status_and_idleness():
     assert g_martial.upgrading_time == 0
     assert g_martial.is_idle is True
     assert g_martial.status_text == "Rảnh rỗi"
+
+
+def test_camps_are_tracked_with_generals():
+    r = roster()
+    assert len(r.camps) == 1
+    camp = r.camps[0]
+    assert camp.id == -1085
+    assert camp.name == "Go"
+    assert camp.type == "Doanh trại"
+    assert camp.pos_x == 196 and camp.pos_y == 203
+    assert camp.is_camp is True
+    assert "[Trại]" in camp.display_name
+
+    camp_gens = r.generals_of(-1085)
+    assert len(camp_gens) == 1
+    assert camp_gens[0].id == 417514
+    assert camp_gens[0].role_text == "Văn quan"
+
+    # r.bases contains both cities and camps
+    assert len(r.bases) == 3

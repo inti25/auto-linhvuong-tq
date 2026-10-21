@@ -24,7 +24,7 @@ from .roster import Army, General, Roster, fetch_roster
 from .scan import Scanner
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import BinhMan
-from .tasks.building import BuildingPlan, BuildingTask
+from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask
 from .tasks.goi_dan import GoiDan, VONG_LINH
 from .tasks.logistics import ArmyTransferOrder, LogisticsTask
 from .tasks.research import ResearchTask, TECH_NAMES, TechPlan
@@ -45,7 +45,7 @@ BG, CARD, FG, MUTED, ACCENT, SUCCESS, DANGER = (
     "#28a745",
     "#dc3545",
 )
-ROLE_TEXT = {"van": "Văn tướng", "vo": "Võ tướng"}
+ROLE_TEXT = {"van": "Văn quan", "vo": "Võ tướng"}
 
 
 # =============================================================================
@@ -321,20 +321,24 @@ class Dashboard(tk.Tk):
         body.columnconfigure((0, 1, 2), weight=1, uniform="c")
         body.rowconfigure(0, weight=1)
 
-        f1 = ttk.LabelFrame(body, text="Thành trì", style="Card.TLabelframe")
+        f1 = ttk.LabelFrame(body, text="Thành & Doanh trại", style="Card.TLabelframe")
         f1.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.city_tree = ttk.Treeview(f1, columns=("id",), show="tree headings", selectmode="browse")
+        self.city_tree = ttk.Treeview(f1, columns=("type", "id", "coords"), show="tree headings", selectmode="browse")
         self.city_tree.heading("#0", text="Tên")
+        self.city_tree.heading("type", text="Loại")
         self.city_tree.heading("id", text="ID")
-        self.city_tree.column("#0", width=120)
-        self.city_tree.column("id", width=70, anchor="e")
+        self.city_tree.heading("coords", text="Tọa độ")
+        self.city_tree.column("#0", width=110)
+        self.city_tree.column("type", width=75, anchor="center")
+        self.city_tree.column("id", width=60, anchor="e")
+        self.city_tree.column("coords", width=65, anchor="center")
         self.city_tree.pack(fill="both", expand=True, padx=6, pady=6)
         self.city_tree.bind("<<TreeviewSelect>>", self._on_city)
 
-        f2 = ttk.LabelFrame(body, text="Tướng trong thành", style="Card.TLabelframe")
+        f2 = ttk.LabelFrame(body, text="Tướng đồn trú", style="Card.TLabelframe")
         f2.grid(row=0, column=1, sticky="nsew", padx=6)
         self.gen_tree = ttk.Treeview(f2, columns=("role", "lv", "hp", "status"), show="tree headings", selectmode="browse")
-        for col, text, w in (("#0", "Tên tướng", 100), ("role", "Loại", 70), ("lv", "Cấp", 35), ("hp", "Thể lực", 70), ("status", "Trạng thái", 90)):
+        for col, text, w in (("#0", "Tên tướng", 100), ("role", "Chức vụ", 70), ("lv", "Cấp", 35), ("hp", "Thể lực", 70), ("status", "Trạng thái", 90)):
             self.gen_tree.heading(col, text=text)
             self.gen_tree.column(col, width=w, anchor="center" if col in ("role", "lv", "status") else ("w" if col == "#0" else "e"))
         self.gen_tree.pack(fill="both", expand=True, padx=6, pady=6)
@@ -398,17 +402,15 @@ class Dashboard(tk.Tk):
 
         f_left = ttk.LabelFrame(body, text="Võ tướng xuất kích (Chọn tối đa 5)", style="Card.TLabelframe")
         f_left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.tp_gen_tree = ttk.Treeview(f_left, columns=("select", "role", "lv", "stamina", "morale", "army"), show="tree headings", selectmode="browse")
-        self.tp_gen_tree.heading("#0", text="Tên tướng")
+        self.tp_gen_tree = ttk.Treeview(f_left, columns=("select", "lv", "stamina", "morale", "army"), show="tree headings", selectmode="browse")
+        self.tp_gen_tree.heading("#0", text="Tên võ tướng")
         self.tp_gen_tree.heading("select", text="Chọn")
-        self.tp_gen_tree.heading("role", text="Loại")
         self.tp_gen_tree.heading("lv", text="Cấp")
         self.tp_gen_tree.heading("stamina", text="Thể lực")
         self.tp_gen_tree.heading("morale", text="Sĩ khí")
         self.tp_gen_tree.heading("army", text="Quân số")
-        self.tp_gen_tree.column("#0", width=100)
+        self.tp_gen_tree.column("#0", width=115)
         self.tp_gen_tree.column("select", width=45, anchor="center")
-        self.tp_gen_tree.column("role", width=55, anchor="center")
         self.tp_gen_tree.column("lv", width=40, anchor="center")
         self.tp_gen_tree.column("stamina", width=65, anchor="center")
         self.tp_gen_tree.column("morale", width=55, anchor="center")
@@ -423,11 +425,12 @@ class Dashboard(tk.Tk):
 
     def _on_tp_city_selected(self, _event=None):
         sel_idx = self.tp_city_combo.current()
-        if sel_idx < 0 or sel_idx >= len(self.roster.cities):
+        bases = self.roster.bases if (self.roster and self.roster.bases) else []
+        if sel_idx < 0 or sel_idx >= len(bases):
             return
-        city = self.roster.cities[sel_idx]
+        base = bases[sel_idx]
         self.tp_gen_tree.delete(*self.tp_gen_tree.get_children())
-        for g in self.roster.generals_of(city.id):
+        for g in self.roster.generals_of(base.id):
             if g.role != "vo":
                 continue
             army = self.roster.army_of(g.id)
@@ -437,7 +440,7 @@ class Dashboard(tk.Tk):
                 "end",
                 iid=str(g.id),
                 text=g.name,
-                values=("☐", "Võ tướng", g.level, f"{g.stamina}/{g.stamina_max}", g.morale, army_count),
+                values=("☐", g.level, f"{g.stamina}/{g.stamina_max}", g.morale, army_count),
             )
 
     def _on_tp_gen_toggle(self, event):
@@ -451,10 +454,11 @@ class Dashboard(tk.Tk):
     def _toggle_tp(self):
         if not self._tp_running:
             sel_idx = self.tp_city_combo.current()
-            if sel_idx < 0:
-                messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì!")
+            bases = self.roster.bases if (self.roster and self.roster.bases) else []
+            if sel_idx < 0 or sel_idx >= len(bases):
+                messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ!")
                 return
-            city_id = self.roster.cities[sel_idx].id
+            city_id = bases[sel_idx].id
             sel_gens = [int(iid) for iid in self.tp_gen_tree.get_children() if self.tp_gen_tree.item(iid, "values")[0] == "☑"]
             if not sel_gens:
                 messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 võ tướng!")
@@ -596,7 +600,7 @@ class Dashboard(tk.Tk):
         top = tk.Frame(parent, bg=BG)
         top.pack(fill="x", pady=6)
 
-        tk.Label(top, text="Thành xuất phát:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(top, text="Căn cứ xuất phát:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self.bm_city_combo = ttk.Combobox(top, state="readonly", width=18)
         self.bm_city_combo.grid(row=0, column=1, sticky="w", padx=4, pady=4)
 
@@ -604,7 +608,7 @@ class Dashboard(tk.Tk):
         self.bm_parent_city_combo = ttk.Combobox(top, state="readonly", width=18)
         self.bm_parent_city_combo.grid(row=0, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(top, text="Trại Di Chuyển ID:", bg=BG, fg=FG).grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(top, text="Doanh trại ID:", bg=BG, fg=FG).grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self.bm_camp_id_var = tk.StringVar(value="")
         ttk.Entry(top, textvariable=self.bm_camp_id_var, width=12).grid(row=1, column=1, sticky="w", padx=4, pady=4)
 
@@ -627,7 +631,7 @@ class Dashboard(tk.Tk):
         self.bm_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
         self.bm_once_btn.pack(side="top", pady=2)
 
-        f_log = ttk.LabelFrame(parent, text="Nhật ký Bình Man & Dời Trại", style="Card.TLabelframe")
+        f_log = ttk.LabelFrame(parent, text="Nhật ký Bình Man & Di Trại", style="Card.TLabelframe")
         f_log.pack(fill="both", expand=True, pady=6)
         self.bm_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
         self.bm_log_text.pack(fill="both", expand=True, padx=6, pady=6)
@@ -638,16 +642,18 @@ class Dashboard(tk.Tk):
 
     def _create_binhman_task(self) -> Optional[BinhMan]:
         sel_idx = self.bm_city_combo.current()
-        if sel_idx < 0:
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì!")
+        bases = self.roster.camps if self.roster.camps else self.roster.bases
+        if sel_idx < 0 or sel_idx >= len(bases):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ/doanh trại xuất phát!")
             return None
-        city = self.roster.cities[sel_idx]
-        gens = [g.id for g in self.roster.generals_of(city.id) if g.role == "vo"][:3]
+        base = bases[sel_idx]
+        gens = [g.id for g in self.roster.generals_of(base.id) if g.role == "vo"][:3]
         if not gens:
-            messagebox.showwarning("Cảnh báo", "Thành này không có võ tướng khả dụng!")
+            messagebox.showwarning("Cảnh báo", "Căn cứ này không có võ tướng khả dụng!")
             return None
 
         parent_idx = self.bm_parent_city_combo.current()
+        parent_city_id = self.roster.cities[parent_idx].id if (parent_idx >= 0 and parent_idx < len(self.roster.cities)) else base.id
         parent_id = self.roster.cities[parent_idx].id if parent_idx >= 0 else None
         camp_id = int(self.bm_camp_id_var.get()) if self.bm_camp_id_var.get().strip() else None
         radius = int(self.bm_radius_var.get() or "10")
@@ -737,11 +743,23 @@ class Dashboard(tk.Tk):
             activebackground=BG,
         ).pack(side="left", padx=8)
 
-        # Nút nạp / lưu quy hoạch
+        # Thanh công cụ sắp xếp ưu tiên và điều khiển
         btn_bar = tk.Frame(parent, bg=BG)
         btn_bar.pack(fill="x", pady=(2, 6))
-        ttk.Button(btn_bar, text="📂 Nạp mẫu (build_plans.example.json)", style="Action.TButton", command=self._load_build_plans).pack(side="left", padx=4)
-        ttk.Button(btn_bar, text="💾 Lưu cấu hình", style="Action.TButton", command=self._save_build_plans).pack(side="left", padx=4)
+
+        ttk.Button(btn_bar, text="⬆️ Lên", style="Action.TButton", command=self._move_bld_up).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="⬇️ Xuống", style="Action.TButton", command=self._move_bld_down).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="☑ Tất cả", style="Action.TButton", command=lambda: self._select_all_bld(True)).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="☐ Bỏ chọn", style="Action.TButton", command=lambda: self._select_all_bld(False)).pack(side="left", padx=2)
+
+        tk.Label(btn_bar, text="Cấp MT:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+        self.bld_target_lvl_var = tk.StringVar(value="20")
+        ttk.Entry(btn_bar, textvariable=self.bld_target_lvl_var, width=5).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_bld_target_lvl).pack(side="left", padx=2)
+
+        ttk.Button(btn_bar, text="💾 Lưu file", style="Action.TButton", command=self._save_build_plans).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="📂 Nạp file", style="Action.TButton", command=self._load_build_plans).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="🔄 Tải công trình", style="Action.TButton", command=self._fetch_city_buildings).pack(side="left", padx=2)
 
         self.bld_start_btn = ttk.Button(btn_bar, text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton", command=self._toggle_building)
         self.bld_start_btn.pack(side="right", padx=4)
@@ -753,18 +771,32 @@ class Dashboard(tk.Tk):
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
 
-        f_tree = ttk.LabelFrame(body, text="Hàng Đợi Quy Hoạch Công Trình", style="Card.TLabelframe")
+        f_tree = ttk.LabelFrame(body, text="Hàng Đợi Quy Hoạch Công Trình (Tích chọn & Xếp ưu tiên)", style="Card.TLabelframe")
         f_tree.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.bld_tree = ttk.Treeview(f_tree, columns=("pid", "gid", "target_lvl"), show="tree headings")
+
+        self.bld_tree = ttk.Treeview(
+            f_tree,
+            columns=("select", "pid", "gid", "current_lvl", "target_lvl"),
+            show="tree headings",
+            selectmode="browse",
+        )
         self.bld_tree.heading("#0", text="Tên công trình")
-        self.bld_tree.heading("pid", text="Ô đất (pid)")
-        self.bld_tree.heading("gid", text="Loại (gid)")
-        self.bld_tree.heading("target_lvl", text="Cấp mục tiêu")
-        self.bld_tree.column("#0", width=120)
-        self.bld_tree.column("pid", width=70, anchor="center")
-        self.bld_tree.column("gid", width=70, anchor="center")
-        self.bld_tree.column("target_lvl", width=80, anchor="center")
+        self.bld_tree.heading("select", text="Chọn")
+        self.bld_tree.heading("pid", text="Ô đất")
+        self.bld_tree.heading("gid", text="Mã loại")
+        self.bld_tree.heading("current_lvl", text="Cấp HT")
+        self.bld_tree.heading("target_lvl", text="Cấp MT")
+
+        self.bld_tree.column("#0", width=125)
+        self.bld_tree.column("select", width=45, anchor="center")
+        self.bld_tree.column("pid", width=50, anchor="center")
+        self.bld_tree.column("gid", width=55, anchor="center")
+        self.bld_tree.column("current_lvl", width=55, anchor="center")
+        self.bld_tree.column("target_lvl", width=65, anchor="center")
+
         self.bld_tree.pack(fill="both", expand=True, padx=6, pady=6)
+        self.bld_tree.bind("<ButtonRelease-1>", self._on_bld_tree_click)
+        self._populate_default_buildings()
 
         f_log = ttk.LabelFrame(body, text="Nhật ký Nâng Cấp Công Trình", style="Card.TLabelframe")
         f_log.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
@@ -775,48 +807,201 @@ class Dashboard(tk.Tk):
         self.bld_log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
         self.bld_log_text.see("end")
 
+    def _populate_default_buildings(self):
+        self.bld_tree.delete(*self.bld_tree.get_children())
+        default_plots = [
+            (1, 1, "Thái Phủ", 20),
+            (2, 2, "Tường Lũy", 20),
+            (3, 3, "Kho Lương", 20),
+            (4, 4, "Doanh Trại", 20),
+            (5, 5, "Trường Luyện Binh", 20),
+            (6, 6, "Dịch Trạm", 20),
+            (7, 7, "Tiệm Rèn", 20),
+            (8, 8, "Viện Đại Học", 20),
+            (9, 9, "Thị Trường", 20),
+            (10, 10, "Chiêu Hiền Quán", 20),
+            (11, 11, "Thần Miếu", 20),
+            (12, 12, "Sứ Quán", 20),
+            (13, 13, "Thái Y Viện", 20),
+            (14, 14, "Quân Giới Phủ", 20),
+            (15, 15, "Hồng Kê Quán", 20),
+            (16, 16, "Nhà Dân 1", 20),
+            (17, 16, "Nhà Dân 2", 20),
+            (18, 16, "Nhà Dân 3", 20),
+            (19, 16, "Nhà Dân 4", 20),
+            (20, 16, "Nhà Dân 5", 20),
+            (21, 21, "Ruộng Lúa 1", 20),
+            (22, 21, "Ruộng Lúa 2", 20),
+            (23, 21, "Ruộng Lúa 3", 20),
+            (24, 22, "Xưởng Gỗ 1", 20),
+            (25, 22, "Xưởng Gỗ 2", 20),
+            (26, 22, "Xưởng Gỗ 3", 20),
+            (27, 23, "Mỏ Đá 1", 20),
+            (28, 23, "Mỏ Đá 2", 20),
+            (29, 23, "Mỏ Đá 3", 20),
+            (30, 24, "Mỏ Sắt 1", 20),
+            (31, 24, "Mỏ Sắt 2", 20),
+            (32, 24, "Mỏ Sắt 3", 20),
+        ]
+        for pid, gid, name, target in default_plots:
+            self.bld_tree.insert("", "end", iid=str(pid), text=name, values=("☑", pid, gid, 0, target))
+
+    def _move_bld_up(self):
+        sel = self.bld_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        idx = self.bld_tree.index(item)
+        if idx > 0:
+            self.bld_tree.move(item, "", idx - 1)
+
+    def _move_bld_down(self):
+        sel = self.bld_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        idx = self.bld_tree.index(item)
+        children = self.bld_tree.get_children("")
+        if idx < len(children) - 1:
+            self.bld_tree.move(item, "", idx + 1)
+
+    def _select_all_bld(self, state: bool):
+        sym = "☑" if state else "☐"
+        for iid in self.bld_tree.get_children(""):
+            vals = list(self.bld_tree.item(iid, "values"))
+            vals[0] = sym
+            self.bld_tree.item(iid, values=vals)
+
+    def _set_bld_target_lvl(self):
+        sel = self.bld_tree.selection()
+        if not sel:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 công trình trong bảng!")
+            return
+        try:
+            lvl = int(self.bld_target_lvl_var.get())
+            if lvl < 1 or lvl > 33:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 33!")
+            return
+        for iid in sel:
+            vals = list(self.bld_tree.item(iid, "values"))
+            vals[4] = lvl
+            self.bld_tree.item(iid, values=vals)
+
+    def _on_bld_tree_click(self, event):
+        item = self.bld_tree.identify_row(event.y)
+        col = self.bld_tree.identify_column(event.x)
+        if not item:
+            return
+        vals = list(self.bld_tree.item(item, "values"))
+        if col == "#1":
+            vals[0] = "☑" if vals[0] == "☐" else "☐"
+            self.bld_tree.item(item, values=vals)
+        if len(vals) > 4:
+            self.bld_target_lvl_var.set(str(vals[4]))
+
+    def _fetch_city_buildings(self):
+        sel_idx = self.bld_city_combo.current()
+        cities = self.roster.cities if self.roster.cities else self.roster.bases
+        if sel_idx < 0 or sel_idx >= len(cities):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì cần tải công trình!")
+            return
+        city = cities[sel_idx]
+        self._append_bld_log(f"🔄 Đang tải dữ liệu công trình thực tế cho thành {city.name}...")
+        threading.Thread(target=self._fetch_city_buildings_thread, args=(city.id,), daemon=True).start()
+
+    def _fetch_city_buildings_thread(self, city_id: int):
+        try:
+            resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
+            buildings = resp.get("buildings") or resp.get("build", [])
+            self.after(0, self._update_city_buildings_ui, buildings)
+        except Exception as e:
+            self.after(0, lambda: self._append_bld_log(f"❌ Lỗi tải công trình thành: {e}"))
+
+    def _update_city_buildings_ui(self, buildings):
+        if not buildings:
+            self._append_bld_log("ℹ️ Server không trả về dữ liệu công trình.")
+            return
+        bmap = {}
+        for b in buildings:
+            if isinstance(b, dict):
+                pid = int(b.get("pid", 0))
+                bmap[pid] = (int(b.get("gid", 0)), int(b.get("level", 0)))
+            elif isinstance(b, (list, tuple)) and len(b) > 2:
+                pid = int(b[0])
+                bmap[pid] = (int(b[1]), int(b[2]))
+
+        for iid in self.bld_tree.get_children(""):
+            vals = list(self.bld_tree.item(iid, "values"))
+            pid = int(vals[1])
+            if pid in bmap:
+                gid, cur_lvl = bmap[pid]
+                vals[2] = gid
+                vals[3] = cur_lvl
+                name = BUILDING_NAMES.get(gid, self.bld_tree.item(iid, "text"))
+                self.bld_tree.item(iid, text=name, values=vals)
+        self._append_bld_log(f"🔄 Đã cập nhật cấp hiện tại của {len(bmap)} công trình trong thành.")
+
     def _load_build_plans(self):
-        plan_path = Path("build_plans.example.json")
+        plan_path = Path("build_plans.json") if Path("build_plans.json").exists() else Path("build_plans.example.json")
         if not plan_path.exists():
-            messagebox.showerror("Lỗi", "Không tìm thấy file build_plans.example.json!")
+            messagebox.showerror("Lỗi", "Không tìm thấy file build_plans.json hoặc build_plans.example.json!")
             return
         data = json.loads(plan_path.read_text(encoding="utf-8"))
         cities_data = data.get("cities", {})
-        self.bld_tree.delete(*self.bld_tree.get_children())
-        for cid, cinfo in cities_data.items():
-            for p in cinfo.get("plans", []):
+        plans_list = data.get("plans", [])
+        if cities_data and not plans_list:
+            for cid, cinfo in cities_data.items():
+                plans_list.extend(cinfo.get("plans", []))
+
+        if plans_list:
+            self.bld_tree.delete(*self.bld_tree.get_children())
+            for p in plans_list:
+                name = p.get("name") or BUILDING_NAMES.get(p.get("gid"), f"Công trình {p.get('gid')}")
+                en = "☑" if p.get("enabled", True) else "☐"
                 self.bld_tree.insert(
                     "",
                     "end",
-                    text=p.get("name", "Công trình"),
-                    values=(p.get("pid"), p.get("gid"), p.get("target_level")),
+                    iid=str(p.get("pid")),
+                    text=name,
+                    values=(en, p.get("pid"), p.get("gid"), 0, p.get("target_level", 20)),
                 )
-        self._append_bld_log("📂 Đã nạp danh sách quy hoạch công trình mẫu thành công.")
+        self._append_bld_log(f"📂 Đã nạp danh sách {len(plans_list)} quy hoạch công trình.")
 
     def _save_build_plans(self):
         plans = []
-        for iid in self.bld_tree.get_children():
+        for iid in self.bld_tree.get_children(""):
             name = self.bld_tree.item(iid, "text")
             vals = self.bld_tree.item(iid, "values")
-            plans.append({"pid": int(vals[0]), "gid": int(vals[1]), "target_level": int(vals[2]), "name": name})
+            plans.append({
+                "pid": int(vals[1]),
+                "gid": int(vals[2]),
+                "target_level": int(vals[4]),
+                "name": name,
+                "enabled": vals[0] == "☑",
+            })
         Path("build_plans.json").write_text(json.dumps({"plans": plans}, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._append_bld_log(f"💾 Đã lưu cấu hình {len(plans)} công trình ra build_plans.json")
         messagebox.showinfo("Thành công", "Đã lưu cấu hình ra build_plans.json!")
 
     def _toggle_building(self):
         if not self._bld_runner or not self._bld_runner.is_alive():
             sel_idx = self.bld_city_combo.current()
-            if sel_idx < 0:
+            cities = self.roster.cities if self.roster.cities else self.roster.bases
+            if sel_idx < 0 or sel_idx >= len(cities):
                 messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì!")
                 return
-            city_id = self.roster.cities[sel_idx].id
+            city_id = cities[sel_idx].id
             plans = []
-            for iid in self.bld_tree.get_children():
+            for iid in self.bld_tree.get_children(""):
                 name = self.bld_tree.item(iid, "text")
                 vals = self.bld_tree.item(iid, "values")
-                plans.append(BuildingPlan(pid=int(vals[0]), gid=int(vals[1]), target_level=int(vals[2]), name=name))
+                if vals[0] == "☑":
+                    plans.append(BuildingPlan(pid=int(vals[1]), gid=int(vals[2]), target_level=int(vals[4]), name=name, enabled=True))
 
             if not plans:
-                messagebox.showwarning("Cảnh báo", "Chưa có công trình nào trong hàng đợi quy hoạch! Hãy bấm Nạp mẫu.")
+                messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 công trình cần nâng cấp!")
                 return
 
             task = BuildingTask(
@@ -854,15 +1039,15 @@ class Dashboard(tk.Tk):
         f_res = ttk.LabelFrame(body, text="Viện Đại Học (29 Kỹ Thuật)", style="Card.TLabelframe")
         f_res.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
-        res_ctrl = tk.Frame(f_res, bg=CARD, padx=8, pady=6)
-        res_ctrl.pack(fill="x")
-        tk.Label(res_ctrl, text="Thành:", bg=CARD, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=4)
-        self.res_city_combo = ttk.Combobox(res_ctrl, state="readonly", width=16)
+        res_top = tk.Frame(f_res, bg=CARD, padx=8, pady=4)
+        res_top.pack(fill="x")
+        tk.Label(res_top, text="Thành:", bg=CARD, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=4)
+        self.res_city_combo = ttk.Combobox(res_top, state="readonly", width=18)
         self.res_city_combo.pack(side="left", padx=4)
 
         self.res_art_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            res_ctrl,
+            res_top,
             text="📜 Binh Pháp tăng tốc",
             variable=self.res_art_var,
             bg=CARD,
@@ -871,31 +1056,52 @@ class Dashboard(tk.Tk):
             activebackground=CARD,
         ).pack(side="left", padx=6)
 
-        ttk.Button(res_ctrl, text="📂 Nạp tech_plans", style="Action.TButton", command=self._load_tech_plans).pack(side="left", padx=4)
-        self.res_start_btn = ttk.Button(res_ctrl, text="▶️ Bắt đầu", style="Success.TButton", command=self._toggle_research)
+        self.res_start_btn = ttk.Button(res_top, text="▶️ Bắt đầu", style="Success.TButton", command=self._toggle_research)
         self.res_start_btn.pack(side="right", padx=4)
 
-        self.res_tree = ttk.Treeview(f_res, columns=("id", "target_lvl"), show="tree headings")
-        self.res_tree.heading("#0", text="Tên Kỹ Thuật Đại Học")
-        self.res_tree.heading("id", text="Mã (ID)")
-        self.res_tree.heading("target_lvl", text="Cấp mục tiêu")
-        self.res_tree.column("#0", width=140)
-        self.res_tree.column("id", width=60, anchor="center")
-        self.res_tree.column("target_lvl", width=80, anchor="center")
-        self.res_tree.pack(fill="both", expand=True, padx=6, pady=6)
+        # Thanh công cụ sắp xếp ưu tiên kỹ thuật
+        res_bar = tk.Frame(f_res, bg=CARD, padx=8, pady=4)
+        res_bar.pack(fill="x")
+        ttk.Button(res_bar, text="⬆️ Lên", style="Action.TButton", command=self._move_res_up).pack(side="left", padx=2)
+        ttk.Button(res_bar, text="⬇️ Xuống", style="Action.TButton", command=self._move_res_down).pack(side="left", padx=2)
+        ttk.Button(res_bar, text="☑ Tất cả", style="Action.TButton", command=lambda: self._select_all_res(True)).pack(side="left", padx=2)
+        ttk.Button(res_bar, text="☐ Bỏ chọn", style="Action.TButton", command=lambda: self._select_all_res(False)).pack(side="left", padx=2)
 
-        # Cột phải: Hậu Cần & Điều Chuyển Binh Lực
-        f_logis = ttk.LabelFrame(body, text="Hậu Cần & Chuyển Quân Liên Thành", style="Card.TLabelframe")
+        tk.Label(res_bar, text="Cấp MT:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+        self.res_target_lvl_var = tk.StringVar(value="20")
+        ttk.Entry(res_bar, textvariable=self.res_target_lvl_var, width=5).pack(side="left", padx=2)
+        ttk.Button(res_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_res_target_lvl).pack(side="left", padx=2)
+
+        ttk.Button(res_bar, text="💾 Lưu", style="Action.TButton", command=self._save_tech_plans).pack(side="left", padx=2)
+        ttk.Button(res_bar, text="📂 Nạp", style="Action.TButton", command=self._load_tech_plans).pack(side="left", padx=2)
+
+        self.res_tree = ttk.Treeview(f_res, columns=("select", "id", "target_lvl"), show="tree headings", selectmode="browse")
+        self.res_tree.heading("#0", text="Tên Kỹ Thuật Đại Học")
+        self.res_tree.heading("select", text="Chọn")
+        self.res_tree.heading("id", text="Mã ID")
+        self.res_tree.heading("target_lvl", text="Cấp MT")
+
+        self.res_tree.column("#0", width=140)
+        self.res_tree.column("select", width=45, anchor="center")
+        self.res_tree.column("id", width=55, anchor="center")
+        self.res_tree.column("target_lvl", width=65, anchor="center")
+
+        self.res_tree.pack(fill="both", expand=True, padx=6, pady=6)
+        self.res_tree.bind("<ButtonRelease-1>", self._on_res_tree_click)
+        self._populate_all_techs()
+
+        # Cột phải: Hậu Cần & Chuyển Quân Giới
+        f_logis = ttk.LabelFrame(body, text="Hậu Cần & Chuyển Quân Giới", style="Card.TLabelframe")
         f_logis.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
         logis_form = tk.Frame(f_logis, bg=CARD, padx=12, pady=10)
         logis_form.pack(fill="x", padx=6, pady=6)
 
-        tk.Label(logis_form, text="Từ Thành:", bg=CARD, fg=FG).grid(row=0, column=0, sticky="w", pady=4)
+        tk.Label(logis_form, text="Từ Căn Cứ:", bg=CARD, fg=FG).grid(row=0, column=0, sticky="w", pady=4)
         self.log_from_city_combo = ttk.Combobox(logis_form, state="readonly", width=18)
         self.log_from_city_combo.grid(row=0, column=1, sticky="w", padx=4, pady=4)
 
-        tk.Label(logis_form, text="Đến Thành:", bg=CARD, fg=FG).grid(row=0, column=2, sticky="w", pady=4)
+        tk.Label(logis_form, text="Đến Căn Cứ:", bg=CARD, fg=FG).grid(row=0, column=2, sticky="w", pady=4)
         self.log_to_city_combo = ttk.Combobox(logis_form, state="readonly", width=18)
         self.log_to_city_combo.grid(row=0, column=3, sticky="w", padx=4, pady=4)
 
@@ -912,9 +1118,9 @@ class Dashboard(tk.Tk):
         # Nút điều chuyển & Tiện ích
         act_row = tk.Frame(logis_form, bg=CARD)
         act_row.grid(row=2, column=0, columnspan=4, pady=10, sticky="ew")
-        ttk.Button(act_row, text="🚚 Chuyển Quân Ngay", style="Action.TButton", command=self._do_transfer_army).pack(side="left", padx=4)
+        ttk.Button(act_row, text="🚚 Chuyển Quân Giới Ngay", style="Action.TButton", command=self._do_transfer_army).pack(side="left", padx=4)
         ttk.Button(act_row, text="🕊️ An Dân Ngay", style="Action.TButton", command=self._do_comfort_now).pack(side="left", padx=4)
-        ttk.Button(act_row, text="🎁 Nhận Thưởng Điểm Danh", style="Success.TButton", command=self._do_claim_daily).pack(side="left", padx=4)
+        ttk.Button(act_row, text="🎁 Nhận Thưởng Chuyên Cần", style="Success.TButton", command=self._do_claim_daily).pack(side="left", padx=4)
 
         # Log chung cho Tab 6
         f_log_tab6 = tk.Frame(f_logis, bg=CARD)
@@ -926,33 +1132,119 @@ class Dashboard(tk.Tk):
         self.logis_log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
         self.logis_log_text.see("end")
 
+    def _populate_all_techs(self):
+        self.res_tree.delete(*self.res_tree.get_children())
+        for tid, tname in sorted(TECH_NAMES.items()):
+            self.res_tree.insert("", "end", iid=str(tid), text=tname, values=("☑", tid, 20))
+
+    def _move_res_up(self):
+        sel = self.res_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        idx = self.res_tree.index(item)
+        if idx > 0:
+            self.res_tree.move(item, "", idx - 1)
+
+    def _move_res_down(self):
+        sel = self.res_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        idx = self.res_tree.index(item)
+        children = self.res_tree.get_children("")
+        if idx < len(children) - 1:
+            self.res_tree.move(item, "", idx + 1)
+
+    def _select_all_res(self, state: bool):
+        sym = "☑" if state else "☐"
+        for iid in self.res_tree.get_children(""):
+            vals = list(self.res_tree.item(iid, "values"))
+            vals[0] = sym
+            self.res_tree.item(iid, values=vals)
+
+    def _set_res_target_lvl(self):
+        sel = self.res_tree.selection()
+        if not sel:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 kỹ thuật trong bảng!")
+            return
+        try:
+            lvl = int(self.res_target_lvl_var.get())
+            if lvl < 1 or lvl > 30:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 30!")
+            return
+        for iid in sel:
+            vals = list(self.res_tree.item(iid, "values"))
+            vals[2] = lvl
+            self.res_tree.item(iid, values=vals)
+
+    def _on_res_tree_click(self, event):
+        item = self.res_tree.identify_row(event.y)
+        col = self.res_tree.identify_column(event.x)
+        if not item:
+            return
+        vals = list(self.res_tree.item(item, "values"))
+        if col == "#1":
+            vals[0] = "☑" if vals[0] == "☐" else "☐"
+            self.res_tree.item(item, values=vals)
+        if len(vals) > 2:
+            self.res_target_lvl_var.set(str(vals[2]))
+
     def _load_tech_plans(self):
-        plan_path = Path("tech_plans.example.json")
+        plan_path = Path("tech_plans.json") if Path("tech_plans.json").exists() else Path("tech_plans.example.json")
         if not plan_path.exists():
-            messagebox.showerror("Lỗi", "Không tìm thấy file tech_plans.example.json!")
+            messagebox.showerror("Lỗi", "Không tìm thấy file tech_plans.json hoặc tech_plans.example.json!")
             return
         data = json.loads(plan_path.read_text(encoding="utf-8"))
-        self.res_tree.delete(*self.res_tree.get_children())
-        for p in data.get("plans", []):
-            name = p.get("name") or TECH_NAMES.get(p.get("tech_id"), "Kỹ thuật")
-            self.res_tree.insert("", "end", text=name, values=(p.get("tech_id"), p.get("target_level")))
-        self._append_logis_log("📂 Đã nạp danh sách 29 Kỹ Thuật Đại Học mẫu thành công.")
+        plans = data.get("plans", [])
+        if plans:
+            plan_map = {int(p["tech_id"]): p for p in plans}
+            for iid in self.res_tree.get_children(""):
+                tid = int(iid)
+                if tid in plan_map:
+                    p = plan_map[tid]
+                    en = "☑" if p.get("enabled", True) else "☐"
+                    self.res_tree.item(iid, values=(en, tid, p.get("target_level", 20)))
+                else:
+                    vals = list(self.res_tree.item(iid, "values"))
+                    vals[0] = "☐"
+                    self.res_tree.item(iid, values=vals)
+        self._append_logis_log(f"📂 Đã nạp cấu hình {len(plans)} kỹ thuật.")
+
+    def _save_tech_plans(self):
+        plans = []
+        for iid in self.res_tree.get_children(""):
+            name = self.res_tree.item(iid, "text")
+            vals = self.res_tree.item(iid, "values")
+            plans.append({
+                "tech_id": int(vals[1]),
+                "target_level": int(vals[2]),
+                "name": name,
+                "enabled": vals[0] == "☑",
+            })
+        Path("tech_plans.json").write_text(json.dumps({"plans": plans}, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._append_logis_log(f"💾 Đã lưu cấu hình {len(plans)} kỹ thuật ra tech_plans.json")
+        messagebox.showinfo("Thành công", "Đã lưu cấu hình ra tech_plans.json!")
 
     def _toggle_research(self):
         if not self._res_runner or not self._res_runner.is_alive():
             sel_idx = self.res_city_combo.current()
-            if sel_idx < 0:
+            cities = self.roster.cities if self.roster.cities else self.roster.bases
+            if sel_idx < 0 or sel_idx >= len(cities):
                 messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì nghiên cứu!")
                 return
-            city_id = self.roster.cities[sel_idx].id
+            city_id = cities[sel_idx].id
             plans = []
-            for iid in self.res_tree.get_children():
+            for iid in self.res_tree.get_children(""):
                 name = self.res_tree.item(iid, "text")
                 vals = self.res_tree.item(iid, "values")
-                plans.append(TechPlan(tech_id=int(vals[0]), target_level=int(vals[1]), name=name))
+                if vals[0] == "☑":
+                    plans.append(TechPlan(tech_id=int(vals[1]), target_level=int(vals[2]), name=name, enabled=True))
 
             if not plans:
-                messagebox.showwarning("Cảnh báo", "Chưa có kỹ thuật nào trong danh sách! Hãy bấm Nạp tech_plans.")
+                messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 kỹ thuật cần nghiên cứu!")
                 return
 
             task = ResearchTask(
@@ -977,11 +1269,12 @@ class Dashboard(tk.Tk):
     def _do_transfer_army(self):
         f_idx = self.log_from_city_combo.current()
         t_idx = self.log_to_city_combo.current()
-        if f_idx < 0 or t_idx < 0:
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn đầy đủ Thành gửi và Thành nhận!")
+        bases = self.roster.bases
+        if f_idx < 0 or t_idx < 0 or f_idx >= len(bases) or t_idx >= len(bases):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn đầy đủ Căn cứ gửi và Căn cứ nhận!")
             return
-        from_id = self.roster.cities[f_idx].id
-        to_id = self.roster.cities[t_idx].id
+        from_id = bases[f_idx].id
+        to_id = bases[t_idx].id
         army_id = self.log_army_combo.current() + 1
         amount = int(self.log_amount_var.get() or "1000")
 
@@ -991,10 +1284,11 @@ class Dashboard(tk.Tk):
 
     def _do_comfort_now(self):
         f_idx = self.log_from_city_combo.current()
-        if f_idx < 0:
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành cần An Dân!")
+        bases = self.roster.bases
+        if f_idx < 0 or f_idx >= len(bases):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ cần An Dân!")
             return
-        city_id = self.roster.cities[f_idx].id
+        city_id = bases[f_idx].id
         task = LogisticsTask(self.gateway, notify=lambda m: self.after(0, self._append_logis_log, m))
         threading.Thread(target=lambda: task.comfort_city_if_needed(city_id), daemon=True).start()
 
@@ -1023,32 +1317,36 @@ class Dashboard(tk.Tk):
 
     def _loaded(self, roster: Roster):
         self.roster = roster
-        # Tab 1
+        # Tab 1: Thành & Doanh trại
         self.city_tree.delete(*self.city_tree.get_children())
-        for city in roster.cities:
-            self.city_tree.insert("", "end", iid=str(city.id), text=city.name, values=(city.id,))
-        self.status.set(f"Đã tải {len(roster.cities)} thành trì thành công")
+        for base in roster.bases:
+            coords = f"{base.pos_x},{base.pos_y}" if (base.pos_x or base.pos_y) else "-"
+            self.city_tree.insert("", "end", iid=str(base.id), text=base.name, values=(base.type, base.id, coords))
+        self.status.set(f"Đã tải {len(roster.cities)} thành, {len(roster.camps)} doanh trại thành công")
         self.refresh_btn.state(["!disabled"])
-        if roster.cities:
-            self.city_tree.selection_set(str(roster.cities[0].id))
+        if roster.bases:
+            self.city_tree.selection_set(str(roster.bases[0].id))
 
-        # Cập nhật Combobox thành trì cho tất cả các Tab
-        city_items = [f"{c.name} (ID: {c.id})" for c in roster.cities]
-        for combo in (
-            self.tp_city_combo,
-            self.gd_city_combo,
-            self.bm_city_combo,
-            self.bm_parent_city_combo,
-            self.bld_city_combo,
-            self.res_city_combo,
-            self.log_from_city_combo,
-            self.log_to_city_combo,
-        ):
+        # Cập nhật Combobox
+        all_base_items = [b.display_name for b in roster.bases]
+        city_items = [c.display_name for c in roster.cities]
+        camps_items = [c.display_name for c in roster.camps] if roster.camps else all_base_items
+
+        for combo in (self.bld_city_combo, self.res_city_combo, self.bm_parent_city_combo, self.gd_city_combo):
             combo["values"] = city_items
             if city_items and not combo.get():
                 combo.current(0)
 
-        if city_items:
+        for combo in (self.tp_city_combo, self.log_from_city_combo, self.log_to_city_combo):
+            combo["values"] = all_base_items
+            if all_base_items and not combo.get():
+                combo.current(0)
+
+        self.bm_city_combo["values"] = camps_items
+        if camps_items and not self.bm_city_combo.get():
+            self.bm_city_combo.current(0)
+
+        if all_base_items:
             self._on_tp_city_selected()
 
     def _on_city(self, _event=None):

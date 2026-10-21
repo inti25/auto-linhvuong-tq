@@ -55,6 +55,7 @@ class TechPlan:
     tech_id: int  # Mã kỹ thuật (1..29)
     target_level: int  # Cấp độ đích (1..30)
     name: str = ""
+    enabled: bool = True
 
     def __post_init__(self):
         if not self.name:
@@ -133,6 +134,8 @@ class ResearchTask:
         # 3. Lọc theo thứ tự ưu tiên tìm kỹ thuật chưa đạt cấp mục tiêu
         target_tech: Optional[TechPlan] = None
         for plan in self.plans:
+            if not getattr(plan, "enabled", True):
+                continue
             cur_lvl = current_levels.get(plan.tech_id, 0)
             if cur_lvl < plan.target_level:
                 target_tech = plan
