@@ -125,3 +125,50 @@ def test_building_task_stops_on_captcha():
     task = BuildingTask(gw, city_id=101, plans=[], auto_comfort=False, auto_boost=False)
     with pytest.raises(CaptchaRequired):
         task.run_once()
+
+
+def test_building_task_real_server_format_and_upgrade():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 596952, 3497823, [], []]],
+            },
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [0, 2, "城墙", 11, 0, 0],
+                    [17, 9, "聚贤楼", 4, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 0, "duration": 49},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=17, gid=9, target_level=5, name="聚贤楼 - Tụ Hiền Lâu")]
+    task = BuildingTask(gw, city_id=101, plans=plans, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
+
+    # Kiểm tra gọi OPT.ashx?id=65 với pid=17, gid=9, tid=101
+    upgrade_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
+    assert upgrade_call["pid"] == "17"
+    assert upgrade_call["gid"] == "9"
+    assert upgrade_call["tid"] == "101"
+
+
+def test_building_task_real_server_slot_busy():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 596952, 3497823, [[17, 9, 4, 1, 48]], []]],
+            },
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=17, gid=9, target_level=5)]
+    task = BuildingTask(gw, city_id=101, plans=plans, max_slots=1, auto_speedup=False, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "slots_busy"
+

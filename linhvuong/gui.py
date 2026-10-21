@@ -130,6 +130,9 @@ class LoginWindow(tk.Tk):
                 data = json.loads(SETTINGS.read_text(encoding="utf-8"))
                 self.server_var.set(str(data.get("server", "")))
                 self.user_var.set(data.get("username", ""))
+                pwd = data.get("password") or data.get("passwrod")
+                if pwd:
+                    self.pass_var.set(pwd)
                 self.proxy_var.set(data.get("proxy", ""))
                 self.proxy_user_var.set(data.get("proxy_user", ""))
                 self.proxy_pass_var.set(data.get("proxy_pass", ""))

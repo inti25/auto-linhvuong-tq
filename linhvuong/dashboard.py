@@ -709,6 +709,7 @@ class Dashboard(tk.Tk):
         tk.Label(top, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
         self.bld_city_combo = ttk.Combobox(top, state="readonly", width=20)
         self.bld_city_combo.pack(side="left", padx=(0, 16))
+        self.bld_city_combo.bind("<<ComboboxSelected>>", lambda e: self._fetch_city_buildings())
 
         self.bld_speedup_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -898,7 +899,7 @@ class Dashboard(tk.Tk):
     def _fetch_city_buildings_thread(self, city_id: int):
         try:
             resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
-            buildings = resp.get("buildings") or resp.get("build", [])
+            buildings = resp.get("infos") or resp.get("buildings") or resp.get("build", [])
             self.after(0, self._update_city_buildings_ui, buildings)
         except Exception as e:
             self.after(0, lambda: self._append_bld_log(f"❌ Lỗi tải công trình thành: {e}"))
@@ -907,34 +908,52 @@ class Dashboard(tk.Tk):
         if not buildings:
             self._append_bld_log("ℹ️ Server không trả về dữ liệu công trình.")
             return
-        bmap = {}
+
+        # Lưu lại thiết lập target_level và enabled của người dùng nếu đã có
+        existing_targets = {}
+        for iid in self.bld_tree.get_children(""):
+            vals = self.bld_tree.item(iid, "values")
+            if vals and len(vals) >= 5:
+                try:
+                    p_id = int(vals[1])
+                    existing_targets[p_id] = (vals[0], int(vals[4]))
+                except (ValueError, IndexError):
+                    pass
+
+        # Xóa và nạp lại toàn bộ danh sách thực tế của thành
+        self.bld_tree.delete(*self.bld_tree.get_children(""))
+
+        count = 0
         for b in buildings:
+            pid = 0
+            gid = 0
+            name = ""
+            cur_lvl = 0
             if isinstance(b, dict):
                 pid = int(b.get("pid", 0))
-                bmap[pid] = (int(b.get("gid", 0)), int(b.get("level", 0)))
-            elif isinstance(b, (list, tuple)) and len(b) > 2:
+                gid = int(b.get("gid", 0))
+                cur_lvl = int(b.get("level", 0))
+                name = b.get("name", "")
+            elif isinstance(b, (list, tuple)) and len(b) >= 4:
                 pid = int(b[0])
-                bmap[pid] = (int(b[1]), int(b[2]))
+                gid = int(b[1])
+                name = str(b[2])
+                cur_lvl = int(b[3])
+            else:
+                continue
 
-        existing_pids = set()
-        for iid in self.bld_tree.get_children(""):
-            vals = list(self.bld_tree.item(iid, "values"))
-            pid = int(vals[1])
-            existing_pids.add(pid)
-            if pid in bmap:
-                gid, cur_lvl = bmap[pid]
-                vals[2] = gid
-                vals[3] = cur_lvl
-                name = BUILDING_NAMES.get(gid, self.bld_tree.item(iid, "text"))
-                self.bld_tree.item(iid, text=name, values=vals)
+            std_name = BUILDING_NAMES.get(gid, name or f"Công trình {gid}")
+            enabled, target_lvl = existing_targets.get(pid, ("☑", max(cur_lvl + 1, 20)))
+            self.bld_tree.insert(
+                "",
+                "end",
+                iid=str(pid),
+                text=std_name,
+                values=(enabled, pid, gid, cur_lvl, target_lvl),
+            )
+            count += 1
 
-        for pid in sorted(bmap.keys()):
-            if pid not in existing_pids:
-                gid, cur_lvl = bmap[pid]
-                name = BUILDING_NAMES.get(gid, f"Công trình {gid}")
-                self.bld_tree.insert("", "end", iid=str(pid), text=name, values=("☑", pid, gid, cur_lvl, 20))
-
-        self._append_bld_log(f"🔄 Đã cập nhật cấp hiện tại của {len(bmap)} công trình trong thành.")
+        self._append_bld_log(f"🔄 Đã nạp thành công {count} công trình thực tế của thành.")
 
     def _load_build_plans(self):
         plan_path = Path("build_plans.json") if Path("build_plans.json").exists() else Path("build_plans.example.json")
@@ -1342,6 +1361,8 @@ class Dashboard(tk.Tk):
 
         if all_base_items:
             self._on_tp_city_selected()
+        if city_items:
+            self._fetch_city_buildings()
 
     def _on_city(self, _event=None):
         sel = self.city_tree.selection()
