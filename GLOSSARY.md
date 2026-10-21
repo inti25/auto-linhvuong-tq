@@ -120,6 +120,14 @@ _Avoid_: Nâng sĩ khí, tăng morale, buff sĩ khí
 Quy trình kiểm tra quân số tướng, tự động chiêu mộ tân binh và bổ sung binh lính theo loại quân chỉ định trước khi xuất kích.
 _Avoid_: Bổ sung lính, refill lính, auto recruit
 
+**Quy Hoạch Đa Căn Cứ**:
+Thiết lập hàng đợi công trình độc lập cho từng Thành và Doanh trại, cho phép bot giám sát và tự động nâng cấp đồng thời nhiều căn cứ cùng lúc.
+_Avoid_: Xây đa thành, multi-city queue
+
+**Căn Cứ Thi Công**:
+Thành hoặc Doanh trại được người chơi tích chọn tham gia tiến trình tự động nâng cấp công trình.
+_Avoid_: Thành được chọn, active base
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

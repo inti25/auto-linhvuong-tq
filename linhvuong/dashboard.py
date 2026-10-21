@@ -16,7 +16,7 @@ import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from .gateway import GatewayClient
 from .locks import TargetLocks
@@ -129,22 +129,40 @@ class BinhManAutoRunner(BaseTaskRunner):
 
 
 class BuildingAutoRunner(BaseTaskRunner):
-    def __init__(self, task: BuildingTask, interval: float, log_cb, status_cb):
+    def __init__(self, task_or_tasks: Union[BuildingTask, list[BuildingTask]], interval: float, log_cb, status_cb):
         super().__init__("Xây Dựng", log_cb, status_cb)
-        self.task = task
+        if isinstance(task_or_tasks, list):
+            self.tasks: list[BuildingTask] = task_or_tasks
+        else:
+            self.tasks: list[BuildingTask] = [task_or_tasks]
         self.interval = interval
+
+    @property
+    def task(self) -> Optional[BuildingTask]:
+        return self.tasks[0] if self.tasks else None
+
+    @task.setter
+    def task(self, val: BuildingTask):
+        self.tasks = [val]
 
     def run(self):
         self.status_cb("Đang chạy...")
-        self.log("🚀 Bắt đầu giám sát & nâng cấp công trình...")
+        num_bases = len(self.tasks)
+        self.log(f"🚀 Bắt đầu giám sát & nâng cấp công trình cho {num_bases} căn cứ...")
         cycle = 0
         while not self.stop_event.is_set():
             cycle += 1
+            all_completed = True
             try:
-                res = self.task.run_once()
-                self.log(f"Chu kỳ {cycle}: Trạng thái -> {res}")
-                if res == "all_buildings_completed":
-                    self.log("🎉 Toàn bộ công trình quy hoạch đã hoàn tất!")
+                for t in self.tasks:
+                    if self.stop_event.is_set():
+                        break
+                    res = t.run_once()
+                    if res != "all_buildings_completed":
+                        all_completed = False
+                
+                if all_completed and self.tasks:
+                    self.log("🎉 Toàn bộ công trình quy hoạch của tất cả các căn cứ đã hoàn tất!")
                     self.status_cb("Hoàn tất quy hoạch")
                     break
             except CaptchaRequired:
@@ -216,6 +234,9 @@ class Dashboard(tk.Tk):
         self._bm_runner = None
         self._bld_runner = None
         self._res_runner = None
+        self._city_building_plans: dict[int, list[dict]] = {}
+        self._selected_building_cities: set[int] = set()
+        self._current_bld_city_id: Optional[int] = None
 
         style = ttk.Style(self)
         style.theme_use("clam")
@@ -461,7 +482,25 @@ class Dashboard(tk.Tk):
             },
         }
 
-        # Thu thập Hàng đợi Xây dựng
+        # Thu thập Hàng đợi Xây dựng (đa căn cứ & tương thích ngược)
+        self._save_current_bld_tree_to_cache()
+        cities_cfg = {}
+        for cid, plans in self._city_building_plans.items():
+            base_name = ""
+            if self.roster:
+                b = self.roster.base_by_id(cid)
+                if b:
+                    base_name = b.name
+            if not base_name and hasattr(self, "bld_bases_tree") and self.bld_bases_tree.exists(str(cid)):
+                base_name = self.bld_bases_tree.item(str(cid), "text")
+            is_enabled = cid in self._selected_building_cities
+            cities_cfg[str(cid)] = {
+                "name": base_name,
+                "enabled": is_enabled,
+                "plans": plans,
+            }
+        profile["building"]["cities"] = cities_cfg
+
         if hasattr(self, "bld_tree"):
             for iid in self.bld_tree.get_children(""):
                 name = self.bld_tree.item(iid, "text")
@@ -493,8 +532,9 @@ class Dashboard(tk.Tk):
     def _apply_unified_profile(self, data: dict) -> list[str]:
         loaded_sections = []
 
-        # 1. Xây Dựng (hỗ trợ cả profile mới và build_plans.json cũ)
+        # 1. Xây Dựng (hỗ trợ cả profile đa căn cứ mới và build_plans.json cũ)
         plans_list = None
+        cities_data = None
         if "plans" in data and isinstance(data["plans"], list):
             plans_list = data["plans"]
         elif "building" in data and isinstance(data["building"], dict):
@@ -508,20 +548,43 @@ class Dashboard(tk.Tk):
             if hasattr(self, "bld_comfort_var") and "auto_comfort" in bld_data:
                 self.bld_comfort_var.set(bool(bld_data["auto_comfort"]))
             plans_list = bld_data.get("plans")
+            cities_data = bld_data.get("cities")
 
-        if plans_list and hasattr(self, "bld_tree"):
-            self.bld_tree.delete(*self.bld_tree.get_children(""))
-            for p in plans_list:
-                gid = int(p.get("gid", 1))
-                name = p.get("name") or BUILDING_NAMES.get(gid, f"Công trình {gid}")
-                en = "☑" if p.get("enabled", True) else "☐"
-                self.bld_tree.insert(
-                    "",
-                    "end",
-                    iid=str(p.get("pid")),
-                    text=name,
-                    values=(en, p.get("pid"), gid, 0, p.get("target_level", 20)),
-                )
+        if cities_data and isinstance(cities_data, dict):
+            for cid_str, cinfo in cities_data.items():
+                try:
+                    cid = int(cid_str)
+                except ValueError:
+                    continue
+                c_plans = cinfo.get("plans", [])
+                self._city_building_plans[cid] = c_plans
+                if cinfo.get("enabled", True):
+                    self._selected_building_cities.add(cid)
+                else:
+                    self._selected_building_cities.discard(cid)
+                if hasattr(self, "bld_bases_tree") and self.bld_bases_tree.exists(str(cid)):
+                    sym = "☑" if cid in self._selected_building_cities else "☐"
+                    vals = list(self.bld_bases_tree.item(str(cid), "values"))
+                    if vals:
+                        vals[0] = sym
+                        self.bld_bases_tree.item(str(cid), values=vals)
+
+            cur_id = self._current_bld_city_id
+            if cur_id is None and self._selected_building_cities:
+                cur_id = next(iter(self._selected_building_cities))
+                self._current_bld_city_id = cur_id
+            if cur_id and cur_id in self._city_building_plans:
+                self._render_bld_tree_from_plans(self._city_building_plans[cur_id])
+            elif plans_list and hasattr(self, "bld_tree"):
+                self._render_bld_tree_from_plans(plans_list)
+
+            loaded_sections.append(f"Xây Dựng ({len(cities_data)} căn cứ)")
+            if hasattr(self, "_append_bld_log"):
+                self._append_bld_log(f"📂 Đã nạp cấu hình quy hoạch cho {len(cities_data)} căn cứ từ hồ sơ.")
+        elif plans_list and hasattr(self, "bld_tree"):
+            self._render_bld_tree_from_plans(plans_list)
+            if self._current_bld_city_id is not None:
+                self._city_building_plans[self._current_bld_city_id] = plans_list
             loaded_sections.append(f"Xây Dựng ({len(plans_list)} công trình)")
             if hasattr(self, "_append_bld_log"):
                 self._append_bld_log(f"📂 Đã nạp cấu hình {len(plans_list)} công trình từ hồ sơ.")
@@ -1183,80 +1246,110 @@ class Dashboard(tk.Tk):
         top = tk.Frame(parent, bg=BG)
         top.pack(fill="x", pady=6)
 
-        tk.Label(top, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
-        self.bld_city_combo = ttk.Combobox(top, state="readonly", width=20)
-        self.bld_city_combo.pack(side="left", padx=(0, 12))
-        self.bld_city_combo.bind("<<ComboboxSelected>>", lambda e: self._fetch_city_buildings())
+        tk.Label(top, text="Căn cứ:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 4))
+        self.bld_city_combo = ttk.Combobox(top, state="readonly", width=18)
+        self.bld_city_combo.pack(side="left", padx=(0, 10))
+        self.bld_city_combo.bind("<<ComboboxSelected>>", self._on_bld_city_combo_selected)
 
         tk.Label(top, text="Số slot:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 4))
         self.bld_slots_combo = ttk.Combobox(top, state="readonly", width=3, values=["1", "2", "3"])
         self.bld_slots_combo.set("3")
-        self.bld_slots_combo.pack(side="left", padx=(0, 12))
+        self.bld_slots_combo.pack(side="left", padx=(0, 8))
 
         self.bld_speedup_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
             top,
-            text="⚡ Tự động Tăng tốc (Speedup)",
+            text="⚡ Tăng tốc",
             variable=self.bld_speedup_var,
             bg=BG,
             fg=FG,
             selectcolor=CARD,
             activebackground=BG,
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=4)
 
         self.bld_boost_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
             top,
-            text="🚀 Tự kích hoạt Boost 20%",
+            text="🚀 Boost 20%",
             variable=self.bld_boost_var,
             bg=BG,
             fg=FG,
             selectcolor=CARD,
             activebackground=BG,
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=4)
 
         self.bld_comfort_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
             top,
-            text="🕊️ Tự động An Dân (sĩ khí < 90%)",
+            text="🕊️ An Dân",
             variable=self.bld_comfort_var,
             bg=BG,
             fg=FG,
             selectcolor=CARD,
             activebackground=BG,
-        ).pack(side="left", padx=8)
+        ).pack(side="left", padx=4)
 
-        # Thanh công cụ sắp xếp ưu tiên và điều khiển
-        btn_bar = tk.Frame(parent, bg=BG)
-        btn_bar.pack(fill="x", pady=(2, 6))
-
-        ttk.Button(btn_bar, text="⬆️ Lên", style="Action.TButton", command=self._move_bld_up).pack(side="left", padx=2)
-        ttk.Button(btn_bar, text="⬇️ Xuống", style="Action.TButton", command=self._move_bld_down).pack(side="left", padx=2)
-        ttk.Button(btn_bar, text="☑ Tất cả", style="Action.TButton", command=lambda: self._select_all_bld(True)).pack(side="left", padx=2)
-        ttk.Button(btn_bar, text="☐ Bỏ chọn", style="Action.TButton", command=lambda: self._select_all_bld(False)).pack(side="left", padx=2)
-
-        tk.Label(btn_bar, text="Cấp MT:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
-        self.bld_target_lvl_var = tk.StringVar(value="20")
-        ttk.Entry(btn_bar, textvariable=self.bld_target_lvl_var, width=5).pack(side="left", padx=2)
-        ttk.Button(btn_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_bld_target_lvl).pack(side="left", padx=2)
-        ttk.Button(btn_bar, text="🌟 Đặt tất cả", style="Action.TButton", command=self._set_bld_target_lvl_all).pack(side="left", padx=2)
-        ttk.Button(btn_bar, text="🔄 Tải công trình", style="Action.TButton", command=self._fetch_city_buildings).pack(side="left", padx=2)
-
-        self.bld_start_btn = ttk.Button(btn_bar, text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton", command=self._toggle_building)
+        self.bld_start_btn = ttk.Button(top, text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton", command=self._toggle_building)
         self.bld_start_btn.pack(side="right", padx=4)
 
-        # Body: Treeview danh sách quy hoạch & Log
+        # Body: 3 cột
         body = tk.Frame(parent, bg=BG)
         body.pack(fill="both", expand=True, pady=4)
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
+        body.columnconfigure(0, weight=2)
+        body.columnconfigure(1, weight=4)
+        body.columnconfigure(2, weight=3)
         body.rowconfigure(0, weight=1)
 
-        f_tree = ttk.LabelFrame(body, text="Hàng Đợi Quy Hoạch Công Trình (Tích chọn & Xếp ưu tiên)", style="Card.TLabelframe")
-        f_tree.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        # Cột 1: Căn Cứ Thi Công (Thành & Doanh trại)
+        f_bases = ttk.LabelFrame(body, text="Căn Cứ Thi Công (Tích chọn xây)", style="Card.TLabelframe")
+        f_bases.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+
+        base_btn_bar = tk.Frame(f_bases, bg=BG)
+        base_btn_bar.pack(fill="x", padx=4, pady=(2, 4))
+        ttk.Button(base_btn_bar, text="☑ Tất cả", style="Action.TButton", command=lambda: self._select_all_bld_bases(True)).pack(side="left", padx=2)
+        ttk.Button(base_btn_bar, text="☐ Bỏ chọn", style="Action.TButton", command=lambda: self._select_all_bld_bases(False)).pack(side="left", padx=2)
+
+        self.bld_bases_tree = ttk.Treeview(
+            f_bases,
+            columns=("select", "type", "id"),
+            show="tree headings",
+            selectmode="browse",
+        )
+        self.bld_bases_tree.heading("#0", text="Tên căn cứ")
+        self.bld_bases_tree.heading("select", text="Chọn")
+        self.bld_bases_tree.heading("type", text="Loại")
+        self.bld_bases_tree.heading("id", text="ID")
+
+        self.bld_bases_tree.column("#0", width=105)
+        self.bld_bases_tree.column("select", width=42, anchor="center")
+        self.bld_bases_tree.column("type", width=55, anchor="center")
+        self.bld_bases_tree.column("id", width=55, anchor="e")
+
+        self.bld_bases_tree.pack(fill="both", expand=True, padx=4, pady=4)
+        self.bld_bases_tree.bind("<ButtonRelease-1>", self._on_bld_bases_click)
+        self.bld_bases_tree.bind("<<TreeviewSelect>>", self._on_bld_base_selected)
+
+        # Cột 2: Hàng Đợi Quy Hoạch Công Trình của Căn Cứ đang chọn
+        self.bld_queue_frame = ttk.LabelFrame(body, text="Hàng Đợi Quy Hoạch Công Trình", style="Card.TLabelframe")
+        self.bld_queue_frame.grid(row=0, column=1, sticky="nsew", padx=4)
+
+        bld_btn_bar = tk.Frame(self.bld_queue_frame, bg=BG)
+        bld_btn_bar.pack(fill="x", padx=4, pady=(2, 4))
+
+        ttk.Button(bld_btn_bar, text="⬆️ Lên", style="Action.TButton", command=self._move_bld_up).pack(side="left", padx=2)
+        ttk.Button(bld_btn_bar, text="⬇️ Xuống", style="Action.TButton", command=self._move_bld_down).pack(side="left", padx=2)
+        ttk.Button(bld_btn_bar, text="☑ Tất cả", style="Action.TButton", command=lambda: self._select_all_bld(True)).pack(side="left", padx=2)
+        ttk.Button(bld_btn_bar, text="☐ Bỏ chọn", style="Action.TButton", command=lambda: self._select_all_bld(False)).pack(side="left", padx=2)
+
+        tk.Label(bld_btn_bar, text="Cấp MT:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(4, 2))
+        self.bld_target_lvl_var = tk.StringVar(value="20")
+        ttk.Entry(bld_btn_bar, textvariable=self.bld_target_lvl_var, width=4).pack(side="left", padx=2)
+        ttk.Button(bld_btn_bar, text="✏️ Đặt", style="Action.TButton", command=self._set_bld_target_lvl).pack(side="left", padx=2)
+        ttk.Button(bld_btn_bar, text="🌟 Tất cả", style="Action.TButton", command=self._set_bld_target_lvl_all).pack(side="left", padx=2)
+        ttk.Button(bld_btn_bar, text="🔄 Tải thực tế", style="Action.TButton", command=self._fetch_city_buildings).pack(side="left", padx=2)
 
         self.bld_tree = ttk.Treeview(
-            f_tree,
+            self.bld_queue_frame,
             columns=("select", "pid", "gid", "current_lvl", "target_lvl"),
             show="tree headings",
             selectmode="browse",
@@ -1264,25 +1357,26 @@ class Dashboard(tk.Tk):
         self.bld_tree.heading("#0", text="Nhà")
         self.bld_tree.heading("select", text="Chọn")
         self.bld_tree.heading("pid", text="Ô đất")
-        self.bld_tree.heading("gid", text="Mã loại")
+        self.bld_tree.heading("gid", text="Mã")
         self.bld_tree.heading("current_lvl", text="Cấp HT")
         self.bld_tree.heading("target_lvl", text="Cấp MT")
 
-        self.bld_tree.column("#0", width=175)
-        self.bld_tree.column("select", width=45, anchor="center")
-        self.bld_tree.column("pid", width=50, anchor="center")
-        self.bld_tree.column("gid", width=55, anchor="center")
-        self.bld_tree.column("current_lvl", width=55, anchor="center")
-        self.bld_tree.column("target_lvl", width=65, anchor="center")
+        self.bld_tree.column("#0", width=145)
+        self.bld_tree.column("select", width=42, anchor="center")
+        self.bld_tree.column("pid", width=42, anchor="center")
+        self.bld_tree.column("gid", width=42, anchor="center")
+        self.bld_tree.column("current_lvl", width=52, anchor="center")
+        self.bld_tree.column("target_lvl", width=55, anchor="center")
 
-        self.bld_tree.pack(fill="both", expand=True, padx=6, pady=6)
+        self.bld_tree.pack(fill="both", expand=True, padx=4, pady=4)
         self.bld_tree.bind("<ButtonRelease-1>", self._on_bld_tree_click)
         self._populate_default_buildings()
 
+        # Cột 3: Nhật Ký Nâng Cấp Công Trình
         f_log = ttk.LabelFrame(body, text="Nhật ký Nâng Cấp Công Trình", style="Card.TLabelframe")
-        f_log.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        f_log.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
         self.bld_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
-        self.bld_log_text.pack(fill="both", expand=True, padx=6, pady=6)
+        self.bld_log_text.pack(fill="both", expand=True, padx=4, pady=4)
 
     def _append_bld_log(self, msg: str):
         self.bld_log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
@@ -1383,44 +1477,183 @@ class Dashboard(tk.Tk):
         if len(vals) > 4:
             self.bld_target_lvl_var.set(str(vals[4]))
 
-    def _fetch_city_buildings(self):
-        sel_idx = self.bld_city_combo.current()
-        cities = self.roster.cities if self.roster.cities else self.roster.bases
-        if sel_idx < 0 or sel_idx >= len(cities):
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì cần tải công trình!")
+    def _on_bld_bases_click(self, event):
+        item = self.bld_bases_tree.identify_row(event.y)
+        col = self.bld_bases_tree.identify_column(event.x)
+        if not item:
             return
-        city = cities[sel_idx]
-        self._append_bld_log(f"🔄 Đang tải dữ liệu công trình thực tế cho thành {city.name}...")
-        threading.Thread(target=self._fetch_city_buildings_thread, args=(city.id,), daemon=True).start()
+        vals = list(self.bld_bases_tree.item(item, "values"))
+        if col == "#1":
+            try:
+                base_id = int(item)
+            except ValueError:
+                base_id = int(vals[2]) if len(vals) > 2 else 0
+            if vals[0] == "☑":
+                vals[0] = "☐"
+                self._selected_building_cities.discard(base_id)
+            else:
+                vals[0] = "☑"
+                self._selected_building_cities.add(base_id)
+            self.bld_bases_tree.item(item, values=vals)
+
+    def _on_bld_base_selected(self, _event=None):
+        sel = self.bld_bases_tree.selection()
+        if not sel:
+            return
+        try:
+            base_id = int(sel[0])
+            self._switch_bld_base(base_id)
+            if hasattr(self, "bld_city_combo") and self.roster:
+                cities = self.roster.cities if self.roster.cities else self.roster.bases
+                for idx, c in enumerate(cities):
+                    if c.id == base_id:
+                        self.bld_city_combo.current(idx)
+                        break
+        except ValueError:
+            pass
+
+    def _on_bld_city_combo_selected(self, _event=None):
+        sel_idx = self.bld_city_combo.current()
+        cities = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
+        if 0 <= sel_idx < len(cities):
+            base_id = cities[sel_idx].id
+            if hasattr(self, "bld_bases_tree") and self.bld_bases_tree.exists(str(base_id)):
+                self.bld_bases_tree.selection_set(str(base_id))
+            self._switch_bld_base(base_id)
+
+    def _select_all_bld_bases(self, state: bool):
+        sym = "☑" if state else "☐"
+        for iid in self.bld_bases_tree.get_children(""):
+            vals = list(self.bld_bases_tree.item(iid, "values"))
+            vals[0] = sym
+            self.bld_bases_tree.item(iid, values=vals)
+            try:
+                bid = int(iid)
+                if state:
+                    self._selected_building_cities.add(bid)
+                else:
+                    self._selected_building_cities.discard(bid)
+            except ValueError:
+                pass
+
+    def _save_current_bld_tree_to_cache(self):
+        if self._current_bld_city_id is None:
+            return
+        plans = []
+        for iid in self.bld_tree.get_children(""):
+            name = self.bld_tree.item(iid, "text")
+            vals = self.bld_tree.item(iid, "values")
+            if len(vals) >= 5:
+                plans.append({
+                    "pid": int(vals[1]),
+                    "gid": int(vals[2]),
+                    "name": name,
+                    "cur_lvl": int(vals[3]),
+                    "target_level": int(vals[4]),
+                    "enabled": vals[0] == "☑",
+                })
+        self._city_building_plans[self._current_bld_city_id] = plans
+
+    def _render_bld_tree_from_plans(self, plans: list[dict]):
+        self.bld_tree.delete(*self.bld_tree.get_children(""))
+        for p in plans:
+            gid = int(p.get("gid", 1))
+            name = p.get("name") or BUILDING_NAMES.get(gid, f"Công trình {gid}")
+            en = "☑" if p.get("enabled", True) else "☐"
+            pid = int(p.get("pid", 1))
+            cur_lvl = int(p.get("cur_lvl", 0))
+            target_lvl = int(p.get("target_level", 20))
+            self.bld_tree.insert(
+                "",
+                "end",
+                iid=str(pid),
+                text=name,
+                values=(en, pid, gid, cur_lvl, target_lvl),
+            )
+
+    def _switch_bld_base(self, new_base_id: int):
+        if self._current_bld_city_id == new_base_id:
+            return
+        self._save_current_bld_tree_to_cache()
+        self._current_bld_city_id = new_base_id
+
+        base_name = f"Căn cứ {new_base_id}"
+        if hasattr(self, "bld_bases_tree") and self.bld_bases_tree.exists(str(new_base_id)):
+            base_name = self.bld_bases_tree.item(str(new_base_id), "text")
+        elif self.roster:
+            b = self.roster.base_by_id(new_base_id)
+            if b:
+                base_name = b.name
+
+        if hasattr(self, "bld_queue_frame"):
+            self.bld_queue_frame.configure(text=f"Hàng Đợi Quy Hoạch: {base_name}")
+
+        cached = self._city_building_plans.get(new_base_id)
+        if cached:
+            self._render_bld_tree_from_plans(cached)
+        else:
+            self._populate_default_buildings()
+            if self.gateway and hasattr(self, "_fetch_city_buildings_thread"):
+                threading.Thread(target=self._fetch_city_buildings_thread, args=(new_base_id,), daemon=True).start()
+
+    def _fetch_city_buildings(self):
+        city_id = self._current_bld_city_id
+        if not city_id:
+            sel_idx = self.bld_city_combo.current() if hasattr(self, "bld_city_combo") else -1
+            cities = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
+            if 0 <= sel_idx < len(cities):
+                city_id = cities[sel_idx].id
+        if not city_id and self.roster and self.roster.bases:
+            city_id = self.roster.bases[0].id
+        if not city_id:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ cần tải công trình!")
+            return
+
+        base_name = str(city_id)
+        if self.roster:
+            b = self.roster.base_by_id(city_id)
+            if b:
+                base_name = b.name
+
+        self._append_bld_log(f"🔄 Đang tải dữ liệu công trình thực tế cho {base_name}...")
+        threading.Thread(target=self._fetch_city_buildings_thread, args=(city_id,), daemon=True).start()
 
     def _fetch_city_buildings_thread(self, city_id: int):
         try:
             resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
             buildings = resp.get("infos") or resp.get("buildings") or resp.get("build", [])
-            self.after(0, self._update_city_buildings_ui, buildings)
+            try:
+                self.after(0, self._update_city_buildings_ui, buildings, city_id)
+            except Exception:
+                pass
         except Exception as e:
-            self.after(0, lambda: self._append_bld_log(f"❌ Lỗi tải công trình thành: {e}"))
+            try:
+                self.after(0, lambda: self._append_bld_log(f"❌ Lỗi tải công trình căn cứ {city_id}: {e}"))
+            except Exception:
+                pass
 
-    def _update_city_buildings_ui(self, buildings):
+    def _update_city_buildings_ui(self, buildings, city_id: Optional[int] = None):
+        target_city_id = city_id or self._current_bld_city_id
         if not buildings:
             self._append_bld_log("ℹ️ Server không trả về dữ liệu công trình.")
             return
 
-        # Lưu lại thiết lập target_level và enabled của người dùng nếu đã có
         existing_targets = {}
-        for iid in self.bld_tree.get_children(""):
-            vals = self.bld_tree.item(iid, "values")
-            if vals and len(vals) >= 5:
-                try:
-                    p_id = int(vals[1])
-                    existing_targets[p_id] = (vals[0], int(vals[4]))
-                except (ValueError, IndexError):
-                    pass
+        cached_plans = self._city_building_plans.get(target_city_id, [])
+        for p in cached_plans:
+            existing_targets[int(p["pid"])] = ("☑" if p.get("enabled", True) else "☐", int(p.get("target_level", 20)))
 
-        # Xóa và nạp lại toàn bộ danh sách thực tế của thành
-        self.bld_tree.delete(*self.bld_tree.get_children(""))
+        if target_city_id == self._current_bld_city_id:
+            for iid in self.bld_tree.get_children(""):
+                vals = self.bld_tree.item(iid, "values")
+                if vals and len(vals) >= 5:
+                    try:
+                        p_id = int(vals[1])
+                        existing_targets[p_id] = (vals[0], int(vals[4]))
+                    except (ValueError, IndexError):
+                        pass
 
-        count = 0
+        new_plans = []
         for b in buildings:
             pid = 0
             gid = 0
@@ -1441,16 +1674,27 @@ class Dashboard(tk.Tk):
 
             std_name = BUILDING_NAMES.get(gid, name or f"Công trình {gid}")
             enabled, target_lvl = existing_targets.get(pid, ("☑", max(cur_lvl + 1, 20)))
-            self.bld_tree.insert(
-                "",
-                "end",
-                iid=str(pid),
-                text=std_name,
-                values=(enabled, pid, gid, cur_lvl, target_lvl),
-            )
-            count += 1
+            new_plans.append({
+                "pid": pid,
+                "gid": gid,
+                "name": std_name,
+                "cur_lvl": cur_lvl,
+                "target_level": target_lvl,
+                "enabled": enabled == "☑",
+            })
 
-        self._append_bld_log(f"🔄 Đã nạp thành công {count} công trình thực tế của thành.")
+        if target_city_id is not None:
+            self._city_building_plans[target_city_id] = new_plans
+
+        if target_city_id == self._current_bld_city_id or self._current_bld_city_id is None:
+            self._render_bld_tree_from_plans(new_plans)
+
+        base_name = str(target_city_id) if target_city_id else ""
+        if self.roster and target_city_id:
+            b = self.roster.base_by_id(target_city_id)
+            if b:
+                base_name = b.name
+        self._append_bld_log(f"🔄 Đã nạp thành công {len(new_plans)} công trình thực tế của {base_name}.")
 
     def _load_build_plans(self):
         plan_path = Path("build_plans.json") if Path("build_plans.json").exists() else Path("build_plans.example.json")
@@ -1465,53 +1709,44 @@ class Dashboard(tk.Tk):
                 plans_list.extend(cinfo.get("plans", []))
 
         if plans_list:
-            self.bld_tree.delete(*self.bld_tree.get_children())
-            for p in plans_list:
-                gid = p.get("gid", 1)
-                name = BUILDING_NAMES.get(gid, p.get("name") or f"Công trình {gid}")
-                en = "☑" if p.get("enabled", True) else "☐"
-                self.bld_tree.insert(
-                    "",
-                    "end",
-                    iid=str(p.get("pid")),
-                    text=name,
-                    values=(en, p.get("pid"), p.get("gid"), 0, p.get("target_level", 20)),
-                )
+            self._render_bld_tree_from_plans(plans_list)
         self._append_bld_log(f"📂 Đã nạp danh sách {len(plans_list)} quy hoạch công trình.")
 
     def _save_build_plans(self):
-        plans = []
-        for iid in self.bld_tree.get_children(""):
-            name = self.bld_tree.item(iid, "text")
-            vals = self.bld_tree.item(iid, "values")
-            plans.append({
-                "pid": int(vals[1]),
-                "gid": int(vals[2]),
-                "target_level": int(vals[4]),
-                "name": name,
-                "enabled": vals[0] == "☑",
-            })
+        self._save_current_bld_tree_to_cache()
+        plans = self._city_building_plans.get(self._current_bld_city_id, [])
+        if not plans:
+            for iid in self.bld_tree.get_children(""):
+                name = self.bld_tree.item(iid, "text")
+                vals = self.bld_tree.item(iid, "values")
+                if len(vals) >= 5:
+                    plans.append({
+                        "pid": int(vals[1]),
+                        "gid": int(vals[2]),
+                        "target_level": int(vals[4]),
+                        "name": name,
+                        "enabled": vals[0] == "☑",
+                    })
         Path("build_plans.json").write_text(json.dumps({"plans": plans}, ensure_ascii=False, indent=2), encoding="utf-8")
         self._append_bld_log(f"💾 Đã lưu cấu hình {len(plans)} công trình ra build_plans.json")
         messagebox.showinfo("Thành công", "Đã lưu cấu hình ra build_plans.json!")
 
     def _toggle_building(self):
         if not self._bld_runner or not self._bld_runner.is_alive():
-            sel_idx = self.bld_city_combo.current()
-            cities = self.roster.cities if self.roster.cities else self.roster.bases
-            if sel_idx < 0 or sel_idx >= len(cities):
-                messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì!")
-                return
-            city_id = cities[sel_idx].id
-            plans = []
-            for iid in self.bld_tree.get_children(""):
-                name = self.bld_tree.item(iid, "text")
-                vals = self.bld_tree.item(iid, "values")
-                if vals[0] == "☑":
-                    plans.append(BuildingPlan(pid=int(vals[1]), gid=int(vals[2]), target_level=int(vals[4]), name=name, enabled=True))
+            self._save_current_bld_tree_to_cache()
 
-            if not plans:
-                messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 công trình cần nâng cấp!")
+            selected_cids = list(self._selected_building_cities)
+            if not selected_cids:
+                if self._current_bld_city_id:
+                    selected_cids = [self._current_bld_city_id]
+                elif hasattr(self, "bld_city_combo"):
+                    sel_idx = self.bld_city_combo.current()
+                    cities = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
+                    if 0 <= sel_idx < len(cities):
+                        selected_cids = [cities[sel_idx].id]
+
+            if not selected_cids:
+                messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 căn cứ để nâng cấp công trình!")
                 return
 
             try:
@@ -1519,18 +1754,65 @@ class Dashboard(tk.Tk):
             except (ValueError, TypeError):
                 max_slots = 3
 
-            task = BuildingTask(
-                gateway=self.gateway,
-                city_id=city_id,
-                plans=plans,
-                max_slots=max_slots,
-                auto_speedup=self.bld_speedup_var.get(),
-                auto_boost=self.bld_boost_var.get(),
-                auto_comfort=self.bld_comfort_var.get(),
-                notify=lambda m: self.after(0, self._append_bld_log, m),
-            )
+            tasks: list[BuildingTask] = []
+            for cid in selected_cids:
+                plan_dicts = self._city_building_plans.get(cid)
+                if not plan_dicts and cid == self._current_bld_city_id:
+                    plan_dicts = []
+                    for iid in self.bld_tree.get_children(""):
+                        vals = self.bld_tree.item(iid, "values")
+                        name = self.bld_tree.item(iid, "text")
+                        if len(vals) >= 5:
+                            plan_dicts.append({
+                                "pid": int(vals[1]),
+                                "gid": int(vals[2]),
+                                "target_level": int(vals[4]),
+                                "name": name,
+                                "enabled": vals[0] == "☑",
+                            })
+
+                if not plan_dicts:
+                    continue
+
+                plans = [
+                    BuildingPlan(
+                        pid=int(p["pid"]),
+                        gid=int(p["gid"]),
+                        target_level=int(p["target_level"]),
+                        name=p.get("name", ""),
+                        enabled=bool(p.get("enabled", True)),
+                    )
+                    for p in plan_dicts
+                    if p.get("enabled", True)
+                ]
+                if not plans:
+                    continue
+
+                base_name = f"Căn cứ {cid}"
+                if self.roster:
+                    b = self.roster.base_by_id(cid)
+                    if b:
+                        base_name = b.name
+
+                task = BuildingTask(
+                    gateway=self.gateway,
+                    city_id=cid,
+                    plans=plans,
+                    max_slots=max_slots,
+                    auto_speedup=self.bld_speedup_var.get(),
+                    auto_boost=self.bld_boost_var.get(),
+                    auto_comfort=self.bld_comfort_var.get(),
+                    notify=lambda m, cname=base_name: self.after(0, self._append_bld_log, f"[{cname}] {m}"),
+                    city_name=base_name,
+                )
+                tasks.append(task)
+
+            if not tasks:
+                messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 công trình cần nâng cấp trong các căn cứ đã chọn!")
+                return
+
             self._bld_runner = BuildingAutoRunner(
-                task,
+                tasks,
                 interval=20.0,
                 log_cb=lambda m: self.after(0, self._append_bld_log, m),
                 status_cb=lambda s: None,
@@ -1925,6 +2207,28 @@ class Dashboard(tk.Tk):
         self.refresh_btn.state(["!disabled"])
         if roster.bases:
             self.city_tree.selection_set(str(roster.bases[0].id))
+
+        # Tab 5: Căn cứ thi công (Thành & Doanh trại)
+        if hasattr(self, "bld_bases_tree"):
+            self.bld_bases_tree.delete(*self.bld_bases_tree.get_children())
+            for base in roster.bases:
+                iid = str(base.id)
+                is_sel = "☑" if (base.id in self._selected_building_cities or (not self._selected_building_cities and base == roster.bases[0])) else "☐"
+                if is_sel == "☑":
+                    self._selected_building_cities.add(base.id)
+                self.bld_bases_tree.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    text=base.name,
+                    values=(is_sel, base.type, base.id),
+                )
+            if roster.bases:
+                first_base = roster.bases[0]
+                self.bld_bases_tree.selection_set(str(first_base.id))
+                self._current_bld_city_id = first_base.id
+                if hasattr(self, "bld_queue_frame"):
+                    self.bld_queue_frame.configure(text=f"Hàng Đợi Quy Hoạch: {first_base.name}")
 
         # Cập nhật Combobox
         all_base_items = [b.display_name for b in roster.bases]

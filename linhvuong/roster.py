@@ -110,6 +110,12 @@ class Roster:
         """Tất cả căn cứ gồm cả Thành và Doanh trại."""
         return self.cities + self.camps
 
+    def base_by_id(self, base_id: int) -> Optional[City]:
+        for b in self.bases:
+            if b.id == base_id:
+                return b
+        return None
+
     def generals_of(self, base_id: int) -> list[General]:
         return list(self._generals.get(base_id, []))
 

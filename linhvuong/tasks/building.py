@@ -84,9 +84,11 @@ class BuildingTask:
         auto_comfort: bool = True,
         auto_boost: bool = False,
         notify: Callable[[str], None] = print,
+        city_name: str = "",
     ):
         self.gateway = gateway
         self.city_id = city_id
+        self.city_name = city_name
         self.plans = plans
         self.max_slots = max_slots
         self.auto_speedup = auto_speedup
@@ -94,6 +96,12 @@ class BuildingTask:
         self.auto_comfort = auto_comfort
         self.auto_boost = auto_boost
         self.notify = notify
+
+    def _log(self, msg: str):
+        if self.city_name:
+            self.notify(f"[{self.city_name}] {msg}")
+        else:
+            self.notify(msg)
 
     def check_and_activate_boost(self) -> bool:
         """Kiểm tra thời gian tăng tốc xây dựng 20% (plus_finish), kích hoạt nếu hết hạn."""
@@ -104,7 +112,7 @@ class BuildingTask:
 
         plus_finish = int(resp.get("plus_finish", 0))
         if plus_finish <= 0 and self.auto_boost:
-            self.notify("⚡ Kích hoạt hiệu ứng tăng tốc xây dựng 20%...")
+            self._log("⚡ Kích hoạt hiệu ứng tăng tốc xây dựng 20%...")
             boost_resp = self.gateway.call(
                 "OPT.ashx",
                 69,
@@ -133,7 +141,7 @@ class BuildingTask:
             anger = int(resp.get("anger", 0))
 
         if morale < 90 or anger > 0:
-            self.notify(f"🕊️ Sĩ khí ({morale}%) thấp hoặc dân nộ ({anger}), tiến hành An Dân...")
+            self._log(f"🕊️ Sĩ khí ({morale}%) thấp hoặc dân nộ ({anger}), tiến hành An Dân...")
             comfort_resp = self.gateway.call(
                 "OPT.ashx",
                 4,
@@ -294,20 +302,20 @@ class BuildingTask:
 
             bname = target_plan.name or BUILDING_NAMES.get(target_plan.gid, f"Công trình {target_plan.gid}")
             if ret_up == RET_OK:
-                self.notify(f"🏗️ Đang nâng cấp slot {target_plan.pid} ({bname}) từ cấp {current_level} lên {current_level + 1}")
+                self._log(f"🏗️ Đang nâng cấp slot {target_plan.pid} ({bname}) từ cấp {current_level} lên {current_level + 1}")
                 if self.auto_speedup:
                     self.speedup_slot(1)
                 upgraded_count += 1
             elif ret_up in (32, 37):
-                self.notify(f"⚠️ Không đủ tài nguyên để nâng cấp slot {target_plan.pid} ({bname})")
+                self._log(f"⚠️ Không đủ tài nguyên để nâng cấp slot {target_plan.pid} ({bname})")
                 last_error = "insufficient_resources"
                 break
             elif ret_up == 245:
-                self.notify(f"⚠️ Chưa đủ điều kiện tiên quyết để nâng cấp slot {target_plan.pid} ({bname})")
+                self._log(f"⚠️ Chưa đủ điều kiện tiên quyết để nâng cấp slot {target_plan.pid} ({bname})")
                 if not last_error:
                     last_error = "prerequisites_not_met"
             else:
-                self.notify(f"❌ Nâng cấp slot {target_plan.pid} ({bname}) thất bại (mã {ret_up})")
+                self._log(f"❌ Nâng cấp slot {target_plan.pid} ({bname}) thất bại (mã {ret_up})")
                 if not last_error:
                     last_error = f"upgrade_failed:{ret_up}"
 

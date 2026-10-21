@@ -399,6 +399,138 @@ def test_dashboard_combobox_dark_palette_and_contrast():
         dash.destroy()
 
 
+def test_dashboard_multi_city_building_ui_and_plan_separation():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # 1. Kiểm tra danh sách Căn cứ thi công (Thành & Doanh trại)
+        base_items = dash.bld_bases_tree.get_children()
+        assert len(base_items) == 3  # 2 Thành + 1 Doanh trại
+
+        # Mặc định căn cứ đầu tiên được chọn
+        b0_vals = dash.bld_bases_tree.item(base_items[0], "values")
+        assert b0_vals[0] == "☑"
+        assert b0_vals[1] == "Thành"
+        assert int(b0_vals[2]) == 15230
+
+        # Kiểm tra Select All / Deselect All cho căn cứ
+        dash._select_all_bld_bases(False)
+        assert len(dash._selected_building_cities) == 0
+        for iid in dash.bld_bases_tree.get_children():
+            assert dash.bld_bases_tree.item(iid, "values")[0] == "☐"
+
+        dash._select_all_bld_bases(True)
+        assert len(dash._selected_building_cities) == 3
+        for iid in dash.bld_bases_tree.get_children():
+            assert dash.bld_bases_tree.item(iid, "values")[0] == "☑"
+
+        # 2. Kiểm tra tính độc lập cấu hình giữa các căn cứ
+        # Căn cứ 1 (15230): Đặt cấp công trình ô 1 = 30
+        dash._switch_bld_base(15230)
+        dash.bld_tree.selection_set("1")
+        dash.bld_target_lvl_var.set("30")
+        dash._set_bld_target_lvl()
+        assert int(dash.bld_tree.item("1", "values")[4]) == 30
+
+        # Chuyển sang Căn cứ 2 (15237): Đặt cấp công trình ô 1 = 18
+        dash._switch_bld_base(15237)
+        assert dash._current_bld_city_id == 15237
+        dash.bld_tree.selection_set("1")
+        dash.bld_target_lvl_var.set("18")
+        dash._set_bld_target_lvl()
+        assert int(dash.bld_tree.item("1", "values")[4]) == 18
+
+        # Chuyển lại Căn cứ 1 (15230): Cấp ô 1 vẫn phải là 30
+        dash._switch_bld_base(15230)
+        assert int(dash.bld_tree.item("1", "values")[4]) == 30
+
+        # Chuyển lại Căn cứ 2 (15237): Cấp ô 1 vẫn là 18
+        dash._switch_bld_base(15237)
+        assert int(dash.bld_tree.item("1", "values")[4]) == 18
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_building_multi_runner_execution():
+    from unittest.mock import MagicMock
+    from linhvuong.dashboard import BuildingAutoRunner
+    from linhvuong.tasks.building import BuildingTask
+
+    t1 = MagicMock(spec=BuildingTask)
+    t1.city_id = 101
+    t1.city_name = "Thành 1"
+    t1.run_once.side_effect = ["upgrading", "all_buildings_completed"]
+
+    t2 = MagicMock(spec=BuildingTask)
+    t2.city_id = 102
+    t2.city_name = "Thành 2"
+    t2.run_once.side_effect = ["upgrading", "all_buildings_completed"]
+
+    logs = []
+    statuses = []
+    runner = BuildingAutoRunner(
+        task_or_tasks=[t1, t2],
+        interval=0.01,
+        log_cb=logs.append,
+        status_cb=statuses.append,
+    )
+    runner.start()
+    runner.join(timeout=2.0)
+
+    assert not runner.is_alive()
+    assert t1.run_once.call_count >= 2
+    assert t2.run_once.call_count >= 2
+    assert any("2 căn cứ" in m for m in logs)
+    assert any("Toàn bộ công trình quy hoạch của tất cả các căn cứ đã hoàn tất" in m for m in logs)
+
+
+def test_dashboard_multi_city_profile_sync(tmp_path):
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # Cấu hình căn cứ 1 (15230)
+        dash._switch_bld_base(15230)
+        dash.bld_tree.selection_set("1")
+        dash.bld_target_lvl_var.set("31")
+        dash._set_bld_target_lvl()
+
+        # Cấu hình căn cứ 2 (15237)
+        dash._switch_bld_base(15237)
+        dash.bld_tree.selection_set("1")
+        dash.bld_target_lvl_var.set("19")
+        dash._set_bld_target_lvl()
+
+        # Lưu hồ sơ
+        prof_file = tmp_path / "multi_city_profile.json"
+        saved = dash._save_unified_profile(prof_file)
+        assert saved.exists()
+
+        # Reset dữ liệu trên giao diện
+        dash._switch_bld_base(15230)
+        dash.bld_tree.selection_set("1")
+        dash.bld_target_lvl_var.set("10")
+        dash._set_bld_target_lvl()
+
+        # Nạp lại hồ sơ
+        ok, msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+
+        # Kiểm tra căn cứ 1 khôi phục mức 31
+        dash._switch_bld_base(15230)
+        assert int(dash.bld_tree.item("1", "values")[4]) == 31
+
+        # Kiểm tra căn cứ 2 khôi phục mức 19
+        dash._switch_bld_base(15237)
+        assert int(dash.bld_tree.item("1", "values")[4]) == 19
+    finally:
+        dash.destroy()
+
+
+
 
 
 
