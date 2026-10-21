@@ -60,11 +60,23 @@ ERROR_MESSAGES = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass
 class TargetArmy:
     infantry: int = 0
     cavalry: int = 0
     archers: int = 0
+    bo_binh: Optional[int] = None
+    ky_binh: Optional[int] = None
+    cung_binh: Optional[int] = None
+
+    def __post_init__(self):
+        if self.bo_binh is not None and self.infantry == 0:
+            self.infantry = self.bo_binh
+        if self.ky_binh is not None and self.cavalry == 0:
+            self.cavalry = self.ky_binh
+        if self.cung_binh is not None and self.archers == 0:
+            self.archers = self.cung_binh
+
 
 
 @dataclass
@@ -276,37 +288,72 @@ class ThaoPhatAutoRunner:
     def __init__(
         self,
         gateway: GatewayClient,
-        city_id: int,
-        task_id: int,
-        general_ids: list[int],
-        target_army: TargetArmy,
-        min_morale: int = 51,
+        *args,
+        city_id: Optional[int] = None,
+        task_id: Optional[int] = None,
+        general_ids: Optional[list[int]] = None,
+        target_army: Optional[TargetArmy] = None,
+        min_morale: int = 95,
         auto_recruit: bool = True,
+        auto_morale: bool = True,
         track_battle: bool = True,
         auto_counter: bool = True,
         leave_boss_last: bool = True,
         stop_event: Optional[threading.Event] = None,
         log_fn: Optional[Callable[[str], None]] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+        status_callback: Optional[Callable[[str], None]] = None,
         check_interval: float = 10.0,
+        executor: Optional[ThaoPhatExecutor] = None,
+        **kwargs,
     ):
+        if args:
+            if isinstance(args[0], ThaoPhatExecutor):
+                executor = args[0]
+                remaining = args[1:]
+            else:
+                remaining = args
+            if len(remaining) > 0 and city_id is None:
+                city_id = remaining[0]
+            if len(remaining) > 1 and task_id is None:
+                task_id = remaining[1]
+            if len(remaining) > 2 and general_ids is None:
+                general_ids = remaining[2]
+            if len(remaining) > 3 and target_army is None:
+                target_army = remaining[3]
+
         self.gateway = gateway
-        self.city_id = city_id
-        self.task_id = task_id
-        self.general_ids = general_ids
-        self.target_army = target_army
+        self.city_id = city_id or 0
+        self.task_id = task_id or 0
+        self.general_ids = general_ids or []
+        self.target_army = target_army or TargetArmy()
         self.min_morale = min_morale
         self.auto_recruit = auto_recruit
+        self.auto_morale = auto_morale
         self.track_battle = track_battle
         self.auto_counter = auto_counter
         self.leave_boss_last = leave_boss_last
         self.stop_event = stop_event or threading.Event()
-        self.log_fn = log_fn or (lambda msg: None)
+        self.log_fn = log_callback or log_fn or (lambda msg: None)
+        self.status_callback = status_callback
         self.check_interval = check_interval
-        self.executor = ThaoPhatExecutor(gateway)
+        self.executor = executor or ThaoPhatExecutor(gateway)
         self.completed_cycles = 0
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> threading.Thread:
+        """Khởi chạy runner trong background thread."""
+        self._thread = threading.Thread(target=self.run, daemon=True)
+        self._thread.start()
+        return self._thread
+
+    def is_alive(self) -> bool:
+        return self._thread.is_alive() if self._thread else False
 
     def log(self, msg: str) -> None:
         self.log_fn(msg)
+        if self.status_callback:
+            self.status_callback(msg)
 
     def wait(self, seconds: float) -> bool:
         """Chờ `seconds` giây. Trả về True nếu stop_event được kích hoạt (người dùng bấm dừng)."""
@@ -324,6 +371,7 @@ class ThaoPhatAutoRunner:
         self.log(f"⚔️ BẮT ĐẦU VÒNG LẶP THẢO PHẠT TỰ ĐỘNG: '{mission_name}'")
         self.log(f"   Thành ID: {self.city_id} | Tướng: {self.general_ids}")
         self.log(f"   Mục tiêu quân: Bộ={self.target_army.infantry}, Kỵ={self.target_army.cavalry}, Cung={self.target_army.archers}")
+        self.log(f"   Tự động bổ sung lính: {'Bật' if self.auto_recruit else 'Tắt'} | Tự động nâng sĩ khí: {'Bật' if self.auto_morale else 'Tắt'}")
         self.log(f"   Sĩ khí tối thiểu: {self.min_morale} | Thời gian hành quân: ~{travel_time}s")
         self.log("==================================================")
 
@@ -403,8 +451,8 @@ class ThaoPhatAutoRunner:
                 recruit_failed = False
                 troops_added = False
 
-                # Kiểm tra tổng quân cần bổ sung và chủ động chiêu mộ trước nếu thiếu
                 if self.auto_recruit:
+                    # Kiểm tra tổng quân cần bổ sung và chủ động chiêu mộ trước nếu thiếu
                     total_needed = 0
                     for gid in self.general_ids:
                         current_army = roster.army_of(gid)
@@ -427,46 +475,48 @@ class ThaoPhatAutoRunner:
                                 err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
                                 self.log(f"   [Chiêu mộ] ⚠️ Chiêu mộ tân binh thất bại ({err_desc})")
 
-                for gid in self.general_ids:
+                    for gid in self.general_ids:
+                        if self.stop_event.is_set():
+                            break
+                        g = city_gens.get(gid)
+                        gname = g.name if g else str(gid)
+                        current_army = roster.army_of(gid)
+
+                        adj_results = self.executor.adjust_troops(
+                            self.city_id,
+                            gid,
+                            current_army,
+                            self.target_army,
+                            auto_recruit=self.auto_recruit,
+                            on_log=self.log,
+                        )
+                        if adj_results:
+                            for stype, diff, succ, ret_code in adj_results:
+                                tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(stype, "Quân")
+                                if succ:
+                                    if diff > 0:
+                                        troops_added = True
+                                    self.log(f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ✅ Thành công")
+                                else:
+                                    err_desc = ERROR_MESSAGES.get(ret_code, f"Mã lỗi: {ret_code}")
+                                    self.log(f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
+                                    recruit_failed = True
+                        else:
+                            self.log(f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
+
                     if self.stop_event.is_set():
                         break
-                    g = city_gens.get(gid)
-                    gname = g.name if g else str(gid)
-                    current_army = roster.army_of(gid)
 
-                    adj_results = self.executor.adjust_troops(
-                        self.city_id,
-                        gid,
-                        current_army,
-                        self.target_army,
-                        auto_recruit=self.auto_recruit,
-                        on_log=self.log,
-                    )
-                    if adj_results:
-                        for stype, diff, succ, ret_code in adj_results:
-                            tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(stype, "Quân")
-                            if succ:
-                                if diff > 0:
-                                    troops_added = True
-                                self.log(f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ✅ Thành công")
-                            else:
-                                err_desc = ERROR_MESSAGES.get(ret_code, f"Mã lỗi: {ret_code}")
-                                self.log(f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
-                                recruit_failed = True
-                    else:
-                        self.log(f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
+                    if recruit_failed:
+                        self.log("⚠️ Có lỗi khi biên chế lính (ví dụ thiếu tân binh/tài nguyên). Chờ 30s trước khi thử lại...")
+                        if self.wait(30.0):
+                            break
+                        continue
 
-                if self.stop_event.is_set():
-                    break
-
-                if recruit_failed:
-                    self.log("⚠️ Có lỗi khi biên chế lính (ví dụ thiếu tân binh/tài nguyên). Chờ 30s trước khi thử lại...")
-                    if self.wait(30.0):
-                        break
-                    continue
-
-                if troops_added:
-                    self.log("📦 Đã bổ sung tân binh vào đội hình. Quét lại sỹ khí thực tế sau khi biên chế...")
+                    if troops_added:
+                        self.log("📦 Đã bổ sung tân binh vào đội hình. Quét lại sỹ khí thực tế sau khi biên chế...")
+                else:
+                    self.log("⏭️ [Biên chế] Tự động bổ sung lính đang tắt, bỏ qua bước bổ sung quân.")
 
                 # -------------------------------------------------------------
                 # BƯỚC 3: Luyện sỹ khí cho từng tướng (nếu < min_morale)
@@ -501,6 +551,11 @@ class ThaoPhatAutoRunner:
                         up_t = g.upgrading_time if g else 0
 
                         if cur_morale >= self.min_morale:
+                            continue
+
+                        if not self.auto_morale:
+                            all_morale_ready = False
+                            wait_needed.append((gname, 10.0, f"Sĩ khí {cur_morale} < {self.min_morale} (tự động nâng sĩ khí đang tắt)"))
                             continue
 
                         projected = min(100, cur_morale + 10)

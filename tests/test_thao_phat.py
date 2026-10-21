@@ -812,4 +812,135 @@ def test_thao_phat_auto_runner_tracks_battle_logs():
     assert any("Đã tiêu diệt: 50/50 quân (100.0%)" in l for l in logs)
 
 
+def test_target_army_vietnamese_aliases():
+    target = TargetArmy(bo_binh=1000, ky_binh=500, cung_binh=250)
+    assert target.infantry == 1000
+    assert target.cavalry == 500
+    assert target.archers == 250
+
+
+def test_thao_phat_runner_skips_troop_refill_when_auto_recruit_false():
+    c29 = {"ret": 0, "generals": []}
+    c76 = {"ret": 0, "list": [[15230, "NB", [[417506, "廉复卢", 0, "", 0, 95, 0, 95, 0, 100, 0, 501]]]]}
+    c32_idle = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 100, 240, 240]]]]}
+    c32_busy = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 24, 4, 100, 240, 240]]]]}
+
+    responses = {
+        "Common.ashx?id=29": c29,
+        "Common.ashx?id=76": c76,
+        "Common.ashx?id=32": [
+            {"ret": 0, "list": []}, c32_idle,
+            {"ret": 0, "list": []}, c32_idle,
+            {"ret": 0, "list": []}, c32_busy,
+            {"ret": 0, "list": []}, c32_idle,
+        ],
+        "OPT.ashx?id=6": {"ret": 0},
+        "OPT.ashx?id=47": {"ret": 0},
+        "OPT.ashx?id=62": {"ret": 0},
+    }
+
+    server = FakeServer(responses)
+    client = GatewayClient(57, server, sleep=lambda s: None)
+    stop_event = threading.Event()
+    logs = []
+
+    runner = ThaoPhatAutoRunner(
+        gateway=client,
+        city_id=15230,
+        task_id=0,
+        general_ids=[417506],
+        target_army=TargetArmy(infantry=1000),
+        min_morale=90,
+        auto_recruit=False,
+        stop_event=stop_event,
+        log_callback=lambda m: logs.append(m),
+        check_interval=0.01,
+    )
+
+    def stopper():
+        for _ in range(50):
+            if runner.completed_cycles >= 1:
+                stop_event.set()
+                break
+            time.sleep(0.01)
+        stop_event.set()
+
+    t = threading.Thread(target=stopper)
+    t.start()
+    runner.run()
+    t.join()
+
+    # Xác nhận không có bất kỳ lệnh bổ sung quân lính nào (id=6 hay id=41) được gửi đi
+    troop_calls = [c for c in server.calls if c[0] == "OPT.ashx?id=6" or c[0] == "OPT.ashx?id=41"]
+    assert len(troop_calls) == 0
+    assert any("Tự động bổ sung lính đang tắt" in l for l in logs)
+
+
+def test_thao_phat_runner_skips_morale_upgrade_when_auto_morale_false():
+    c29 = {"ret": 0, "generals": []}
+    c76 = {"ret": 0, "list": [[15230, "NB", [[417506, "廉复卢", 0, "", 0, 95, 0, 95, 0, 50, 0, 501]]]]}
+    c32_idle = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 100, 240, 240]]]]}
+
+    responses = {
+        "Common.ashx?id=29": c29,
+        "Common.ashx?id=76": c76,
+        "Common.ashx?id=32": [
+            {"ret": 0, "list": []}, c32_idle,
+            {"ret": 0, "list": []}, c32_idle,
+        ],
+    }
+    server = FakeServer(responses)
+    client = GatewayClient(57, server, sleep=lambda s: None)
+    stop_event = threading.Event()
+    logs = []
+
+    runner = ThaoPhatAutoRunner(
+        gateway=client,
+        city_id=15230,
+        task_id=0,
+        general_ids=[417506],
+        target_army=TargetArmy(infantry=500),
+        min_morale=95,
+        auto_morale=False,
+        stop_event=stop_event,
+        log_callback=lambda m: logs.append(m),
+        check_interval=0.01,
+    )
+
+    def stopper():
+        time.sleep(0.05)
+        stop_event.set()
+
+    t = threading.Thread(target=stopper)
+    t.start()
+    runner.run()
+    t.join()
+
+    # Không gọi API id=47 khi auto_morale=False
+    morale_calls = [c for c in server.calls if "OPT.ashx?id=47" in c[0]]
+    assert len(morale_calls) == 0
+    assert any("tự động nâng sĩ khí đang tắt" in l for l in logs)
+
+
+def test_thao_phat_runner_start_thread_and_is_alive():
+    server = FakeServer()
+    client = GatewayClient(57, server, sleep=lambda s: None)
+    stop_event = threading.Event()
+
+    runner = ThaoPhatAutoRunner(
+        gateway=client,
+        city_id=15230,
+        task_id=0,
+        general_ids=[],
+        target_army=TargetArmy(),
+        stop_event=stop_event,
+        check_interval=0.01,
+    )
+    stop_event.set()
+    t = runner.start()
+    t.join(timeout=1.0)
+    assert not runner.is_alive()
+
+
+
 

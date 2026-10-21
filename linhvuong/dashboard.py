@@ -407,6 +407,10 @@ class Dashboard(tk.Tk):
             "thao_phat": {
                 "min_army": self.tp_min_army_var.get() if hasattr(self, "tp_min_army_var") else "5000",
                 "mission_idx": self.tp_mission_combo.current() if hasattr(self, "tp_mission_combo") else 0,
+                "army_type_idx": self.tp_army_type_combo.current() if hasattr(self, "tp_army_type_combo") else 0,
+                "auto_recruit": bool(self.tp_auto_recruit_var.get()) if hasattr(self, "tp_auto_recruit_var") else True,
+                "auto_morale": bool(self.tp_auto_morale_var.get()) if hasattr(self, "tp_auto_morale_var") else True,
+                "min_morale": self.tp_min_morale_var.get() if hasattr(self, "tp_min_morale_var") else "95",
             },
             "goi_dan": {
                 "mode_idx": self.gd_mode_combo.current() if hasattr(self, "gd_mode_combo") else 0,
@@ -527,6 +531,17 @@ class Dashboard(tk.Tk):
                     self.tp_mission_combo.current(int(tp_data["mission_idx"]))
                 except Exception:
                     pass
+            if hasattr(self, "tp_army_type_combo") and "army_type_idx" in tp_data:
+                try:
+                    self.tp_army_type_combo.current(int(tp_data["army_type_idx"]))
+                except Exception:
+                    pass
+            if hasattr(self, "tp_auto_recruit_var") and "auto_recruit" in tp_data:
+                self.tp_auto_recruit_var.set(bool(tp_data["auto_recruit"]))
+            if hasattr(self, "tp_auto_morale_var") and "auto_morale" in tp_data:
+                self.tp_auto_morale_var.set(bool(tp_data["auto_morale"]))
+            if hasattr(self, "tp_min_morale_var") and "min_morale" in tp_data:
+                self.tp_min_morale_var.set(str(tp_data["min_morale"]))
             loaded_sections.append("Thảo Phạt")
 
         # 4. Gọi Dân
@@ -622,23 +637,49 @@ class Dashboard(tk.Tk):
         top_ctrl = tk.Frame(parent, bg=BG)
         top_ctrl.pack(fill="x", pady=6)
 
-        tk.Label(top_ctrl, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
-        self.tp_city_combo = ttk.Combobox(top_ctrl, state="readonly", width=22)
-        self.tp_city_combo.pack(side="left", padx=(0, 16))
+        # Hàng 1: Thành trì, Chiến dịch, Binh chủng, Quân số MT, Nút Bắt đầu
+        row1 = tk.Frame(top_ctrl, bg=BG)
+        row1.pack(fill="x", pady=(0, 4))
+
+        tk.Label(row1, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
+        self.tp_city_combo = ttk.Combobox(row1, state="readonly", width=18)
+        self.tp_city_combo.pack(side="left", padx=(0, 12))
         self.tp_city_combo.bind("<<ComboboxSelected>>", self._on_tp_city_selected)
 
-        tk.Label(top_ctrl, text="Chiến dịch:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
-        self.tp_mission_combo = ttk.Combobox(top_ctrl, state="readonly", width=16)
+        tk.Label(row1, text="Chiến dịch:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
+        self.tp_mission_combo = ttk.Combobox(row1, state="readonly", width=15)
         self.tp_mission_combo["values"] = [f"{m['name']} (ID: {mid})" for mid, m in THAOPHAT_MISSIONS.items()]
         self.tp_mission_combo.current(0)
-        self.tp_mission_combo.pack(side="left", padx=(0, 16))
+        self.tp_mission_combo.pack(side="left", padx=(0, 12))
 
-        tk.Label(top_ctrl, text="Quân số tối thiểu:", bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side="left", padx=(0, 6))
+        tk.Label(row1, text="Binh chủng:", bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side="left", padx=(0, 6))
+        self.tp_army_type_combo = ttk.Combobox(row1, state="readonly", width=12)
+        self.tp_army_type_combo["values"] = ["1: Bộ binh", "2: Kỵ binh", "3: Cung binh"]
+        self.tp_army_type_combo.current(0)
+        self.tp_army_type_combo.pack(side="left", padx=(0, 12))
+
+        tk.Label(row1, text="Quân số MT:", bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side="left", padx=(0, 6))
         self.tp_min_army_var = tk.StringVar(value="5000")
-        ttk.Entry(top_ctrl, textvariable=self.tp_min_army_var, width=8).pack(side="left", padx=(0, 16))
+        ttk.Entry(row1, textvariable=self.tp_min_army_var, width=7).pack(side="left", padx=(0, 12))
 
-        self.tp_start_btn = ttk.Button(top_ctrl, text="▶️ Bắt đầu Thảo Phạt", style="Success.TButton", command=self._toggle_tp)
-        self.tp_start_btn.pack(side="left", padx=8)
+        self.tp_start_btn = ttk.Button(row1, text="▶️ Bắt đầu Thảo Phạt", style="Success.TButton", command=self._toggle_tp)
+        self.tp_start_btn.pack(side="left", padx=4)
+
+        # Hàng 2: Tùy chọn Tự động bổ sung lính, Tự động nâng sĩ khí, Ngưỡng sĩ khí tối thiểu
+        row2 = tk.Frame(top_ctrl, bg=BG)
+        row2.pack(fill="x", pady=(2, 0))
+
+        self.tp_auto_recruit_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row2, text="Tự động bổ sung lính", variable=self.tp_auto_recruit_var, style="TCheckbutton").pack(side="left", padx=(0, 16))
+
+        self.tp_auto_morale_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row2, text="Tự động nâng sĩ khí", variable=self.tp_auto_morale_var, style="TCheckbutton").pack(side="left", padx=(0, 8))
+
+        tk.Label(row2, text="Sĩ khí tối thiểu:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        self.tp_min_morale_var = tk.StringVar(value="95")
+        ttk.Entry(row2, textvariable=self.tp_min_morale_var, width=5).pack(side="left", padx=(0, 12))
+
+        tk.Label(row2, text="(Tự động tính toán thời gian hành quân để xuất quân tối ưu)", bg=BG, fg="#888888", font=("Segoe UI", 8, "italic")).pack(side="left", padx=4)
 
         # Bảng tướng & Log
         body = tk.Frame(parent, bg=BG)
@@ -713,14 +754,37 @@ class Dashboard(tk.Tk):
             mission_idx = self.tp_mission_combo.current()
             task_id = list(THAOPHAT_MISSIONS.keys())[mission_idx]
 
+            try:
+                min_army = int(self.tp_min_army_var.get() or "5000")
+            except ValueError:
+                min_army = 5000
+
+            try:
+                min_morale = int(self.tp_min_morale_var.get() or "95")
+            except ValueError:
+                min_morale = 95
+
+            soldier_type_idx = self.tp_army_type_combo.current() if hasattr(self, "tp_army_type_combo") else 0
+            if soldier_type_idx == 1:
+                target_army = TargetArmy(cavalry=min_army)
+            elif soldier_type_idx == 2:
+                target_army = TargetArmy(archers=min_army)
+            else:
+                target_army = TargetArmy(infantry=min_army)
+
+            auto_recruit = bool(self.tp_auto_recruit_var.get()) if hasattr(self, "tp_auto_recruit_var") else True
+            auto_morale = bool(self.tp_auto_morale_var.get()) if hasattr(self, "tp_auto_morale_var") else True
+
             self._tp_stop_event = threading.Event()
             self._tp_runner = ThaoPhatAutoRunner(
-                self.gateway,
-                self.tp_executor,
+                gateway=self.gateway,
                 city_id=city_id,
                 task_id=task_id,
                 general_ids=sel_gens,
-                target_army=TargetArmy(bo_binh=5000),
+                target_army=target_army,
+                min_morale=min_morale,
+                auto_recruit=auto_recruit,
+                auto_morale=auto_morale,
                 stop_event=self._tp_stop_event,
                 log_callback=lambda msg: self.after(0, self._append_tp_log, msg),
                 status_callback=lambda st: None,
@@ -731,6 +795,8 @@ class Dashboard(tk.Tk):
         else:
             if self._tp_stop_event:
                 self._tp_stop_event.set()
+            if self._tp_runner:
+                self._tp_runner.stop()
             self._tp_running = False
             self.tp_start_btn.configure(text="▶️ Bắt đầu Thảo Phạt", style="Success.TButton")
 

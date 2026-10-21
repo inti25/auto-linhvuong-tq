@@ -112,6 +112,14 @@ _Avoid_: Cooldown dời trại, frozen time
 File dữ liệu JSON duy nhất lưu trữ toàn bộ trạng thái thiết lập và quy hoạch tự động hóa của tất cả các phân hệ (Xây Dựng, Nghiên Cứu, Thảo Phạt, Bình Man, Gọi Dân, Hậu Cần).
 _Avoid_: Config lẻ, file lưu cấu hình riêng, profile_settings
 
+**Luyện Sĩ Khí**:
+Hành động tăng điểm sĩ khí cho tướng tại Điểm Tướng Đài (`OPT.ashx?id=47`), mỗi lần tăng tối đa 10 điểm và có thời gian đếm ngược hoàn tất.
+_Avoid_: Nâng sĩ khí, tăng morale, buff sĩ khí
+
+**Biên Chế Quân Tự Động**:
+Quy trình kiểm tra quân số tướng, tự động chiêu mộ tân binh và bổ sung binh lính theo loại quân chỉ định trước khi xuất kích.
+_Avoid_: Bổ sung lính, refill lính, auto recruit
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

@@ -289,3 +289,54 @@ def test_dashboard_unified_profile_backward_compatibility(tmp_path):
         dash.destroy()
 
 
+def test_dashboard_thaophat_controls_and_profile_sync(tmp_path):
+    import json
+    dash = safe_dashboard()
+    try:
+        # Kiểm tra sự tồn tại và giá trị mặc định của các control Thảo Phạt mới
+        assert hasattr(dash, "tp_army_type_combo")
+        assert hasattr(dash, "tp_auto_recruit_var")
+        assert hasattr(dash, "tp_auto_morale_var")
+        assert hasattr(dash, "tp_min_morale_var")
+
+        assert dash.tp_army_type_combo.current() == 0
+        assert dash.tp_auto_recruit_var.get() is True
+        assert dash.tp_auto_morale_var.get() is True
+        assert dash.tp_min_morale_var.get() == "95"
+
+        # Thay đổi giá trị và thu thập hồ sơ
+        dash.tp_army_type_combo.current(2)  # Cung binh
+        dash.tp_min_army_var.set("8000")
+        dash.tp_auto_recruit_var.set(False)
+        dash.tp_auto_morale_var.set(True)
+        dash.tp_min_morale_var.set("90")
+
+        profile = dash._collect_unified_profile()
+        assert profile["thao_phat"]["army_type_idx"] == 2
+        assert profile["thao_phat"]["min_army"] == "8000"
+        assert profile["thao_phat"]["auto_recruit"] is False
+        assert profile["thao_phat"]["auto_morale"] is True
+        assert profile["thao_phat"]["min_morale"] == "90"
+
+        # Nạp lại profile khác
+        new_data = {
+            "thao_phat": {
+                "army_type_idx": 1,  # Kỵ binh
+                "min_army": "6500",
+                "auto_recruit": True,
+                "auto_morale": False,
+                "min_morale": "85",
+            }
+        }
+        loaded = dash._apply_unified_profile(new_data)
+        assert "Thảo Phạt" in loaded
+        assert dash.tp_army_type_combo.current() == 1
+        assert dash.tp_min_army_var.get() == "6500"
+        assert dash.tp_auto_recruit_var.get() is True
+        assert dash.tp_auto_morale_var.get() is False
+        assert dash.tp_min_morale_var.get() == "85"
+    finally:
+        dash.destroy()
+
+
+
