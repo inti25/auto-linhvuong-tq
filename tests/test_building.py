@@ -243,3 +243,148 @@ def test_building_task_skips_busy_pids_and_uses_remaining_slots():
     assert called_pids == ["1", "3"]
 
 
+def test_building_task_downgrades_when_cur_lvl_greater_than_target():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 15, 0, 0],
+                    [2, 3, "Nhà Dân", 8, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=2, gid=3, target_level=5, name="Nhà Dân"),
+    ]
+    task = BuildingTask(gw, city_id=101, plans=plans, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
+
+    # Kiểm tra gọi OPT.ashx?id=65 với pid=2, gid=3, type="2" (hạ cấp)
+    opt_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
+    assert opt_call["pid"] == "2"
+    assert opt_call["gid"] == "3"
+    assert opt_call["type"] == "2"
+    assert opt_call["tid"] == "101"
+
+
+def test_building_task_demolish_to_zero_freely():
+    # Q2-B: Cho phép dỡ bỏ hoàn toàn về 0 cho mọi công trình (kể cả Quan Phủ)
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 1, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=0, name="Quan Phủ"),
+    ]
+    task = BuildingTask(gw, city_id=101, plans=plans, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
+
+    opt_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
+    assert opt_call["pid"] == "1"
+    assert opt_call["gid"] == "1"
+    assert opt_call["type"] == "2"
+    assert opt_call["tid"] == "101"
+
+
+def test_building_task_downgrade_with_auto_speedup():
+    # Q4: Cơ chế tăng tốc áp dụng đồng bộ cho cả hạ cấp
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [5, 4, "Kho", 10, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=5, gid=4, target_level=5, name="Kho")]
+    task = BuildingTask(gw, city_id=101, plans=plans, auto_speedup=True, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
+
+    # Kiểm tra gọi lệnh tăng tốc slot
+    speedup_calls = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert len(speedup_calls) == 1
+    assert speedup_calls[0]["type"] == "1"
+    assert speedup_calls[0]["param1"] == "101"
+    assert speedup_calls[0]["param2"] == "1"
+
+
+def test_building_task_handles_ret_36_minimum_level():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 1, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 36},  # Đã đạt cấp tối thiểu
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=0, name="Quan Phủ")]
+    task = BuildingTask(gw, city_id=101, plans=plans, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "cannot_downgrade_min_level"
+
+
+def test_building_task_mixed_upgrade_and_downgrade_priority_order():
+    # Q3: Thứ tự Nâng và Hạ cấp tuân thủ tuyệt đối theo thứ tự trong hàng đợi
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 10, 0, 0],
+                    [2, 2, "Tường Thành", 12, 0, 0],
+                    [3, 3, "Nhà Dân", 5, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=12),  # Nâng cấp 10 -> 12 (type=1)
+        BuildingPlan(pid=2, gid=2, target_level=8),   # Hạ cấp 12 -> 8 (type=2)
+        BuildingPlan(pid=3, gid=3, target_level=10),  # Nâng cấp 5 -> 10 (type=1)
+    ]
+    task = BuildingTask(gw, city_id=101, plans=plans, max_slots=2, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
+
+    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(opt_calls) == 2
+    # Item 1: pid=1, type="1"
+    assert opt_calls[0]["pid"] == "1"
+    assert opt_calls[0]["type"] == "1"
+    # Item 2: pid=2, type="2"
+    assert opt_calls[1]["pid"] == "2"
+    assert opt_calls[1]["type"] == "2"
+
+
+

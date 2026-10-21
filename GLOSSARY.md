@@ -128,6 +128,14 @@ _Avoid_: Xây đa thành, multi-city queue
 Thành hoặc Doanh trại được người chơi tích chọn tham gia tiến trình tự động nâng cấp công trình.
 _Avoid_: Thành được chọn, active base
 
+**Hạ Cấp Công Trình**:
+Hành động gửi lệnh giảm cấp độ công trình hoặc dỡ bỏ về cấp độ mong muốn (`OPT.ashx?id=65, type=2`).
+_Avoid_: Giảm cấp, downgrade
+
+**Dỡ Bỏ Công Trình**:
+Quy trình hạ cấp công trình liên tục về cấp 0 để xóa bỏ hoàn toàn công trình khỏi ô đất (`pid`), giải phóng vị trí cho việc tái quy hoạch kiến trúc mới.
+_Avoid_: Đập nhà, phá hủy, demolish
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

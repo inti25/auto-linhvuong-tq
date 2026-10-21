@@ -63,7 +63,7 @@ BUILDING_NAMES = {
 class BuildingPlan:
     pid: int  # Vị trí ô đất trong thành (1..32)
     gid: int  # Loại công trình (1: Thái Phủ, 8: Đại Học, 21: Ruộng...)
-    target_level: int  # Cấp độ mục tiêu cần đạt (1..33)
+    target_level: int  # Cấp độ mục tiêu cần đạt (0..33, 0 nghĩa là dỡ bỏ hoàn toàn)
     name: str = ""
     enabled: bool = True
 
@@ -258,68 +258,79 @@ class BuildingTask:
                 elif "bid" in s:
                     busy_pids.add(int(s["bid"]))
 
-        # 5. Tìm tối đa available_slots công trình ưu tiên cần nâng cấp
-        targets_to_upgrade: list[tuple[BuildingPlan, int]] = []
+        # 5. Tìm tối đa available_slots công trình ưu tiên cần nâng cấp hoặc hạ cấp
+        # Mỗi phần tử: (plan, current_level, action_type) với action_type: 1 (nâng cấp), 2 (hạ cấp)
+        targets_to_process: list[tuple[BuildingPlan, int, int]] = []
         has_uncompleted = False
 
         for plan in self.plans:
             if not getattr(plan, "enabled", True):
                 continue
             cur = real_buildings.get(plan.pid, {"gid": plan.gid, "level": 0})
-            if cur["level"] < plan.target_level:
+            cur_lvl = cur["level"]
+            if cur_lvl != plan.target_level:
                 has_uncompleted = True
                 if plan.pid in busy_pids:
                     continue
-                targets_to_upgrade.append((plan, cur["level"]))
+                action_type = 1 if cur_lvl < plan.target_level else 2
+                targets_to_process.append((plan, cur_lvl, action_type))
                 busy_pids.add(plan.pid)
-                if len(targets_to_upgrade) >= available_slots:
+                if len(targets_to_process) >= available_slots:
                     break
 
-        if not targets_to_upgrade:
+        if not targets_to_process:
             if not has_uncompleted:
                 return "all_buildings_completed"
             return "slots_busy"
 
-        # 6. Gửi lệnh nâng cấp tuần tự cho các công trình đã chọn qua OPT.ashx?id=65
-        upgraded_count = 0
+        # 6. Gửi lệnh nâng/hạ cấp tuần tự cho các công trình đã chọn qua OPT.ashx?id=65
+        processed_count = 0
         last_error = None
 
-        for target_plan, current_level in targets_to_upgrade:
-            upgrade_resp = self.gateway.call(
+        for target_plan, current_level, action_type in targets_to_process:
+            resp = self.gateway.call(
                 "OPT.ashx",
                 65,
                 {
                     "pid": str(target_plan.pid),
                     "gid": str(target_plan.gid),
-                    "type": "1",
+                    "type": str(action_type),
                     "tid": str(self.city_id),
                     "_": "",
                 },
             ) or {}
-            ret_up = upgrade_resp.get("ret", RET_OK)
-            if ret_up == 110 or ret_up == RET_CAPTCHA_REQUIRED:
+            ret = resp.get("ret", RET_OK)
+            if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
                 raise CaptchaRequired()
 
             bname = target_plan.name or BUILDING_NAMES.get(target_plan.gid, f"Công trình {target_plan.gid}")
-            if ret_up == RET_OK:
-                self._log(f"🏗️ Đang nâng cấp slot {target_plan.pid} ({bname}) từ cấp {current_level} lên {current_level + 1}")
+            action_verb = "nâng cấp" if action_type == 1 else "hạ cấp"
+            next_lvl = current_level + 1 if action_type == 1 else current_level - 1
+            icon = "🏗️" if action_type == 1 else "🏚️"
+
+            if ret == RET_OK:
+                self._log(f"{icon} Đang {action_verb} slot {target_plan.pid} ({bname}) từ cấp {current_level} {'lên' if action_type == 1 else 'xuống'} {next_lvl}")
                 if self.auto_speedup:
                     self.speedup_slot(1)
-                upgraded_count += 1
-            elif ret_up in (32, 37):
-                self._log(f"⚠️ Không đủ tài nguyên để nâng cấp slot {target_plan.pid} ({bname})")
+                processed_count += 1
+            elif ret == 36:
+                self._log(f"⚠️ Không thể hạ cấp slot {target_plan.pid} ({bname}) (đã đến cấp tối thiểu)")
+                if not last_error:
+                    last_error = "cannot_downgrade_min_level"
+            elif ret in (32, 37):
+                self._log(f"⚠️ Không đủ tài nguyên để {action_verb} slot {target_plan.pid} ({bname})")
                 last_error = "insufficient_resources"
                 break
-            elif ret_up == 245:
-                self._log(f"⚠️ Chưa đủ điều kiện tiên quyết để nâng cấp slot {target_plan.pid} ({bname})")
+            elif ret == 245:
+                self._log(f"⚠️ Chưa đủ điều kiện tiên quyết để {action_verb} slot {target_plan.pid} ({bname})")
                 if not last_error:
                     last_error = "prerequisites_not_met"
             else:
-                self._log(f"❌ Nâng cấp slot {target_plan.pid} ({bname}) thất bại (mã {ret_up})")
+                self._log(f"❌ {action_verb.capitalize()} slot {target_plan.pid} ({bname}) thất bại (mã {ret})")
                 if not last_error:
-                    last_error = f"upgrade_failed:{ret_up}"
+                    last_error = f"{'upgrade' if action_type == 1 else 'downgrade'}_failed:{ret}"
 
-        if upgraded_count > 0:
+        if processed_count > 0:
             return "upgrading"
         if last_error:
             return last_error

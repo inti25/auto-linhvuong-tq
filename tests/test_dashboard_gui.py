@@ -142,6 +142,12 @@ def test_dashboard_building_tree_interactive_controls():
         assert dash.bld_slots_combo.get() == "3"
         assert list(dash.bld_slots_combo["values"]) == ["1", "2", "3"]
 
+        # Kiểm tra đặt Cấp mục tiêu = 0 (Dỡ bỏ hoàn toàn)
+        dash.bld_target_lvl_var.set("0")
+        dash._set_bld_target_lvl()
+        updated_vals_zero = dash.bld_tree.item(first_item, "values")
+        assert int(updated_vals_zero[4]) == 0
+
         # Kiểm tra đặt Cấp mục tiêu cho TẤT CẢ công trình
         dash.bld_target_lvl_var.set("30")
         dash._set_bld_target_lvl_all()

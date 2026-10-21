@@ -1438,10 +1438,10 @@ class Dashboard(tk.Tk):
             return
         try:
             lvl = int(self.bld_target_lvl_var.get())
-            if lvl < 1 or lvl > 33:
+            if lvl < 0 or lvl > 33:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 33!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 33 (0: dỡ bỏ)!")
             return
         for iid in sel:
             vals = list(self.bld_tree.item(iid, "values"))
@@ -1451,10 +1451,10 @@ class Dashboard(tk.Tk):
     def _set_bld_target_lvl_all(self):
         try:
             lvl = int(self.bld_target_lvl_var.get())
-            if lvl < 1 or lvl > 33:
+            if lvl < 0 or lvl > 33:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 33!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 33 (0: dỡ bỏ)!")
             return
         count = 0
         for iid in self.bld_tree.get_children(""):
