@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import ttk
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -373,6 +374,30 @@ def test_dashboard_thaophat_row_layout_and_troops_columns():
         assert int(vals[7]) == 600  # Tổng quân
     finally:
         dash.destroy()
+
+
+def test_dashboard_combobox_dark_palette_and_contrast():
+    dash = safe_dashboard()
+    try:
+        style = ttk.Style(dash)
+        field_map = dict(style.map("TCombobox", "fieldbackground"))
+        fg_map = dict(style.map("TCombobox", "foreground"))
+
+        # Kiểm tra chế độ readonly có nền tối và chữ trắng tương phản cao
+        assert field_map.get("readonly") == "#2a2e45"
+        assert fg_map.get("readonly") == "#ffffff"
+
+        # Kiểm tra popdown listbox trên combobox thực tế
+        cb = dash.tp_city_combo
+        popdown = cb.tk.eval(f"ttk::combobox::PopdownWindow {cb}")
+        lb = f"{popdown}.f.l"
+        bg = cb.tk.eval(f"{lb} cget -background")
+        fg = cb.tk.eval(f"{lb} cget -foreground")
+        assert bg == "#1e2130"
+        assert fg == "#ffffff"
+    finally:
+        dash.destroy()
+
 
 
 

@@ -251,6 +251,18 @@ class Dashboard(tk.Tk):
         )
         style.map("Treeview", background=[("selected", ACCENT)])
 
+        # Cấu hình màu sắc Popdown Listbox cho tất cả Combobox trong ứng dụng
+        self.option_add("*TCombobox*Listbox.background", CARD)
+        self.option_add("*TCombobox*Listbox.foreground", "#ffffff")
+        self.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        self.option_add("*TCombobox*Listbox.font", ("Segoe UI", 10))
+        self.option_add("*ComboboxPopdown*Listbox.background", CARD)
+        self.option_add("*ComboboxPopdown*Listbox.foreground", "#ffffff")
+        self.option_add("*ComboboxPopdown*Listbox.selectBackground", ACCENT)
+        self.option_add("*ComboboxPopdown*Listbox.selectForeground", "#ffffff")
+        self.option_add("*ComboboxPopdown*Listbox.font", ("Segoe UI", 10))
+
         # Cards & inputs
         style.configure("Card.TLabelframe", background=BG, foreground=ACCENT)
         style.configure("Card.TLabelframe.Label", background=BG, foreground=ACCENT, font=("Segoe UI", 11, "bold"))
@@ -258,7 +270,25 @@ class Dashboard(tk.Tk):
         style.configure("Dark.TLabel", background=BG, foreground=FG, font=("Segoe UI", 10))
         style.configure("Big.TLabel", font=("Segoe UI", 14, "bold"), foreground=ACCENT)
         style.configure("TEntry", fieldbackground="#2a2e45", foreground=FG, insertcolor=FG)
-        style.configure("TCombobox", fieldbackground="#2a2e45", foreground=FG)
+        style.configure(
+            "TCombobox",
+            background="#2a2e45",
+            foreground="#ffffff",
+            fieldbackground="#2a2e45",
+            darkcolor="#1e2130",
+            lightcolor="#3a4060",
+            arrowcolor="#ffffff",
+            insertcolor="#ffffff",
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", "#2a2e45"), ("focus", "#323752"), ("disabled", "#1c1e29")],
+            foreground=[("readonly", "#ffffff"), ("focus", "#ffffff"), ("disabled", "#8a90b0")],
+            selectbackground=[("readonly", "#2a2e45"), ("focus", ACCENT)],
+            selectforeground=[("readonly", "#ffffff"), ("focus", "#ffffff")],
+            background=[("readonly", "#2a2e45"), ("active", "#3a4060")],
+            arrowcolor=[("readonly", "#ffffff"), ("active", ACCENT)],
+        )
 
         # Buttons
         style.configure("Action.TButton", background=ACCENT, foreground="white", font=("Segoe UI", 10, "bold"), padding=6)
