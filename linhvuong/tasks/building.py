@@ -78,7 +78,7 @@ class BuildingTask:
         gateway: GatewayClient,
         city_id: int,
         plans: list[BuildingPlan],
-        max_slots: int = 1,
+        max_slots: int = 3,
         auto_speedup: bool = False,
         paytype: int = 1,
         auto_comfort: bool = True,
@@ -229,54 +229,90 @@ class BuildingTask:
             else:
                 return "slots_busy"
 
+        available_slots = self.max_slots - len(active_slots)
+        if available_slots <= 0:
+            return "slots_busy"
+
         # 4. Lấy danh sách công trình thực tế
         real_buildings = self.get_real_buildings()
 
-        # 5. Tìm công trình ưu tiên tiếp theo cần nâng cấp
-        target_plan: Optional[BuildingPlan] = None
-        current_level = 0
+        # Trích xuất danh sách pid đang được nâng cấp dở
+        busy_pids = set()
+        for s in active_slots:
+            if isinstance(s, (list, tuple)) and len(s) > 0:
+                try:
+                    busy_pids.add(int(s[0]))
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(s, dict):
+                if "pid" in s:
+                    busy_pids.add(int(s["pid"]))
+                elif "bid" in s:
+                    busy_pids.add(int(s["bid"]))
+
+        # 5. Tìm tối đa available_slots công trình ưu tiên cần nâng cấp
+        targets_to_upgrade: list[tuple[BuildingPlan, int]] = []
+        has_uncompleted = False
+
         for plan in self.plans:
             if not getattr(plan, "enabled", True):
                 continue
             cur = real_buildings.get(plan.pid, {"gid": plan.gid, "level": 0})
             if cur["level"] < plan.target_level:
-                target_plan = plan
-                current_level = cur["level"]
+                has_uncompleted = True
+                if plan.pid in busy_pids:
+                    continue
+                targets_to_upgrade.append((plan, cur["level"]))
+                busy_pids.add(plan.pid)
+                if len(targets_to_upgrade) >= available_slots:
+                    break
+
+        if not targets_to_upgrade:
+            if not has_uncompleted:
+                return "all_buildings_completed"
+            return "slots_busy"
+
+        # 6. Gửi lệnh nâng cấp tuần tự cho các công trình đã chọn qua OPT.ashx?id=65
+        upgraded_count = 0
+        last_error = None
+
+        for target_plan, current_level in targets_to_upgrade:
+            upgrade_resp = self.gateway.call(
+                "OPT.ashx",
+                65,
+                {
+                    "pid": str(target_plan.pid),
+                    "gid": str(target_plan.gid),
+                    "type": "1",
+                    "tid": str(self.city_id),
+                    "_": "",
+                },
+            ) or {}
+            ret_up = upgrade_resp.get("ret", RET_OK)
+            if ret_up == 110 or ret_up == RET_CAPTCHA_REQUIRED:
+                raise CaptchaRequired()
+
+            bname = target_plan.name or BUILDING_NAMES.get(target_plan.gid, f"Công trình {target_plan.gid}")
+            if ret_up == RET_OK:
+                self.notify(f"🏗️ Đang nâng cấp slot {target_plan.pid} ({bname}) từ cấp {current_level} lên {current_level + 1}")
+                if self.auto_speedup:
+                    self.speedup_slot(1)
+                upgraded_count += 1
+            elif ret_up in (32, 37):
+                self.notify(f"⚠️ Không đủ tài nguyên để nâng cấp slot {target_plan.pid} ({bname})")
+                last_error = "insufficient_resources"
                 break
+            elif ret_up == 245:
+                self.notify(f"⚠️ Chưa đủ điều kiện tiên quyết để nâng cấp slot {target_plan.pid} ({bname})")
+                if not last_error:
+                    last_error = "prerequisites_not_met"
+            else:
+                self.notify(f"❌ Nâng cấp slot {target_plan.pid} ({bname}) thất bại (mã {ret_up})")
+                if not last_error:
+                    last_error = f"upgrade_failed:{ret_up}"
 
-        if target_plan is None:
-            return "all_buildings_completed"
-
-        # 6. Gửi lệnh nâng cấp qua OPT.ashx?id=65
-        upgrade_resp = self.gateway.call(
-            "OPT.ashx",
-            65,
-            {
-                "pid": str(target_plan.pid),
-                "gid": str(target_plan.gid),
-                "type": "1",
-                "tid": str(self.city_id),
-                "_": "",
-            },
-        ) or {}
-        ret_up = upgrade_resp.get("ret", RET_OK)
-        if ret_up == 110 or ret_up == RET_CAPTCHA_REQUIRED:
-            raise CaptchaRequired()
-
-        bname = target_plan.name or BUILDING_NAMES.get(target_plan.gid, f"Công trình {target_plan.gid}")
-        if ret_up == RET_OK:
-            self.notify(f"🏗️ Đang nâng cấp slot {target_plan.pid} ({bname}) từ cấp {current_level} lên {current_level + 1}")
-            if self.auto_speedup:
-                self.speedup_slot(1)
+        if upgraded_count > 0:
             return "upgrading"
-
-        if ret_up in (32, 37):
-            self.notify(f"⚠️ Không đủ tài nguyên để nâng cấp slot {target_plan.pid} ({bname})")
-            return "insufficient_resources"
-
-        if ret_up == 245:
-            self.notify(f"⚠️ Chưa đủ điều kiện tiên quyết để nâng cấp slot {target_plan.pid} ({bname})")
-            return "prerequisites_not_met"
-
-        self.notify(f"❌ Nâng cấp slot {target_plan.pid} ({bname}) thất bại (mã {ret_up})")
-        return f"upgrade_failed:{ret_up}"
+        if last_error:
+            return last_error
+        return "slots_busy"

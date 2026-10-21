@@ -80,7 +80,7 @@ def load_build_task(
         gateway=gateway,
         city_id=city_id,
         plans=plans,
-        max_slots=cfg.get("max_slots", 1),
+        max_slots=cfg.get("max_slots", 3),
         auto_speedup=auto_speedup,
         paytype=cfg.get("paytype", 1),
         auto_comfort=auto_comfort,

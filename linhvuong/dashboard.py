@@ -708,8 +708,13 @@ class Dashboard(tk.Tk):
 
         tk.Label(top, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
         self.bld_city_combo = ttk.Combobox(top, state="readonly", width=20)
-        self.bld_city_combo.pack(side="left", padx=(0, 16))
+        self.bld_city_combo.pack(side="left", padx=(0, 12))
         self.bld_city_combo.bind("<<ComboboxSelected>>", lambda e: self._fetch_city_buildings())
+
+        tk.Label(top, text="Số slot:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.bld_slots_combo = ttk.Combobox(top, state="readonly", width=3, values=["1", "2", "3"])
+        self.bld_slots_combo.set("3")
+        self.bld_slots_combo.pack(side="left", padx=(0, 12))
 
         self.bld_speedup_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -757,6 +762,7 @@ class Dashboard(tk.Tk):
         self.bld_target_lvl_var = tk.StringVar(value="20")
         ttk.Entry(btn_bar, textvariable=self.bld_target_lvl_var, width=5).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_bld_target_lvl).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="🌟 Đặt tất cả", style="Action.TButton", command=self._set_bld_target_lvl_all).pack(side="left", padx=2)
 
         ttk.Button(btn_bar, text="💾 Lưu file", style="Action.TButton", command=self._save_build_plans).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="📂 Nạp file", style="Action.TButton", command=self._load_build_plans).pack(side="left", padx=2)
@@ -873,6 +879,23 @@ class Dashboard(tk.Tk):
             vals = list(self.bld_tree.item(iid, "values"))
             vals[4] = lvl
             self.bld_tree.item(iid, values=vals)
+
+    def _set_bld_target_lvl_all(self):
+        try:
+            lvl = int(self.bld_target_lvl_var.get())
+            if lvl < 1 or lvl > 33:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 33!")
+            return
+        count = 0
+        for iid in self.bld_tree.get_children(""):
+            vals = list(self.bld_tree.item(iid, "values"))
+            if len(vals) > 4:
+                vals[4] = lvl
+                self.bld_tree.item(iid, values=vals)
+                count += 1
+        self._append_bld_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} công trình.")
 
     def _on_bld_tree_click(self, event):
         item = self.bld_tree.identify_row(event.y)
@@ -1017,10 +1040,16 @@ class Dashboard(tk.Tk):
                 messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 công trình cần nâng cấp!")
                 return
 
+            try:
+                max_slots = int(self.bld_slots_combo.get()) if hasattr(self, "bld_slots_combo") and self.bld_slots_combo.get() else 3
+            except (ValueError, TypeError):
+                max_slots = 3
+
             task = BuildingTask(
                 gateway=self.gateway,
                 city_id=city_id,
                 plans=plans,
+                max_slots=max_slots,
                 auto_speedup=self.bld_speedup_var.get(),
                 auto_boost=self.bld_boost_var.get(),
                 auto_comfort=self.bld_comfort_var.get(),
@@ -1084,6 +1113,7 @@ class Dashboard(tk.Tk):
         self.res_target_lvl_var = tk.StringVar(value="20")
         ttk.Entry(res_bar, textvariable=self.res_target_lvl_var, width=5).pack(side="left", padx=2)
         ttk.Button(res_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_res_target_lvl).pack(side="left", padx=2)
+        ttk.Button(res_bar, text="🌟 Đặt tất cả", style="Action.TButton", command=self._set_res_target_lvl_all).pack(side="left", padx=2)
 
         ttk.Button(res_bar, text="💾 Lưu", style="Action.TButton", command=self._save_tech_plans).pack(side="left", padx=2)
         ttk.Button(res_bar, text="📂 Nạp", style="Action.TButton", command=self._load_tech_plans).pack(side="left", padx=2)
@@ -1192,6 +1222,23 @@ class Dashboard(tk.Tk):
             vals = list(self.res_tree.item(iid, "values"))
             vals[2] = lvl
             self.res_tree.item(iid, values=vals)
+
+    def _set_res_target_lvl_all(self):
+        try:
+            lvl = int(self.res_target_lvl_var.get())
+            if lvl < 1 or lvl > 30:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 30!")
+            return
+        count = 0
+        for iid in self.res_tree.get_children(""):
+            vals = list(self.res_tree.item(iid, "values"))
+            if len(vals) > 2:
+                vals[2] = lvl
+                self.res_tree.item(iid, values=vals)
+                count += 1
+        self._append_logis_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} kỹ thuật.")
 
     def _on_res_tree_click(self, event):
         item = self.res_tree.identify_row(event.y)

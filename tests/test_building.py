@@ -172,3 +172,74 @@ def test_building_task_real_server_slot_busy():
     out = task.run_once()
     assert out == "slots_busy"
 
+
+def test_building_task_upgrades_up_to_3_slots():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 5, 0, 0],
+                    [2, 2, "Tường Thành", 5, 0, 0],
+                    [3, 3, "Nhà Dân", 5, 0, 0],
+                    [4, 4, "Kho", 5, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=10),
+        BuildingPlan(pid=2, gid=2, target_level=10),
+        BuildingPlan(pid=3, gid=3, target_level=10),
+        BuildingPlan(pid=4, gid=4, target_level=10),
+    ]
+    task = BuildingTask(gw, city_id=101, plans=plans, max_slots=3, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
+
+    upgrade_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(upgrade_calls) == 3
+    called_pids = [c["pid"] for c in upgrade_calls]
+    assert called_pids == ["1", "2", "3"]
+
+
+def test_building_task_skips_busy_pids_and_uses_remaining_slots():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 0, 0, [[2, 2, 5, 1, 60]], []]],
+            },
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 5, 0, 0],
+                    [2, 2, "Tường Thành", 5, 0, 0],
+                    [3, 3, "Nhà Dân", 5, 0, 0],
+                    [4, 4, "Kho", 5, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=10),
+        BuildingPlan(pid=2, gid=2, target_level=10),  # Đang bận ở slot
+        BuildingPlan(pid=3, gid=3, target_level=10),
+        BuildingPlan(pid=4, gid=4, target_level=10),
+    ]
+    task = BuildingTask(gw, city_id=101, plans=plans, max_slots=3, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
+
+    # Slot bận = 1, max_slots = 3 -> còn 2 slot trống -> gửi pid 1 và pid 3
+    upgrade_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(upgrade_calls) == 2
+    called_pids = [c["pid"] for c in upgrade_calls]
+    assert called_pids == ["1", "3"]
+
+

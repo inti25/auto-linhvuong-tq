@@ -131,11 +131,21 @@ def test_dashboard_building_tree_interactive_controls():
         new_children_after_up = dash.bld_tree.get_children()
         assert new_children_after_up[0] == first_item
 
-        # Kiểm tra đặt Cấp mục tiêu
+        # Kiểm tra đặt Cấp mục tiêu cho item được chọn
         dash.bld_target_lvl_var.set("25")
         dash._set_bld_target_lvl()
         updated_vals = dash.bld_tree.item(first_item, "values")
         assert int(updated_vals[4]) == 25
+
+        # Kiểm tra số slot xây dựng mặc định là 3
+        assert dash.bld_slots_combo.get() == "3"
+        assert list(dash.bld_slots_combo["values"]) == ["1", "2", "3"]
+
+        # Kiểm tra đặt Cấp mục tiêu cho TẤT CẢ công trình
+        dash.bld_target_lvl_var.set("30")
+        dash._set_bld_target_lvl_all()
+        for iid in dash.bld_tree.get_children():
+            assert int(dash.bld_tree.item(iid, "values")[4]) == 30
     finally:
         dash.destroy()
 
@@ -169,11 +179,17 @@ def test_dashboard_tech_tree_interactive_controls():
         new_children_after_up = dash.res_tree.get_children()
         assert new_children_after_up[0] == first_item
 
-        # Kiểm tra đặt Cấp mục tiêu
+        # Kiểm tra đặt Cấp mục tiêu cho item được chọn
         dash.res_target_lvl_var.set("28")
         dash._set_res_target_lvl()
         updated_vals = dash.res_tree.item(first_item, "values")
         assert int(updated_vals[2]) == 28
+
+        # Kiểm tra đặt Cấp mục tiêu cho TẤT CẢ kỹ thuật
+        dash.res_target_lvl_var.set("25")
+        dash._set_res_target_lvl_all()
+        for iid in dash.res_tree.get_children():
+            assert int(dash.res_tree.item(iid, "values")[2]) == 25
     finally:
         dash.destroy()
 
