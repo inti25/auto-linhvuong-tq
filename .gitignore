@@ -20,6 +20,8 @@ ENV/
 # Distribution / packaging
 build/
 dist/
+*.spec
+LinhVuong.exe
 *.egg-info/
 .eggs/
 wheels/
