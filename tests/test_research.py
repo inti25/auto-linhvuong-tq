@@ -120,3 +120,60 @@ def test_research_task_stops_on_captcha():
     task = ResearchTask(gw, city_id=2001, plans=[])
     with pytest.raises(CaptchaRequired):
         task.run_once()
+
+
+def test_research_task_real_server_format_and_university_detection():
+    server = FakeServer(
+        handlers={
+            # Format thật từ server: tech là mảng [tech_id, cur_level, time_left]
+            "City.ashx?id=37": {"ret": 0, "tech": [0, 0, 0]},
+            # Tìm Viện Đại Học trong thành (gid=6, pid=5)
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "官府", 20, 0, 0],
+                    [5, 6, "大学殿", 17, 0, 0],
+                ],
+            },
+            # Build.ashx?id=2 trả về mảng các mảng [tech_id, name, level, ...]
+            "Build.ashx?id=2": {
+                "ret": 0,
+                "list": [
+                    [1, "种植技巧", 10, 6, 11, 3, 1, 2430],
+                    [2, "冶炼技巧", 8, 6, 9, 3, 1, 2430],
+                ],
+            },
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=44": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        TechPlan(tech_id=1, target_level=12, name="种植技巧 - làm thực"),
+        TechPlan(tech_id=2, target_level=10, name="冶炼技巧 - rèn sắt"),
+    ]
+    task = ResearchTask(gw, city_id=15230, plans=plans, auto_art_of_war=False)
+    
+    # 1. Kiểm tra tìm Đại học điện
+    univ_pid = task.get_university_pid()
+    assert univ_pid == 5
+
+    # 2. Kiểm tra đọc cấp độ công nghệ từ mảng
+    levels = task.get_current_tech_levels()
+    assert levels[1] == 10
+    assert levels[2] == 8
+
+    # 3. Kiểm tra kiểm tra trạng thái đang nghiên cứu
+    is_busy, cur_tid = task.is_research_ongoing()
+    assert is_busy is False
+    assert cur_tid is None
+
+    # 4. Kiểm tra dispatch nghiên cứu Tech 1
+    out = task.run_once()
+    assert out == "researching"
+
+    opt44_calls = [d for k, d in server.calls if k == "OPT.ashx?id=44"]
+    assert len(opt44_calls) == 1
+    assert opt44_calls[0]["techid"] == "1"
+    assert opt44_calls[0]["tid"] == "15230"
+

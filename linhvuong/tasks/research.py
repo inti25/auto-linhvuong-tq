@@ -84,16 +84,52 @@ class ResearchTask:
             raise CaptchaRequired()
 
         tech_info = resp.get("tech")
-        if tech_info and isinstance(tech_info, dict) and tech_info.get("techid"):
-            return True, int(tech_info["techid"])
+        # Hỗ trợ dạng mảng từ server thật: [tech_id, cur_level, time_left]
+        if isinstance(tech_info, (list, tuple)) and len(tech_info) > 0:
+            try:
+                tid = int(tech_info[0])
+                if tid > 0:
+                    return True, tid
+            except (ValueError, TypeError):
+                pass
+        # Hỗ trợ dạng dict từ mock / unit test
+        elif isinstance(tech_info, dict):
+            tid = tech_info.get("techid") or tech_info.get("id") or 0
+            if int(tid) > 0:
+                return True, int(tid)
+
         return False, None
+
+    def get_university_pid(self) -> Optional[int]:
+        """Tìm vị trí ô đất (pid) của Viện Đại Học (Đại Học Điện, gid=6) trong thành."""
+        resp = self.gateway.call("City.ashx", 5, {"tid": str(self.city_id), "_": ""}) or {}
+        ret = resp.get("ret", RET_OK)
+        if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+            raise CaptchaRequired()
+
+        buildings = resp.get("infos") or resp.get("buildings") or resp.get("build") or []
+        for b in buildings:
+            if isinstance(b, (list, tuple)) and len(b) >= 2:
+                try:
+                    if int(b[1]) == 6:
+                        return int(b[0])
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(b, dict):
+                if int(b.get("gid", 0)) == 6:
+                    return int(b.get("pid", 0))
+        return None
 
     def get_current_tech_levels(self) -> dict[int, int]:
         """Lấy cấp độ hiện tại của 29 kỹ thuật tại viện Đại Học qua Build.ashx?id=2."""
+        univ_pid = self.get_university_pid()
+        if univ_pid is None:
+            univ_pid = 6  # Giá trị mặc định phổ biến
+
         payload = {
-            "pid": "8",
-            "gid": "1",
-            "tab": "2",
+            "pid": str(univ_pid),
+            "gid": "6",
+            "tab": "1",
             "tid": str(self.city_id),
             "_": "",
         }
@@ -104,9 +140,17 @@ class ResearchTask:
 
         levels_map = {}
         for item in resp.get("list", []):
-            tid = int(item.get("id", 0))
-            lvl = int(item.get("level", 0))
-            levels_map[tid] = lvl
+            if isinstance(item, dict):
+                tid = int(item.get("id", 0))
+                lvl = int(item.get("level", 0))
+                levels_map[tid] = lvl
+            elif isinstance(item, (list, tuple)) and len(item) >= 3:
+                try:
+                    tid = int(item[0])
+                    lvl = int(item[2])
+                    levels_map[tid] = lvl
+                except (ValueError, TypeError):
+                    pass
         return levels_map
 
     def use_art_of_war(self) -> bool:
@@ -132,12 +176,14 @@ class ResearchTask:
 
         # 3. Lọc theo thứ tự ưu tiên tìm kỹ thuật chưa đạt cấp mục tiêu
         target_tech: Optional[TechPlan] = None
+        current_level = 0
         for plan in self.plans:
             if not getattr(plan, "enabled", True):
                 continue
             cur_lvl = current_levels.get(plan.tech_id, 0)
             if cur_lvl < plan.target_level:
                 target_tech = plan
+                current_level = cur_lvl
                 break
 
         if target_tech is None:
@@ -161,12 +207,22 @@ class ResearchTask:
             raise CaptchaRequired()
 
         if ret == RET_OK:
-            self.notify(f"🔬 Bắt đầu nghiên cứu kỹ thuật: {target_tech.name} (ID: {target_tech.tech_id})")
+            self.notify(f"🔬 Bắt đầu nghiên cứu: {target_tech.name} (từ cấp {current_level} lên {current_level + 1})")
             if self.auto_art_of_war:
                 self.use_art_of_war()
             return "researching"
 
-        if ret == 32:
+        if ret == 90:
+            self.notify("⚠️ Viện Đại Học hiện đang bận nghiên cứu kỹ thuật khác.")
+            return "research_busy"
+
+        if ret in (32, 37):
+            self.notify(f"⚠️ Không đủ tài nguyên để nghiên cứu {target_tech.name}")
             return "insufficient_resources"
 
+        if ret == 245:
+            self.notify(f"⚠️ Chưa đủ điều kiện tiên quyết để nghiên cứu {target_tech.name}")
+            return "prerequisites_not_met"
+
+        self.notify(f"❌ Nghiên cứu {target_tech.name} thất bại (mã {ret})")
         return f"research_failed:{ret}"

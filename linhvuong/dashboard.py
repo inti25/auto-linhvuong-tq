@@ -1330,6 +1330,7 @@ class Dashboard(tk.Tk):
         tk.Label(res_top, text="Thành:", bg=CARD, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=4)
         self.res_city_combo = ttk.Combobox(res_top, state="readonly", width=18)
         self.res_city_combo.pack(side="left", padx=4)
+        self.res_city_combo.bind("<<ComboboxSelected>>", lambda e: self._fetch_city_techs())
 
         self.res_art_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -1358,17 +1359,20 @@ class Dashboard(tk.Tk):
         ttk.Entry(res_bar, textvariable=self.res_target_lvl_var, width=5).pack(side="left", padx=2)
         ttk.Button(res_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_res_target_lvl).pack(side="left", padx=2)
         ttk.Button(res_bar, text="🌟 Đặt tất cả", style="Action.TButton", command=self._set_res_target_lvl_all).pack(side="left", padx=2)
+        ttk.Button(res_bar, text="🔄 Tải kỹ thuật", style="Action.TButton", command=self._fetch_city_techs).pack(side="left", padx=2)
 
-        self.res_tree = ttk.Treeview(f_res, columns=("select", "id", "target_lvl"), show="tree headings", selectmode="browse")
+        self.res_tree = ttk.Treeview(f_res, columns=("select", "id", "target_lvl", "current_lvl"), show="tree headings", selectmode="browse")
         self.res_tree.heading("#0", text="Tên Kỹ Thuật Đại Học")
         self.res_tree.heading("select", text="Chọn")
         self.res_tree.heading("id", text="Mã ID")
         self.res_tree.heading("target_lvl", text="Cấp MT")
+        self.res_tree.heading("current_lvl", text="Cấp HT")
 
-        self.res_tree.column("#0", width=140)
+        self.res_tree.column("#0", width=135)
         self.res_tree.column("select", width=45, anchor="center")
-        self.res_tree.column("id", width=55, anchor="center")
-        self.res_tree.column("target_lvl", width=65, anchor="center")
+        self.res_tree.column("id", width=50, anchor="center")
+        self.res_tree.column("target_lvl", width=55, anchor="center")
+        self.res_tree.column("current_lvl", width=55, anchor="center")
 
         self.res_tree.pack(fill="both", expand=True, padx=6, pady=6)
         self.res_tree.bind("<ButtonRelease-1>", self._on_res_tree_click)
@@ -1419,7 +1423,71 @@ class Dashboard(tk.Tk):
     def _populate_all_techs(self):
         self.res_tree.delete(*self.res_tree.get_children())
         for tid, tname in sorted(TECH_NAMES.items()):
-            self.res_tree.insert("", "end", iid=str(tid), text=tname, values=("☑", tid, 20))
+            self.res_tree.insert("", "end", iid=str(tid), text=tname, values=("☑", tid, 20, 0))
+
+    def _fetch_city_techs(self):
+        sel_idx = self.res_city_combo.current()
+        cities = self.roster.cities if self.roster.cities else self.roster.bases
+        if sel_idx < 0 or sel_idx >= len(cities):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì cần tải kỹ thuật!")
+            return
+        city = cities[sel_idx]
+        self._append_logis_log(f"🔄 Đang tải dữ liệu kỹ thuật thực tế cho thành {city.name}...")
+        threading.Thread(target=self._fetch_city_techs_thread, args=(city.id,), daemon=True).start()
+
+    def _fetch_city_techs_thread(self, city_id: int):
+        try:
+            # 1. Tìm Đại học điện
+            resp_bld = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
+            b_list = resp_bld.get("infos") or resp_bld.get("buildings") or []
+            univ_pid = None
+            for b in b_list:
+                if isinstance(b, (list, tuple)) and len(b) >= 2 and int(b[1]) == 6:
+                    univ_pid = int(b[0])
+                    break
+                elif isinstance(b, dict) and int(b.get("gid", 0)) == 6:
+                    univ_pid = int(b.get("pid", 0))
+                    break
+
+            if univ_pid is None:
+                univ_pid = 6
+
+            # 2. Lấy cấp độ 29 kỹ thuật
+            resp_tech = self.gateway.call("Build.ashx", 2, {"pid": str(univ_pid), "gid": "6", "tab": "1", "tid": str(city_id), "_": ""}) or {}
+            levels = {}
+            for item in resp_tech.get("list", []):
+                if isinstance(item, dict):
+                    levels[int(item.get("id", 0))] = int(item.get("level", 0))
+                elif isinstance(item, (list, tuple)) and len(item) >= 3:
+                    try:
+                        levels[int(item[0])] = int(item[2])
+                    except (ValueError, TypeError):
+                        pass
+
+            self.after(0, self._update_city_techs_ui, levels)
+        except Exception as e:
+            self.after(0, lambda: self._append_logis_log(f"❌ Lỗi tải kỹ thuật thành: {e}"))
+
+    def _update_city_techs_ui(self, levels_map: dict):
+        if not levels_map:
+            self._append_logis_log("ℹ️ Server không trả về dữ liệu kỹ thuật.")
+            return
+
+        for iid in self.res_tree.get_children(""):
+            try:
+                tid = int(iid)
+                cur_lvl = levels_map.get(tid, 0)
+                vals = list(self.res_tree.item(iid, "values"))
+                if len(vals) >= 3:
+                    if len(vals) == 3:
+                        vals.append(cur_lvl)
+                    else:
+                        vals[3] = cur_lvl
+                    self.res_tree.item(iid, values=vals)
+            except (ValueError, IndexError):
+                pass
+
+        self._append_logis_log(f"🔄 Đã nạp thành công cấp độ thực tế của {len(levels_map)} kỹ thuật.")
 
     def _move_res_up(self):
         sel = self.res_tree.selection()
