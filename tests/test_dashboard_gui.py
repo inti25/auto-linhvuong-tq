@@ -661,6 +661,38 @@ def test_dashboard_account_bound_profile(tmp_path, monkeypatch):
             dash.destroy()
 
 
+def test_dashboard_bld_tree_tag_colors():
+    dash = safe_dashboard()
+    try:
+        assert dash._get_bld_row_tag(1, 10) == "upgrade"
+        assert dash._get_bld_row_tag(10, 1) == "downgrade"
+        assert dash._get_bld_row_tag(5, 5) == "completed"
+
+        plans = [
+            {"pid": 1, "gid": 1, "cur_lvl": 2, "target_level": 5, "enabled": True},
+            {"pid": 2, "gid": 2, "cur_lvl": 8, "target_level": 3, "enabled": True},
+            {"pid": 3, "gid": 3, "cur_lvl": 5, "target_level": 5, "enabled": True},
+        ]
+        dash._render_bld_tree_from_plans(plans)
+        assert dash.bld_tree.item("1", "tags") == ("upgrade",)
+        assert dash.bld_tree.item("2", "tags") == ("downgrade",)
+        assert dash.bld_tree.item("3", "tags") == ("completed",)
+
+        # Đổi mục tiêu của ô 1 từ 5 xuống 1 -> biến thành hạ cấp
+        dash.bld_tree.selection_set("1")
+        dash.bld_target_lvl_var.set("1")
+        dash._set_bld_target_lvl()
+        assert dash.bld_tree.item("1", "tags") == ("downgrade",)
+
+        # Đổi mục tiêu của ô 1 bằng cấp hiện tại (2) -> hoàn thành
+        dash.bld_target_lvl_var.set("2")
+        dash._set_bld_target_lvl()
+        assert dash.bld_tree.item("1", "tags") == ("completed",)
+    finally:
+        dash.destroy()
+
+
+
 
 
 

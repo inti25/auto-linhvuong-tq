@@ -110,3 +110,44 @@ def test_camps_are_tracked_with_generals():
 
     # r.bases contains both cities and camps
     assert len(r.bases) == 3
+
+
+def test_martial_generals_in_camps_have_army_composition():
+    class CampSession(FakeSession):
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            self.calls.append((key, dict(data or {})))
+            if key == "Common.ashx?id=29":
+                return Resp({"ret": 0, "city": [[15230, "NB"]]})
+            if key == "City.ashx?id=7":
+                return Resp({"ret": 0, "infos": [
+                    [1, 15230, "NB", 0, 100, 100, 0, 3, 1],
+                    [2, -3035, "TienTuyen", 0, 105, 105, 15230, 1, 5], # Doanh trại
+                ]})
+            if key == "Common.ashx?id=32":
+                t = (data or {}).get("type")
+                if t == "1":
+                    return Resp({"ret": 0, "list": []})
+                return Resp({"ret": 0, "list": [
+                    [-3035, "TienTuyen", 105, 105, [
+                        [97376, "席定韩", "", 2, 0, 0, 5, 100, 150, 150, 17, 14, 19, 50, 0]
+                    ]]
+                ]})
+            if key == "Common.ashx?id=76":
+                cid = (data or {}).get("cid")
+                if cid == "-3035":
+                    return Resp({"ret": 0, "list": [
+                        [-3035, "TienTuyen", [
+                            [97376, "席定韩", 0, "", 0, 0, 1500, 0, 0, 100, 0, 501]
+                        ]]
+                    ]})
+                return Resp({"ret": 0, "list": []})
+            return Resp(None)
+
+    gw = GatewayClient(53, CampSession(), sleep=lambda s: None)
+    r = fetch_roster(gw)
+    army = r.army_of(97376)
+    assert army is not None, "Army of martial general in camp should not be None"
+    assert (army.infantry, army.cavalry, army.archers) == (0, 1500, 0)
+    assert army.total == 1500
+

@@ -656,6 +656,85 @@ def test_building_task_all_blocked_by_261_returns_blocked():
     assert len(task.skipped_pids) == 2
 
 
+def test_building_task_deferred_queue_tests_errors_261_and_245_last():
+    logs = []
+    # Lần 1: pid 1 gặp 261, pid 2 gặp 245, pid 3 thành công (ret 0)
+    # Lần 2: pid 4 bình thường thành công, pid 1 được kiểm tra cuối và thành công, pid 2 vẫn 245
+    opt_responses = [
+        {"ret": 261},  # Lần 1: pid 1 (bị 261 -> hoãn)
+        {"ret": 245},  # Lần 1: pid 2 (bị 245 -> hoãn)
+        {"ret": 0},    # Lần 1: pid 3 (thành công -> đủ 1 slot -> break)
+        {"ret": 261},  # Lần 2: pid 4 (bình thường, duyệt trước, bị 261)
+        {"ret": 0},    # Lần 2: pid 1 (hoãn từ lần 1, duyệt sau, thành công!)
+    ]
+    city_infos = [
+        [1, 1, "Quan Phủ", 5, 0, 0],
+        [2, 2, "Tường Thành", 5, 0, 0],
+        [3, 3, "Nhà Dân", 5, 0, 0],
+        [4, 4, "Kho", 5, 0, 0],
+    ]
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {"ret": 0, "infos": city_infos},
+            "OPT.ashx?id=65": opt_responses,
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=10, name="Quan Phủ"),
+        BuildingPlan(pid=2, gid=2, target_level=10, name="Tường Thành"),
+        BuildingPlan(pid=3, gid=3, target_level=10, name="Nhà Dân"),
+        BuildingPlan(pid=4, gid=4, target_level=10, name="Kho"),
+    ]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        max_slots=1,
+        auto_comfort=False,
+        auto_boost=False,
+        notify=logs.append,
+    )
+
+    # Vòng lặp 1:
+    res1 = task.run_once()
+    assert res1 == "upgrading"
+    assert task.deferred_pids == {1, 2}
+    calls_cycle1 = [d["pid"] for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert calls_cycle1 == ["1", "2", "3"]
+
+    # Vòng lặp 2: (pid 3 đã lên cấp 10 tức là đã xong)
+    city_infos[2][3] = 10  # pid 3 level = 10 -> completed
+    server.calls.clear()
+
+    res2 = task.run_once()
+    assert res2 == "upgrading"
+    calls_cycle2 = [d["pid"] for k, d in server.calls if k == "OPT.ashx?id=65"]
+    # Kỳ vọng: pid 4 (bình thường) được duyệt trước tiên, sau đó mới tới pid 1 (hoãn)
+    assert calls_cycle2 == ["4", "1"]
+    # pid 1 nâng cấp thành công nên được gỡ khỏi deferred_pids, pid 4 bị 261 nên vào deferred_pids
+    assert 1 not in task.deferred_pids
+    assert task.deferred_pids == {2, 4}
+    assert any("Slot 1 (Quan Phủ) đã được gỡ hoãn" in m for m in logs)
+
+
+def test_building_task_deferred_cleared_on_target_reached_and_reset():
+    gw = GatewayClient(57, FakeServer(), sleep=lambda s: None)
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=5)],
+    )
+    task.deferred_pids.add(1)
+    task.deferred_pids.add(2)
+    assert len(task.deferred_pids) == 2
+
+    task.reset_deferred()
+    assert len(task.deferred_pids) == 0
+
+
+
 
 
 

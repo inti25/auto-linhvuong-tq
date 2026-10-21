@@ -115,10 +115,15 @@ class BuildingTask:
         self.auto_fallback_box = auto_fallback_box
         self.notify = notify
         self.skipped_pids: set[int] = set()
+        self.deferred_pids: set[int] = set()
 
     def reset_skipped(self):
         """Xóa danh sách các slot công trình tạm thời bị bỏ qua."""
         self.skipped_pids.clear()
+
+    def reset_deferred(self):
+        """Xóa danh sách các slot công trình bị hoãn kiểm tra (mã lỗi 261, 245)."""
+        self.deferred_pids.clear()
 
     def _log(self, msg: str):
         if self.city_name:
@@ -370,12 +375,18 @@ class BuildingTask:
         has_eligible_candidate = False
         last_error = None
 
-        for plan in self.plans:
+        # Sắp xếp danh sách duyệt: Công trình bình thường duyệt trước, các ô lỗi 261/245 kiểm tra sau cùng
+        normal_plans = [p for p in self.plans if p.pid not in self.deferred_pids]
+        deferred_plans = [p for p in self.plans if p.pid in self.deferred_pids]
+        ordered_plans = normal_plans + deferred_plans
+
+        for plan in ordered_plans:
             if not getattr(plan, "enabled", True):
                 continue
             cur = real_buildings.get(plan.pid, {"gid": plan.gid, "level": 0})
             cur_lvl = cur["level"]
             if cur_lvl == plan.target_level:
+                self.deferred_pids.discard(plan.pid)
                 continue
 
             has_uncompleted = True
@@ -409,6 +420,9 @@ class BuildingTask:
                 raise CaptchaRequired()
 
             if ret == RET_OK:
+                if plan.pid in self.deferred_pids:
+                    self._log(f"🎉 Slot {plan.pid} ({bname}) đã được gỡ hoãn và {action_verb} thành công!")
+                    self.deferred_pids.discard(plan.pid)
                 self._log(f"{icon} Đang {action_verb} slot {plan.pid} ({bname}) từ cấp {cur_lvl} {'lên' if action_type == 1 else 'xuống'} {next_lvl}")
                 if self.auto_speedup:
                     self.speedup_slot(1)
@@ -417,14 +431,16 @@ class BuildingTask:
                 if processed_count >= available_slots:
                     break
             elif ret == 261:
-                self._log(f"⚠️ {action_verb.capitalize()} slot {plan.pid} ({bname}) bị chặn (mã 261). Bỏ qua, nâng cấp công trình khác...")
+                self._log(f"⚠️ {action_verb.capitalize()} slot {plan.pid} ({bname}) bị chặn (mã 261). Bỏ qua, nâng cấp công trình khác (hoãn kiểm tra cuối ở vòng sau)...")
                 self.skipped_pids.add(plan.pid)
+                self.deferred_pids.add(plan.pid)
                 if not last_error:
                     last_error = "blocked_error_261"
                 continue
             elif ret == 245:
-                self._log(f"⚠️ Chưa đủ điều kiện tiên quyết để {action_verb} slot {plan.pid} ({bname}) (mã 245). Bỏ qua, nâng cấp công trình khác...")
+                self._log(f"⚠️ Chưa đủ điều kiện tiên quyết để {action_verb} slot {plan.pid} ({bname}) (mã 245). Bỏ qua, nâng cấp công trình khác (hoãn kiểm tra cuối ở vòng sau)...")
                 self.skipped_pids.add(plan.pid)
+                self.deferred_pids.add(plan.pid)
                 if not last_error:
                     last_error = "prerequisites_not_met"
                 continue
@@ -439,11 +455,13 @@ class BuildingTask:
                     self._log(f"📦 Không đủ tài nguyên để {action_verb} slot {plan.pid} ({bname}), tiến hành mở đạo cụ...")
                     retry_ok = self._try_open_box_and_retry(plan, cur_lvl, action_type)
                     if retry_ok:
+                        self.deferred_pids.discard(plan.pid)
                         processed_count += 1
                         busy_pids.add(plan.pid)
                         if processed_count >= available_slots:
                             break
                         continue
+
                     else:
                         last_error = "insufficient_resources"
                         break

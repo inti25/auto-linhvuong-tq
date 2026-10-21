@@ -136,6 +136,11 @@ _Avoid_: Giảm cấp, downgrade
 Quy trình hạ cấp công trình liên tục về cấp 0 để xóa bỏ hoàn toàn công trình khỏi ô đất (`pid`), giải phóng vị trí cho việc tái quy hoạch kiến trúc mới.
 _Avoid_: Đập nhà, phá hủy, demolish
 
+**Hoãn Kiểm Tra Công Trình**:
+Cơ chế tự động đưa các công trình gặp mã lỗi 261 (bị chặn) hoặc 245 (chưa đủ điều kiện tiên quyết) xuống cuối hàng đợi duyệt trong các vòng lặp tiếp theo, ưu tiên thi công các công trình khác trước và tự động giải phóng khỏi danh sách hoãn ngay khi thi công thành công.
+_Avoid_: Bỏ qua vĩnh viễn, skip queue, lặp lại lỗi đầu vòng
+
+
 **Đạo Cụ Tài Nguyên**:
 Vật phẩm dạng hòm/rương/đỉnh trong túi đồ của người chơi, khi mở sẽ cung cấp một lượng lớn tài nguyên xây dựng (Gỗ, Đá, Sắt, Lúa). Điển hình: Dân Sinh Bảo Đỉnh (ID: 24), Dân Sinh Chi Độc (ID: 16), Dân Sinh Chi Hạp (ID: 11), Dân Sinh Chi Nang (ID: 1), Bạch Kim Tài Nguyên Lễ Hộp (ID: 35).
 _Avoid_: Hộp quà, bùa tài nguyên, resource chest

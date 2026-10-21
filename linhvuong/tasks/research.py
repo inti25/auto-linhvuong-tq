@@ -122,9 +122,12 @@ class ResearchTask:
 
     def get_current_tech_levels(self) -> dict[int, int]:
         """Lấy cấp độ hiện tại của 29 kỹ thuật tại viện Đại Học qua Build.ashx?id=2."""
+        # Chuyển focus thành thị trước khi đọc kiến trúc (bắt buộc trên server game thật)
+        self.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""})
+
         univ_pid = self.get_university_pid()
         if univ_pid is None:
-            univ_pid = 6  # Giá trị mặc định phổ biến
+            univ_pid = 6  # Fallback cho mock/test
 
         payload = {
             "pid": str(univ_pid),
@@ -137,6 +140,9 @@ class ResearchTask:
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
+        if ret != RET_OK:
+            self.notify(f"⚠️ Thành ID={self.city_id} không lấy được kỹ thuật (mã {ret}, kiểm tra lại Viện Đại Học).")
+            return {}
 
         levels_map = {}
         for item in resp.get("list", []):
@@ -173,56 +179,64 @@ class ResearchTask:
 
         # 2. Lấy cấp độ các kỹ thuật hiện tại
         current_levels = self.get_current_tech_levels()
+        if not current_levels:
+            self.notify(f"⚠️ Không đọc được thông tin kỹ thuật từ thành ID={self.city_id} (kiểm tra lại Viện Đại Học).")
+            return "tech_read_failed"
 
-        # 3. Lọc theo thứ tự ưu tiên tìm kỹ thuật chưa đạt cấp mục tiêu
-        target_tech: Optional[TechPlan] = None
-        current_level = 0
+        # 3. Lọc theo thứ tự ưu tiên các kỹ thuật chưa đạt cấp mục tiêu
+        eligible_plans = []
         for plan in self.plans:
             if not getattr(plan, "enabled", True):
                 continue
             cur_lvl = current_levels.get(plan.tech_id, 0)
             if cur_lvl < plan.target_level:
-                target_tech = plan
-                current_level = cur_lvl
-                break
+                eligible_plans.append((plan, cur_lvl))
 
-        if target_tech is None:
+        if not eligible_plans:
             return "all_techs_completed"
 
         # 4. Chuyển thành thị focus về Thành Nghiên Cứu (City.ashx?id=50)
         self.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""})
 
-        # 5. Gửi lệnh nghiên cứu kỹ thuật qua OPT.ashx?id=44
-        resp_research = self.gateway.call(
-            "OPT.ashx",
-            44,
-            {
-                "techid": str(target_tech.tech_id),
-                "tid": str(self.city_id),
-                "_": "",
-            },
-        ) or {}
-        ret = resp_research.get("ret", RET_OK)
-        if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
-            raise CaptchaRequired()
+        # 5. Gửi lệnh nghiên cứu kỹ thuật qua OPT.ashx?id=44, tự động bỏ qua nếu mã 245/261
+        last_ret = RET_OK
+        for target_tech, current_level in eligible_plans:
+            resp_research = self.gateway.call(
+                "OPT.ashx",
+                44,
+                {
+                    "techid": str(target_tech.tech_id),
+                    "tid": str(self.city_id),
+                    "_": "",
+                },
+            ) or {}
+            ret = resp_research.get("ret", RET_OK)
+            last_ret = ret
+            if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+                raise CaptchaRequired()
 
-        if ret == RET_OK:
-            self.notify(f"🔬 Bắt đầu nghiên cứu: {target_tech.name} (từ cấp {current_level} lên {current_level + 1})")
-            if self.auto_art_of_war:
-                self.use_art_of_war()
-            return "researching"
+            if ret == RET_OK:
+                self.notify(f"🔬 Bắt đầu nghiên cứu: {target_tech.name} (từ cấp {current_level} lên {current_level + 1})")
+                if self.auto_art_of_war:
+                    self.use_art_of_war()
+                return "researching"
 
-        if ret == 90:
-            self.notify("⚠️ Viện Đại Học hiện đang bận nghiên cứu kỹ thuật khác.")
-            return "research_busy"
+            if ret == 90:
+                self.notify("⚠️ Viện Đại Học hiện đang bận nghiên cứu kỹ thuật khác.")
+                return "research_busy"
 
-        if ret in (32, 37):
-            self.notify(f"⚠️ Không đủ tài nguyên để nghiên cứu {target_tech.name}")
-            return "insufficient_resources"
+            if ret in (245, 261):
+                reason = "chưa đủ điều kiện tiên quyết" if ret == 245 else "bị chặn"
+                self.notify(f"⚠️ {target_tech.name} {reason} (mã {ret}). Bỏ qua, thử kỹ thuật tiếp theo...")
+                continue
 
-        if ret == 245:
-            self.notify(f"⚠️ Chưa đủ điều kiện tiên quyết để nghiên cứu {target_tech.name}")
-            return "prerequisites_not_met"
+            if ret in (32, 37):
+                self.notify(f"⚠️ Không đủ tài nguyên để nghiên cứu {target_tech.name}")
+                return "insufficient_resources"
 
-        self.notify(f"❌ Nghiên cứu {target_tech.name} thất bại (mã {ret})")
-        return f"research_failed:{ret}"
+            self.notify(f"❌ Nghiên cứu {target_tech.name} thất bại (mã {ret})")
+            return f"research_failed:{ret}"
+
+        if last_ret in (245, 261):
+            return "prerequisites_not_met" if last_ret == 245 else f"blocked_error_{last_ret}"
+        return f"research_failed:{last_ret}"

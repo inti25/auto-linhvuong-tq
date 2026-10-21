@@ -1505,6 +1505,11 @@ class Dashboard(tk.Tk):
         self.bld_tree.column("current_lvl", width=52, anchor="center")
         self.bld_tree.column("target_lvl", width=55, anchor="center")
 
+        # Cấu hình màu nền phân biệt Nâng cấp (xanh trầm), Hạ cấp (đỏ trầm) và Hoàn thành
+        self.bld_tree.tag_configure("upgrade", background="#173322", foreground="#86efac")
+        self.bld_tree.tag_configure("downgrade", background="#3a1d1d", foreground="#fca5a5")
+        self.bld_tree.tag_configure("completed", background=CARD, foreground=MUTED)
+
         self.bld_tree.pack(fill="both", expand=True, padx=4, pady=4)
         self.bld_tree.bind("<ButtonRelease-1>", self._on_bld_tree_click)
         self._populate_default_buildings()
@@ -1518,6 +1523,26 @@ class Dashboard(tk.Tk):
     def _append_bld_log(self, msg: str):
         self.bld_log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
         self.bld_log_text.see("end")
+
+    def _get_bld_row_tag(self, cur_lvl: int, target_lvl: int) -> str:
+        if cur_lvl < target_lvl:
+            return "upgrade"
+        elif cur_lvl > target_lvl:
+            return "downgrade"
+        return "completed"
+
+    def _update_bld_tree_row_style(self, iid: str):
+        if not hasattr(self, "bld_tree") or not self.bld_tree.exists(iid):
+            return
+        vals = self.bld_tree.item(iid, "values")
+        if len(vals) >= 5:
+            try:
+                cur_lvl = int(vals[3])
+                target_lvl = int(vals[4])
+                tag = self._get_bld_row_tag(cur_lvl, target_lvl)
+                self.bld_tree.item(iid, tags=(tag,))
+            except (ValueError, TypeError):
+                pass
 
     def _populate_default_buildings(self):
         self.bld_tree.delete(*self.bld_tree.get_children())
@@ -1540,7 +1565,8 @@ class Dashboard(tk.Tk):
             (16, 16, "校场 - Binh Trường", 20),
         ]
         for pid, gid, name, target in default_plots:
-            self.bld_tree.insert("", "end", iid=str(pid), text=name, values=("☑", pid, gid, 0, target))
+            tag = self._get_bld_row_tag(0, target)
+            self.bld_tree.insert("", "end", iid=str(pid), text=name, values=("☑", pid, gid, 0, target), tags=(tag,))
 
     def _move_bld_up(self):
         sel = self.bld_tree.selection()
@@ -1584,6 +1610,7 @@ class Dashboard(tk.Tk):
             vals = list(self.bld_tree.item(iid, "values"))
             vals[4] = lvl
             self.bld_tree.item(iid, values=vals)
+            self._update_bld_tree_row_style(iid)
 
     def _set_bld_target_lvl_all(self):
         try:
@@ -1599,8 +1626,10 @@ class Dashboard(tk.Tk):
             if len(vals) > 4:
                 vals[4] = lvl
                 self.bld_tree.item(iid, values=vals)
+                self._update_bld_tree_row_style(iid)
                 count += 1
         self._append_bld_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} công trình.")
+
 
     def _on_bld_tree_click(self, event):
         item = self.bld_tree.identify_row(event.y)
@@ -1700,12 +1729,14 @@ class Dashboard(tk.Tk):
             pid = int(p.get("pid", 1))
             cur_lvl = int(p.get("cur_lvl", 0))
             target_lvl = int(p.get("target_level", 20))
+            tag = self._get_bld_row_tag(cur_lvl, target_lvl)
             self.bld_tree.insert(
                 "",
                 "end",
                 iid=str(pid),
                 text=name,
                 values=(en, pid, gid, cur_lvl, target_lvl),
+                tags=(tag,),
             )
 
     def _switch_bld_base(self, new_base_id: int):
@@ -2114,7 +2145,10 @@ class Dashboard(tk.Tk):
 
     def _fetch_city_techs_thread(self, city_id: int):
         try:
-            # 1. Tìm Đại học điện
+            # 1. Chuyển focus thành thị về city_id (bắt buộc trên server game thật)
+            self.gateway.call("City.ashx", 50, {"tid": str(city_id), "_": ""})
+
+            # 2. Tìm Đại học điện trong thành này
             resp_bld = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
             b_list = resp_bld.get("infos") or resp_bld.get("buildings") or []
             univ_pid = None
@@ -2126,11 +2160,53 @@ class Dashboard(tk.Tk):
                     univ_pid = int(b.get("pid", 0))
                     break
 
+            # Nếu thành hiện tại không có Viện Đại Học, tự động tìm thành có Đại Học
             if univ_pid is None:
-                univ_pid = 6
+                found_city = None
+                for c in (self.roster.cities if self.roster.cities else []):
+                    if c.id == city_id:
+                        continue
+                    r = self.gateway.call("City.ashx", 5, {"tid": str(c.id), "_": ""}) or {}
+                    for b in r.get("infos") or []:
+                        if len(b) >= 2 and int(b[1]) == 6:
+                            found_city = c
+                            break
+                    if found_city:
+                        break
 
-            # 2. Lấy cấp độ 29 kỹ thuật
+                if found_city:
+                    self.after(
+                        0,
+                        lambda: self._append_logis_log(
+                            f"ℹ️ Thành được chọn không có Đại Học Điện. Tự động chuyển sang thành '{found_city.name}' (có Đại Học Điện)..."
+                        ),
+                    )
+                    def update_combo_and_refetch():
+                        city_items = [c.display_name for c in self.roster.cities]
+                        for idx, item in enumerate(city_items):
+                            if str(found_city.id) in item:
+                                self.res_city_combo.current(idx)
+                                break
+                        threading.Thread(target=self._fetch_city_techs_thread, args=(found_city.id,), daemon=True).start()
+
+                    self.after(0, update_combo_and_refetch)
+                    return
+                else:
+                    self.after(
+                        0,
+                        lambda: self._append_logis_log(
+                            "⚠️ Không tìm thấy Viện Đại Học (Đại Học Điện) ở bất kỳ thành nào!"
+                        ),
+                    )
+                    return
+
+            # 3. Lấy cấp độ 29 kỹ thuật
             resp_tech = self.gateway.call("Build.ashx", 2, {"pid": str(univ_pid), "gid": "6", "tab": "1", "tid": str(city_id), "_": ""}) or {}
+            ret = resp_tech.get("ret", 0)
+            if ret != 0:
+                self.after(0, lambda: self._append_logis_log(f"⚠️ Server trả về mã lỗi {ret} khi đọc kỹ thuật."))
+                return
+
             levels = {}
             for item in resp_tech.get("list", []):
                 if isinstance(item, dict):
@@ -2142,6 +2218,12 @@ class Dashboard(tk.Tk):
                         pass
 
             self.after(0, self._update_city_techs_ui, levels)
+            curr = resp_tech.get("current")
+            if curr and isinstance(curr, (list, tuple)) and len(curr) >= 5:
+                t_name, cur_l, next_l, t_left = curr[1], curr[2], curr[3], curr[4]
+                self.after(0, lambda: self._append_logis_log(f"🔬 Đang nghiên cứu: {t_name} (Cấp {cur_l} ➔ {next_l}), còn {t_left}s."))
+            elif levels:
+                self.after(0, lambda: self._append_logis_log(f"✅ Đã tải cấp độ {len(levels)} kỹ thuật thành công."))
         except Exception as e:
             self.after(0, lambda: self._append_logis_log(f"❌ Lỗi tải kỹ thuật thành: {e}"))
 

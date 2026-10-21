@@ -163,24 +163,11 @@ def fetch_roster(gateway: GatewayClient) -> Roster:
                     )
         roster.cities = list(cities_map.values())
 
-    # 3. Lấy thông tin chi tiết biên chế, sĩ khí đội quân và thời gian nâng sĩ khí (API 76)
-    morale_map = {}
-    upgrading_map = {}
-    for city in roster.cities:
-        resp = gateway.call("Common.ashx", 76, {"cid": str(city.id)}) or {}
-        for entry in resp.get("list", []):
-            for g in entry[2]:
-                gid = int(g[0])
-                roster._armies[gid] = Army(int(g[5]), int(g[6]), int(g[7]))
-                if len(g) > 9:
-                    morale_map[gid] = int(g[9])
-                if len(g) > 10:
-                    up_t = int(g[10])
-                    upgrading_map[gid] = up_t
-                    roster._upgrading_time[gid] = up_t
+    # 3. Quét danh sách Văn quan (type=1) và Võ tướng (type=2) từ Common.ashx?id=32
+    raw_generals_by_cid: dict[int, list[tuple[int, list]]] = {}
+    martial_cids: set[int] = set()
+    city_ids = set(cities_map.keys())
 
-    # 4. Quét danh sách Văn quan (type=1) và Võ tướng (type=2) từ Common.ashx?id=32
-    city_ids = {c.id for c in roster.cities}
     for type_ in (1, 2):
         resp = gateway.call("Common.ashx", 32, {"type": str(type_)}) or {}
         for entry in resp.get("list", []):
@@ -202,22 +189,55 @@ def fetch_roster(gateway: GatewayClient) -> Roster:
                     )
                 city_ids.add(cid)
 
-            for g in entry[4]:
-                gid = int(g[0])
-                morale_val = morale_map.get(gid, int(g[7]))
-                roster._generals.setdefault(cid, []).append(
-                    General(
-                        id=gid,
-                        name=str(g[1]),
-                        role=_ROLES.get(type_, "vo"),
-                        level=int(g[6]),
-                        morale=morale_val,
-                        stamina=int(g[8]),
-                        stamina_max=int(g[9]),
-                        status=int(g[5]) if len(g) > 5 else 0,
-                        upgrading_time=upgrading_map.get(gid, 0),
-                    )
+            g_entries = entry[4] if len(entry) > 4 else []
+            if g_entries and type_ == 2:
+                martial_cids.add(cid)
+            for g in g_entries:
+                raw_generals_by_cid.setdefault(cid, []).append((type_, g))
+
+    # 4. Lấy thông tin chi tiết biên chế, sĩ khí đội quân và thời gian nâng sĩ khí (API 76)
+    # Bao gồm cả Thành và Doanh trại (đặc biệt là các căn cứ có võ tướng)
+    morale_map = {}
+    upgrading_map = {}
+    all_bases = list(cities_map.values()) + list(camps_map.values())
+    bases_to_query = [b for b in all_bases if not martial_cids or b.id in martial_cids or b.is_camp]
+
+    for base in bases_to_query:
+        resp = gateway.call("Common.ashx", 76, {"cid": str(base.id)}) or {}
+        for entry in resp.get("list", []):
+            if len(entry) > 2 and isinstance(entry[2], list):
+                for g in entry[2]:
+                    gid = int(g[0])
+                    roster._armies[gid] = Army(int(g[5]), int(g[6]), int(g[7]))
+                    if len(g) > 9:
+                        morale_map[gid] = int(g[9])
+                    if len(g) > 10:
+                        up_t = int(g[10])
+                        upgrading_map[gid] = up_t
+                        roster._upgrading_time[gid] = up_t
+
+    # 5. Khởi tạo đối tượng General hoàn chỉnh
+    for cid, glist in raw_generals_by_cid.items():
+        for type_, g in glist:
+            gid = int(g[0])
+            morale_val = morale_map.get(gid, int(g[7]))
+            # Nếu là võ tướng mà chưa có trong API 76, khởi tạo Army(0, 0, 0)
+            if type_ == 2 and gid not in roster._armies:
+                roster._armies[gid] = Army(0, 0, 0)
+
+            roster._generals.setdefault(cid, []).append(
+                General(
+                    id=gid,
+                    name=str(g[1]),
+                    role=_ROLES.get(type_, "vo"),
+                    level=int(g[6]),
+                    morale=morale_val,
+                    stamina=int(g[8]),
+                    stamina_max=int(g[9]),
+                    status=int(g[5]) if len(g) > 5 else 0,
+                    upgrading_time=upgrading_map.get(gid, 0),
                 )
+            )
 
     roster.cities = list(cities_map.values())
     roster.camps = list(camps_map.values())
