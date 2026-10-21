@@ -5,7 +5,7 @@ scratch
 __pycache__/
 *.py[cod]
 *$py.class
-
+gui_settings.json
 # Virtual environments
 .venv/
 venv/
