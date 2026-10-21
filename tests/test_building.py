@@ -387,4 +387,156 @@ def test_building_task_mixed_upgrade_and_downgrade_priority_order():
     assert opt_calls[1]["type"] == "2"
 
 
+def test_building_task_auto_opens_box_on_insufficient_resources_and_retries_successfully():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [[1, 1, "Quan Phủ", 10, 0, 0]],
+            },
+            "OPT.ashx?id=65": [{"ret": 32}, {"ret": 0}],  # Lần 1: thiếu TN (32), sau khi mở rương -> thành công (0)
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=48": {"ret": 0},  # Mở rương thành công
+            "City.ashx?id=20": {"ret": 0, "data": {"max_storage": 1000000, "wood": 1000, "stone": 1000, "iron": 1000, "food": 1000}},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=12)]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        auto_comfort=False,
+        auto_boost=False,
+        auto_open_box=True,
+        box_id=24,
+        max_boxes_per_round=5,
+    )
+    out = task.run_once()
+    assert out == "upgrading"
+
+    # Kiểm tra gọi City.ashx?id=50 với tid=101
+    switch_calls = [d for k, d in server.calls if k == "City.ashx?id=50"]
+    assert len(switch_calls) == 1
+    assert switch_calls[0]["tid"] == "101"
+
+    # Kiểm tra gọi Common.ashx?id=48 mở Dân Sinh Bảo Đỉnh (lBoxID=24)
+    box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
+    assert len(box_calls) == 1
+    assert box_calls[0]["lBoxID"] == "24"
+
+    # Kiểm tra gọi OPT.ashx?id=65 2 lần (lần 1 bị 32, lần 2 thành công)
+    upgrade_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(upgrade_calls) == 2
+
+
+def test_building_task_auto_box_fallback_when_out_of_stock_10014():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [[1, 1, "Quan Phủ", 10, 0, 0]],
+            },
+            "OPT.ashx?id=65": [{"ret": 37}, {"ret": 0}],  # Lần 1: thiếu TN (37), sau khi mở rương nhỏ -> thành công (0)
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=48": [{"ret": 10014}, {"ret": 0}],  # Hết rương 24 (10014), chuyển rương 16 thành công (0)
+            "City.ashx?id=20": {"ret": 0, "data": {"max_storage": 1000000, "wood": 1000, "stone": 1000, "iron": 1000, "food": 1000}},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=12)]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        auto_comfort=False,
+        auto_boost=False,
+        auto_open_box=True,
+        box_id=24,
+        auto_fallback_box=True,
+    )
+    out = task.run_once()
+    assert out == "upgrading"
+
+    box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
+    assert len(box_calls) == 2
+    assert box_calls[0]["lBoxID"] == "24"
+    assert box_calls[1]["lBoxID"] == "16"
+
+
+def test_building_task_stops_when_max_boxes_reached():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [[1, 1, "Quan Phủ", 10, 0, 0]],
+            },
+            "OPT.ashx?id=65": {"ret": 32},  # Luôn thiếu tài nguyên
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=48": {"ret": 0},  # Mở rương thành công
+            "City.ashx?id=20": {"ret": 0, "data": {"max_storage": 1000000, "wood": 1000, "stone": 1000, "iron": 1000, "food": 1000}},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=12)]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        auto_comfort=False,
+        auto_boost=False,
+        auto_open_box=True,
+        box_id=24,
+        max_boxes_per_round=3,
+        auto_fallback_box=False,
+    )
+    out = task.run_once()
+    assert out == "insufficient_resources"
+
+    # Chỉ mở tối đa 3 lần
+    box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
+    assert len(box_calls) == 3
+
+
+def test_building_task_stops_opening_when_storage_full():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [[1, 1, "Quan Phủ", 10, 0, 0]],
+            },
+            "OPT.ashx?id=65": {"ret": 32},  # Thiếu tài nguyên
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=48": {"ret": 0},
+            "City.ashx?id=20": {
+                "ret": 0,
+                "data": {"max_storage": 500000, "wood": 500000, "stone": 500000, "iron": 500000, "food": 500000},  # Đầy kho
+            },
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=12)]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        auto_comfort=False,
+        auto_boost=False,
+        auto_open_box=True,
+        box_id=24,
+        max_boxes_per_round=5,
+    )
+    out = task.run_once()
+    assert out == "insufficient_resources"
+
+    # Dừng sau 1 lần mở vì phát hiện kho đã đầy
+    box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
+    assert len(box_calls) == 1
+
+
+
 

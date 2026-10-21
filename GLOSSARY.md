@@ -136,6 +136,14 @@ _Avoid_: Giảm cấp, downgrade
 Quy trình hạ cấp công trình liên tục về cấp 0 để xóa bỏ hoàn toàn công trình khỏi ô đất (`pid`), giải phóng vị trí cho việc tái quy hoạch kiến trúc mới.
 _Avoid_: Đập nhà, phá hủy, demolish
 
+**Đạo Cụ Tài Nguyên**:
+Vật phẩm dạng hòm/rương/đỉnh trong túi đồ của người chơi, khi mở sẽ cung cấp một lượng lớn tài nguyên xây dựng (Gỗ, Đá, Sắt, Lúa). Điển hình: Dân Sinh Bảo Đỉnh (ID: 24), Dân Sinh Chi Độc (ID: 16), Dân Sinh Chi Hạp (ID: 11), Dân Sinh Chi Nang (ID: 1), Bạch Kim Tài Nguyên Lễ Hộp (ID: 35).
+_Avoid_: Hộp quà, bùa tài nguyên, resource chest
+
+**Tự Động Mở Rương**:
+Cơ chế tự động gửi lệnh mở đạo cụ tài nguyên qua API `Common.ashx?id=48` (`lBoxID`) ngay khi phát hiện căn cứ không đủ tài nguyên để tiến hành nâng cấp hoặc hạ cấp công trình.
+_Avoid_: Cắn rương, auto open box
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

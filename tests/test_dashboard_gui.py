@@ -153,6 +153,15 @@ def test_dashboard_building_tree_interactive_controls():
         dash._set_bld_target_lvl_all()
         for iid in dash.bld_tree.get_children():
             assert int(dash.bld_tree.item(iid, "values")[4]) == 30
+
+        # Kiểm tra các điều khiển tự động mở đạo cụ tài nguyên
+        assert hasattr(dash, "bld_open_box_var")
+        assert dash.bld_open_box_var.get() is False
+        assert hasattr(dash, "bld_box_combo")
+        assert len(dash.bld_box_combo["values"]) == 5
+        assert "24: 民生之鼎 - Dân Sinh Bảo Đỉnh" in dash.bld_box_combo.get()
+        assert dash.bld_box_max_var.get() == "5"
+        assert dash.bld_box_fallback_var.get() is True
     finally:
         dash.destroy()
 
@@ -217,6 +226,11 @@ def test_dashboard_unified_profile_export_and_import(tmp_path):
         dash.tp_min_army_var.set("7500")
         dash.gd_radius_var.set("9")
 
+        dash.bld_open_box_var.set(True)
+        dash.bld_box_combo.current(1)
+        dash.bld_box_max_var.set("8")
+        dash.bld_box_fallback_var.set(False)
+
         # Lưu hồ sơ tổng hợp
         prof_file = tmp_path / "custom_profile.json"
         saved_path = dash._save_unified_profile(prof_file)
@@ -227,6 +241,10 @@ def test_dashboard_unified_profile_export_and_import(tmp_path):
         dash.bld_speedup_var.set(False)
         dash.bld_target_lvl_var.set("10")
         dash._set_bld_target_lvl_all()
+        dash.bld_open_box_var.set(False)
+        dash.bld_box_combo.current(0)
+        dash.bld_box_max_var.set("2")
+        dash.bld_box_fallback_var.set(True)
         dash.res_art_var.set(False)
         dash.tp_min_army_var.set("1000")
         dash.gd_radius_var.set("3")
@@ -240,6 +258,10 @@ def test_dashboard_unified_profile_export_and_import(tmp_path):
         # Kiểm tra dữ liệu được khôi phục chính xác
         assert dash.bld_slots_combo.get() == "2"
         assert dash.bld_speedup_var.get() is True
+        assert dash.bld_open_box_var.get() is True
+        assert dash.bld_box_combo.current() == 1
+        assert dash.bld_box_max_var.get() == "8"
+        assert dash.bld_box_fallback_var.get() is False
         for iid in dash.bld_tree.get_children():
             assert int(dash.bld_tree.item(iid, "values")[4]) == 27
 

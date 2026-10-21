@@ -449,6 +449,10 @@ class Dashboard(tk.Tk):
                 "auto_speedup": bool(self.bld_speedup_var.get()) if hasattr(self, "bld_speedup_var") else False,
                 "auto_boost": bool(self.bld_boost_var.get()) if hasattr(self, "bld_boost_var") else True,
                 "auto_comfort": bool(self.bld_comfort_var.get()) if hasattr(self, "bld_comfort_var") else True,
+                "auto_open_box": bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False,
+                "box_type_idx": self.bld_box_combo.current() if hasattr(self, "bld_box_combo") else 0,
+                "box_max": self.bld_box_max_var.get() if hasattr(self, "bld_box_max_var") else "5",
+                "auto_fallback_box": bool(self.bld_box_fallback_var.get()) if hasattr(self, "bld_box_fallback_var") else True,
                 "plans": [],
             },
             "research": {
@@ -519,7 +523,7 @@ class Dashboard(tk.Tk):
             for iid in self.res_tree.get_children(""):
                 name = self.res_tree.item(iid, "text")
                 vals = self.res_tree.item(iid, "values")
-                if len(vals) >= 3:
+                if len(vals) >= 4:
                     profile["research"]["techs"].append({
                         "id": int(vals[1]),
                         "target_level": int(vals[2]),
@@ -547,6 +551,19 @@ class Dashboard(tk.Tk):
                 self.bld_boost_var.set(bool(bld_data["auto_boost"]))
             if hasattr(self, "bld_comfort_var") and "auto_comfort" in bld_data:
                 self.bld_comfort_var.set(bool(bld_data["auto_comfort"]))
+            if hasattr(self, "bld_open_box_var") and "auto_open_box" in bld_data:
+                self.bld_open_box_var.set(bool(bld_data["auto_open_box"]))
+            if hasattr(self, "bld_box_combo") and "box_type_idx" in bld_data:
+                try:
+                    idx = int(bld_data["box_type_idx"])
+                    if 0 <= idx < len(self.bld_box_combo["values"]):
+                        self.bld_box_combo.current(idx)
+                except (ValueError, IndexError):
+                    pass
+            if hasattr(self, "bld_box_max_var") and "box_max" in bld_data:
+                self.bld_box_max_var.set(str(bld_data["box_max"]))
+            if hasattr(self, "bld_box_fallback_var") and "auto_fallback_box" in bld_data:
+                self.bld_box_fallback_var.set(bool(bld_data["auto_fallback_box"]))
             plans_list = bld_data.get("plans")
             cities_data = bld_data.get("cities")
 
@@ -1292,6 +1309,50 @@ class Dashboard(tk.Tk):
         self.bld_start_btn = ttk.Button(top, text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton", command=self._toggle_building)
         self.bld_start_btn.pack(side="right", padx=4)
 
+        # Dòng phụ: Cấu hình Tự Động Mở Đạo Cụ Tài Nguyên khi thiếu hụt
+        sub_top = tk.Frame(parent, bg=BG)
+        sub_top.pack(fill="x", padx=4, pady=(0, 6))
+
+        self.bld_open_box_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            sub_top,
+            text="🎁 Mở đạo cụ khi thiếu TN",
+            variable=self.bld_open_box_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Label(sub_top, text="Loại rương:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 2))
+        self.bld_box_combo = ttk.Combobox(sub_top, state="readonly", width=30)
+        self.bld_box_combo["values"] = [
+            "24: 民生之鼎 - Dân Sinh Bảo Đỉnh",
+            "16: 民生之椟 - Dân Sinh Chi Độc",
+            "11: 民生之匣 - Dân Sinh Chi Hạp",
+            "1: 民生之囊 - Dân Sinh Chi Nang",
+            "35: 白金资源礼盒 - Bạch Kim Tài Nguyên Lễ Hộp",
+        ]
+        self.bld_box_combo.current(0)
+        self.bld_box_combo.pack(side="left", padx=(0, 8))
+
+        tk.Label(sub_top, text="Tối đa/đợt:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 2))
+        self.bld_box_max_var = tk.StringVar(value="5")
+        ttk.Entry(sub_top, textvariable=self.bld_box_max_var, width=4).pack(side="left", padx=(0, 8))
+
+        self.bld_box_fallback_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            sub_top,
+            text="🔄 Tự động hạ loại rương nếu hết (Đỉnh -> Độc -> Hạp -> Nang)",
+            variable=self.bld_box_fallback_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=4)
+
         # Body: 3 cột
         body = tk.Frame(parent, bg=BG)
         body.pack(fill="both", expand=True, pady=4)
@@ -1793,6 +1854,21 @@ class Dashboard(tk.Tk):
                     b = self.roster.base_by_id(cid)
                     if b:
                         base_name = b.name
+                box_id = 24
+                if hasattr(self, "bld_box_combo") and self.bld_box_combo.get():
+                    try:
+                        box_id = int(self.bld_box_combo.get().split(":")[0].strip())
+                    except (ValueError, IndexError):
+                        box_id = 24
+                max_boxes = 5
+                if hasattr(self, "bld_box_max_var") and self.bld_box_max_var.get():
+                    try:
+                        max_boxes = int(self.bld_box_max_var.get())
+                    except ValueError:
+                        max_boxes = 5
+
+                auto_open_box = bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False
+                auto_fallback_box = bool(self.bld_box_fallback_var.get()) if hasattr(self, "bld_box_fallback_var") else True
 
                 task = BuildingTask(
                     gateway=self.gateway,
@@ -1802,6 +1878,10 @@ class Dashboard(tk.Tk):
                     auto_speedup=self.bld_speedup_var.get(),
                     auto_boost=self.bld_boost_var.get(),
                     auto_comfort=self.bld_comfort_var.get(),
+                    auto_open_box=auto_open_box,
+                    box_id=box_id,
+                    max_boxes_per_round=max_boxes,
+                    auto_fallback_box=auto_fallback_box,
                     notify=lambda m, cname=base_name: self.after(0, self._append_bld_log, f"[{cname}] {m}"),
                     city_name=base_name,
                 )
