@@ -1,0 +1,23 @@
+{
+  "cities": {
+    "1001": {
+      "city_name": "Đô Thành",
+      "max_slots": 2,
+      "auto_speedup": false,
+      "auto_comfort": true,
+      "auto_boost": true,
+      "plans": [
+        { "pid": 1, "gid": 1, "target_level": 20, "name": "Thái Phủ" },
+        { "pid": 2, "gid": 2, "target_level": 15, "name": "Dân Cư" },
+        { "pid": 3, "gid": 3, "target_level": 15, "name": "Kho Lúa" },
+        { "pid": 4, "gid": 4, "target_level": 15, "name": "Kho Bạc" },
+        { "pid": 8, "gid": 8, "target_level": 20, "name": "Viện Đại Học" },
+        { "pid": 13, "gid": 13, "target_level": 20, "name": "Thành Tường" },
+        { "pid": 21, "gid": 21, "target_level": 20, "name": "Ruộng Lúa" },
+        { "pid": 22, "gid": 22, "target_level": 20, "name": "Tiệm Rèn" },
+        { "pid": 23, "gid": 23, "target_level": 20, "name": "Đào Đá" },
+        { "pid": 24, "gid": 24, "target_level": 20, "name": "Chặt Gỗ" }
+      ]
+    }
+  }
+}

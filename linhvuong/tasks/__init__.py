@@ -1,1 +1,20 @@
-"""Các nhiệm vụ tự động: Gọi Dân, Bình Man, Thảo Phạt."""
+"""Các nhiệm vụ tự động: Gọi Dân, Bình Man, Thảo Phạt, Xây Dựng, Nghiên Cứu, Hậu Cần."""
+
+from .binh_man import BinhMan
+from .building import BuildingPlan, BuildingTask
+from .goi_dan import GoiDan
+from .logistics import ArmyTransferOrder, LogisticsTask
+from .research import ResearchTask, TechPlan
+from .thao_phat import ThaoPhat
+
+__all__ = [
+    "BinhMan",
+    "BuildingPlan",
+    "BuildingTask",
+    "GoiDan",
+    "ArmyTransferOrder",
+    "LogisticsTask",
+    "ResearchTask",
+    "TechPlan",
+    "ThaoPhat",
+]

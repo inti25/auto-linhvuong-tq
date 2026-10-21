@@ -1,0 +1,17 @@
+{
+  "research_city_id": 1001,
+  "auto_art_of_war": false,
+  "plans": [
+    { "tech_id": 1, "target_level": 20, "name": "Làm thực" },
+    { "tech_id": 2, "target_level": 20, "name": "Rèn sắt" },
+    { "tech_id": 3, "target_level": 20, "name": "Đào đá" },
+    { "tech_id": 4, "target_level": 20, "name": "Chặt gỗ" },
+    { "tech_id": 7, "target_level": 10, "name": "Trận pháp" },
+    { "tech_id": 8, "target_level": 10, "name": "Bạt doanh" },
+    { "tech_id": 9, "target_level": 15, "name": "Thuần hóa ngựa" },
+    { "tech_id": 10, "target_level": 20, "name": "Dẫn binh" },
+    { "tech_id": 13, "target_level": 15, "name": "Luyện giáp" },
+    { "tech_id": 14, "target_level": 15, "name": "Rèn đao" },
+    { "tech_id": 15, "target_level": 15, "name": "Chế nỏ" }
+  ]
+}

@@ -1,6 +1,6 @@
 # LinhVuong
 
-Công cụ tự động hóa (bot) cho game web Linh Vương, xây lại từ phân tích ZMan.exe. Phạm vi v1: Gọi Dân, Thảo Phạt, Bình Man.
+Công cụ tự động hóa (bot) cho game web Linh Vương, xây lại từ phân tích ZMan.exe và ZBuild.exe. Phạm vi v1: Gọi Dân, Thảo Phạt, Bình Man, Xây Dựng, Nghiên Cứu Kỹ Thuật, Chuyển Quân, An Dân.
 
 ## Language
 
@@ -50,3 +50,32 @@ Không gian diễn ra trận giao chiến giữa quân ta và quân địch theo
 
 **Bắt sống BOSS**:
 Hành động giữ Tướng Chủ hoặc BOSS của quân địch sống đến cuối trận (sau khi tiêu diệt hết quân lính) để chiêu hàng hoặc bắt sống.
+
+**An Dân**:
+Hành động tế trời hoặc phát lương khôi phục lòng dân và sĩ khí thành trì, ngăn ngừa bạo loạn.
+_Avoid_: Khuyên dân, vỗ về
+
+**Kỹ Thuật Đại Học**:
+29 công nghệ nâng cấp tại viện Đại Học quyết định sản lượng tài nguyên và hiệu quả chiến đấu.
+_Avoid_: Công nghệ, tech
+
+**Binh Pháp**:
+Đạo cụ tiêu hao giúp hoàn tất hoặc rút ngắn tức thì thời gian nghiên cứu kỹ thuật Đại Học.
+_Avoid_: Sách tăng tốc
+
+**Chuyển Quân**:
+Hoạt động điều chuyển binh lính có sẵn giữa các thành trì của người chơi.
+_Avoid_: Vận chuyển lính, gửi quân
+
+**Hàng Đợi Xây Dựng**:
+Danh sách công trình đang được nâng cấp hoặc dỡ bỏ trong thành theo từng vị trí ô đất (`pid`).
+_Avoid_: Queue xây, slot xây
+
+**Ngưỡng An Toàn**:
+Ngưỡng thể lực hoặc quân số tối thiểu của tướng; khi chạm ngưỡng này, đạo quân tự rút về thành mẹ để trị thương và bổ sung quân lực.
+_Avoid_: Mức an toàn, return threshold
+
+**Thời Gian Đóng Băng**:
+Khoảng thời gian Trại Di Chuyển phải tạm dừng sau mỗi bước dời vị trí trước khi có thể dời tiếp hoặc xuất trận.
+_Avoid_: Cooldown dời trại, frozen time
+
