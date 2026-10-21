@@ -193,3 +193,99 @@ def test_dashboard_tech_tree_interactive_controls():
     finally:
         dash.destroy()
 
+
+def test_dashboard_unified_profile_export_and_import(tmp_path):
+    dash = safe_dashboard()
+    try:
+        # Cấu hình các giá trị test trên GUI
+        dash.bld_slots_combo.set("2")
+        dash.bld_speedup_var.set(True)
+        dash.bld_target_lvl_var.set("27")
+        dash._set_bld_target_lvl_all()
+
+        dash.res_art_var.set(True)
+        dash.res_target_lvl_var.set("18")
+        dash._set_res_target_lvl_all()
+
+        dash.tp_min_army_var.set("7500")
+        dash.gd_radius_var.set("9")
+
+        # Lưu hồ sơ tổng hợp
+        prof_file = tmp_path / "custom_profile.json"
+        saved_path = dash._save_unified_profile(prof_file)
+        assert saved_path.exists()
+
+        # Thay đổi dữ liệu trên GUI để kiểm tra nạp lại
+        dash.bld_slots_combo.set("1")
+        dash.bld_speedup_var.set(False)
+        dash.bld_target_lvl_var.set("10")
+        dash._set_bld_target_lvl_all()
+        dash.res_art_var.set(False)
+        dash.tp_min_army_var.set("1000")
+        dash.gd_radius_var.set("3")
+
+        # Nạp lại hồ sơ
+        ok, msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+        assert "Xây Dựng" in msg
+        assert "Đại Học" in msg
+
+        # Kiểm tra dữ liệu được khôi phục chính xác
+        assert dash.bld_slots_combo.get() == "2"
+        assert dash.bld_speedup_var.get() is True
+        for iid in dash.bld_tree.get_children():
+            assert int(dash.bld_tree.item(iid, "values")[4]) == 27
+
+        assert dash.res_art_var.get() is True
+        for iid in dash.res_tree.get_children():
+            assert int(dash.res_tree.item(iid, "values")[2]) == 18
+
+        assert dash.tp_min_army_var.get() == "7500"
+        assert dash.gd_radius_var.get() == "9"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_unified_profile_backward_compatibility(tmp_path):
+    import json
+    dash = safe_dashboard()
+    try:
+        # 1. Test tương thích ngược với build_plans.json cũ
+        old_build_file = tmp_path / "old_build_plans.json"
+        old_build_file.write_text(
+            json.dumps({
+                "plans": [
+                    {"pid": 1, "gid": 1, "target_level": 31, "name": "Quan Phủ", "enabled": True},
+                    {"pid": 2, "gid": 2, "target_level": 29, "name": "Tường Thành", "enabled": False},
+                ]
+            }),
+            encoding="utf-8",
+        )
+        ok, msg = dash._load_unified_profile(old_build_file)
+        assert ok is True
+        bld_items = dash.bld_tree.get_children()
+        assert len(bld_items) == 2
+        assert int(dash.bld_tree.item("1", "values")[4]) == 31
+        assert dash.bld_tree.item("1", "values")[0] == "☑"
+        assert int(dash.bld_tree.item("2", "values")[4]) == 29
+        assert dash.bld_tree.item("2", "values")[0] == "☐"
+
+        # 2. Test tương thích ngược với tech_plans.json cũ
+        old_tech_file = tmp_path / "old_tech_plans.json"
+        old_tech_file.write_text(
+            json.dumps({
+                "techs": [
+                    {"id": 1, "target_level": 23, "name": "Đao Thuật", "enabled": True},
+                ]
+            }),
+            encoding="utf-8",
+        )
+        ok2, msg2 = dash._load_unified_profile(old_tech_file)
+        assert ok2 is True
+        res_items = dash.res_tree.get_children()
+        assert len(res_items) == 1
+        assert int(dash.res_tree.item("1", "values")[2]) == 23
+    finally:
+        dash.destroy()
+
+

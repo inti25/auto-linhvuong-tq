@@ -108,6 +108,10 @@ _Avoid_: Mức an toàn, return threshold
 Khoảng thời gian Doanh trại phải tạm dừng sau mỗi bước dời vị trí trước khi có thể dời tiếp hoặc xuất trận (`frozen_time`).
 _Avoid_: Cooldown dời trại, frozen time
 
+**Hồ Sơ Cấu Hình**:
+File dữ liệu JSON duy nhất lưu trữ toàn bộ trạng thái thiết lập và quy hoạch tự động hóa của tất cả các phân hệ (Xây Dựng, Nghiên Cứu, Thảo Phạt, Bình Man, Gọi Dân, Hậu Cần).
+_Avoid_: Config lẻ, file lưu cấu hình riêng, profile_settings
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:

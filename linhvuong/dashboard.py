@@ -15,7 +15,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
 from .gateway import GatewayClient
@@ -310,14 +310,33 @@ class Dashboard(tk.Tk):
         self.notebook.add(t6, text="🔬 Đại Học & Hậu Cần")
         self._build_research_and_logistics_tab(t6)
 
+        # Tự động nạp hồ sơ cấu hình tổng hợp mặc định nếu có
+        default_prof = Path("auto_profile.json")
+        if default_prof.exists():
+            try:
+                self._load_unified_profile(default_prof)
+            except Exception:
+                pass
+
         self.reload()
 
     # =========================================================================
     # TAB 1: TỔNG QUAN
     # =========================================================================
     def _build_overview_tab(self, parent):
+        # Thanh Hồ Sơ Cấu Hình (Quản lý tập trung toàn bộ tính năng)
+        profile_frame = tk.Frame(parent, bg=BG)
+        profile_frame.pack(fill="x", pady=(2, 6))
+
+        tk.Label(profile_frame, text="📁 Hồ Sơ Cấu Hình:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(4, 6))
+        self.profile_path_var = tk.StringVar(value="auto_profile.json")
+        ttk.Label(profile_frame, textvariable=self.profile_path_var, style="Dark.TLabel", font=("Consolas", 10)).pack(side="left", padx=(0, 12))
+
+        ttk.Button(profile_frame, text="💾 Lưu Cấu Hình Tổng", style="Action.TButton", command=self._save_unified_profile_dialog).pack(side="left", padx=3)
+        ttk.Button(profile_frame, text="📂 Nạp Cấu Hình Tổng", style="Action.TButton", command=self._load_unified_profile_dialog).pack(side="left", padx=3)
+
         body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, pady=6)
+        body.pack(fill="both", expand=True, pady=4)
         body.columnconfigure((0, 1, 2), weight=1, uniform="c")
         body.rowconfigure(0, weight=1)
 
@@ -367,6 +386,234 @@ class Dashboard(tk.Tk):
             self.bars[key] = (bar, val)
 
         ttk.Label(details, textvariable=self.total_var, font=("Segoe UI", 11, "bold"), foreground=ACCENT).pack(anchor="w", pady=(16, 0))
+
+    # -------------------------------------------------------------------------
+    # HỒ SƠ CẤU HÌNH TỔNG HỢP (UNIFIED PROFILE CONFIGURATION)
+    # -------------------------------------------------------------------------
+    def _collect_unified_profile(self) -> dict:
+        profile = {
+            "version": 1,
+            "building": {
+                "slots": int(self.bld_slots_combo.get()) if hasattr(self, "bld_slots_combo") and self.bld_slots_combo.get() else 3,
+                "auto_speedup": bool(self.bld_speedup_var.get()) if hasattr(self, "bld_speedup_var") else False,
+                "auto_boost": bool(self.bld_boost_var.get()) if hasattr(self, "bld_boost_var") else True,
+                "auto_comfort": bool(self.bld_comfort_var.get()) if hasattr(self, "bld_comfort_var") else True,
+                "plans": [],
+            },
+            "research": {
+                "art_speedup": bool(self.res_art_var.get()) if hasattr(self, "res_art_var") else False,
+                "techs": [],
+            },
+            "thao_phat": {
+                "min_army": self.tp_min_army_var.get() if hasattr(self, "tp_min_army_var") else "5000",
+                "mission_idx": self.tp_mission_combo.current() if hasattr(self, "tp_mission_combo") else 0,
+            },
+            "goi_dan": {
+                "mode_idx": self.gd_mode_combo.current() if hasattr(self, "gd_mode_combo") else 0,
+                "radius": self.gd_radius_var.get() if hasattr(self, "gd_radius_var") else "5",
+                "auto_recover": bool(self.gd_recover_var.get()) if hasattr(self, "gd_recover_var") else True,
+            },
+            "binh_man": {
+                "radius": self.bm_radius_var.get() if hasattr(self, "bm_radius_var") else "5",
+                "min_army": self.bm_min_army_var.get() if hasattr(self, "bm_min_army_var") else "3000",
+                "min_hp": self.bm_min_hp_var.get() if hasattr(self, "bm_min_hp_var") else "50",
+                "auto_comfort": bool(self.bm_comfort_var.get()) if hasattr(self, "bm_comfort_var") else True,
+            },
+            "logistics": {
+                "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
+                "amount": self.log_amount_var.get() if hasattr(self, "log_amount_var") else "1000",
+            },
+        }
+
+        # Thu thập Hàng đợi Xây dựng
+        if hasattr(self, "bld_tree"):
+            for iid in self.bld_tree.get_children(""):
+                name = self.bld_tree.item(iid, "text")
+                vals = self.bld_tree.item(iid, "values")
+                if len(vals) >= 5:
+                    profile["building"]["plans"].append({
+                        "pid": int(vals[1]),
+                        "gid": int(vals[2]),
+                        "target_level": int(vals[4]),
+                        "name": name,
+                        "enabled": vals[0] == "☑",
+                    })
+
+        # Thu thập Hàng đợi Nghiên cứu
+        if hasattr(self, "res_tree"):
+            for iid in self.res_tree.get_children(""):
+                name = self.res_tree.item(iid, "text")
+                vals = self.res_tree.item(iid, "values")
+                if len(vals) >= 3:
+                    profile["research"]["techs"].append({
+                        "id": int(vals[1]),
+                        "target_level": int(vals[2]),
+                        "name": name,
+                        "enabled": vals[0] == "☑",
+                    })
+
+        return profile
+
+    def _apply_unified_profile(self, data: dict) -> list[str]:
+        loaded_sections = []
+
+        # 1. Xây Dựng (hỗ trợ cả profile mới và build_plans.json cũ)
+        plans_list = None
+        if "plans" in data and isinstance(data["plans"], list):
+            plans_list = data["plans"]
+        elif "building" in data and isinstance(data["building"], dict):
+            bld_data = data["building"]
+            if hasattr(self, "bld_slots_combo") and "slots" in bld_data:
+                self.bld_slots_combo.set(str(bld_data["slots"]))
+            if hasattr(self, "bld_speedup_var") and "auto_speedup" in bld_data:
+                self.bld_speedup_var.set(bool(bld_data["auto_speedup"]))
+            if hasattr(self, "bld_boost_var") and "auto_boost" in bld_data:
+                self.bld_boost_var.set(bool(bld_data["auto_boost"]))
+            if hasattr(self, "bld_comfort_var") and "auto_comfort" in bld_data:
+                self.bld_comfort_var.set(bool(bld_data["auto_comfort"]))
+            plans_list = bld_data.get("plans")
+
+        if plans_list and hasattr(self, "bld_tree"):
+            self.bld_tree.delete(*self.bld_tree.get_children(""))
+            for p in plans_list:
+                gid = int(p.get("gid", 1))
+                name = p.get("name") or BUILDING_NAMES.get(gid, f"Công trình {gid}")
+                en = "☑" if p.get("enabled", True) else "☐"
+                self.bld_tree.insert(
+                    "",
+                    "end",
+                    iid=str(p.get("pid")),
+                    text=name,
+                    values=(en, p.get("pid"), gid, 0, p.get("target_level", 20)),
+                )
+            loaded_sections.append(f"Xây Dựng ({len(plans_list)} công trình)")
+            if hasattr(self, "_append_bld_log"):
+                self._append_bld_log(f"📂 Đã nạp cấu hình {len(plans_list)} công trình từ hồ sơ.")
+
+        # 2. Nghiên cứu Đại Học (hỗ trợ cả profile mới và tech_plans.json cũ)
+        techs_list = None
+        if "techs" in data and isinstance(data["techs"], list):
+            techs_list = data["techs"]
+        elif "research" in data and isinstance(data["research"], dict):
+            res_data = data["research"]
+            if hasattr(self, "res_art_var") and "art_speedup" in res_data:
+                self.res_art_var.set(bool(res_data["art_speedup"]))
+            techs_list = res_data.get("techs") or res_data.get("plans")
+
+        if techs_list and hasattr(self, "res_tree"):
+            self.res_tree.delete(*self.res_tree.get_children(""))
+            for t in techs_list:
+                tid = int(t.get("id", 1))
+                tname = t.get("name") or TECH_NAMES.get(tid, f"Kỹ thuật {tid}")
+                en = "☑" if t.get("enabled", True) else "☐"
+                self.res_tree.insert(
+                    "",
+                    "end",
+                    iid=str(tid),
+                    text=tname,
+                    values=(en, tid, t.get("target_level", 20)),
+                )
+            loaded_sections.append(f"Đại Học ({len(techs_list)} kỹ thuật)")
+            if hasattr(self, "_append_logis_log"):
+                self._append_logis_log(f"📂 Đã nạp cấu hình {len(techs_list)} kỹ thuật từ hồ sơ.")
+
+        # 3. Thảo Phạt
+        if "thao_phat" in data and isinstance(data["thao_phat"], dict):
+            tp_data = data["thao_phat"]
+            if hasattr(self, "tp_min_army_var") and "min_army" in tp_data:
+                self.tp_min_army_var.set(str(tp_data["min_army"]))
+            if hasattr(self, "tp_mission_combo") and "mission_idx" in tp_data:
+                try:
+                    self.tp_mission_combo.current(int(tp_data["mission_idx"]))
+                except Exception:
+                    pass
+            loaded_sections.append("Thảo Phạt")
+
+        # 4. Gọi Dân
+        if "goi_dan" in data and isinstance(data["goi_dan"], dict):
+            gd_data = data["goi_dan"]
+            if hasattr(self, "gd_mode_combo") and "mode_idx" in gd_data:
+                try:
+                    self.gd_mode_combo.current(int(gd_data["mode_idx"]))
+                except Exception:
+                    pass
+            if hasattr(self, "gd_radius_var") and "radius" in gd_data:
+                self.gd_radius_var.set(str(gd_data["radius"]))
+            if hasattr(self, "gd_recover_var") and "auto_recover" in gd_data:
+                self.gd_recover_var.set(bool(gd_data["auto_recover"]))
+            loaded_sections.append("Gọi Dân")
+
+        # 5. Bình Man
+        if "binh_man" in data and isinstance(data["binh_man"], dict):
+            bm_data = data["binh_man"]
+            if hasattr(self, "bm_radius_var") and "radius" in bm_data:
+                self.bm_radius_var.set(str(bm_data["radius"]))
+            if hasattr(self, "bm_min_army_var") and "min_army" in bm_data:
+                self.bm_min_army_var.set(str(bm_data["min_army"]))
+            if hasattr(self, "bm_min_hp_var") and "min_hp" in bm_data:
+                self.bm_min_hp_var.set(str(bm_data["min_hp"]))
+            if hasattr(self, "bm_comfort_var") and "auto_comfort" in bm_data:
+                self.bm_comfort_var.set(bool(bm_data["auto_comfort"]))
+            loaded_sections.append("Bình Man")
+
+        # 6. Hậu Cần
+        if "logistics" in data and isinstance(data["logistics"], dict):
+            log_data = data["logistics"]
+            if hasattr(self, "log_army_combo") and "army_type_idx" in log_data:
+                try:
+                    self.log_army_combo.current(int(log_data["army_type_idx"]))
+                except Exception:
+                    pass
+            if hasattr(self, "log_amount_var") and "amount" in log_data:
+                self.log_amount_var.set(str(log_data["amount"]))
+            loaded_sections.append("Hậu Cần")
+
+        return loaded_sections
+
+    def _save_unified_profile(self, filepath: Optional[Path] = None) -> Path:
+        target = filepath or Path("auto_profile.json")
+        profile = self._collect_unified_profile()
+        target.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+        if hasattr(self, "profile_path_var"):
+            self.profile_path_var.set(target.name)
+        return target
+
+    def _load_unified_profile(self, filepath: Optional[Path] = None) -> tuple[bool, str]:
+        target = filepath or Path("auto_profile.json")
+        if not target.exists():
+            return False, f"Không tìm thấy file: {target.name}"
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            sections = self._apply_unified_profile(data)
+            if hasattr(self, "profile_path_var"):
+                self.profile_path_var.set(target.name)
+            return True, f"Đã nạp thành công các phân hệ: {', '.join(sections)}"
+        except Exception as e:
+            return False, f"Lỗi đọc file cấu hình: {e}"
+
+    def _save_unified_profile_dialog(self):
+        cur_name = self.profile_path_var.get() if hasattr(self, "profile_path_var") else "auto_profile.json"
+        fpath = filedialog.asksaveasfilename(
+            title="Lưu Hồ Sơ Cấu Hình Tổng",
+            defaultextension=".json",
+            initialfile=cur_name,
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if fpath:
+            p = self._save_unified_profile(Path(fpath))
+            messagebox.showinfo("Thành công", f"Đã lưu hồ sơ cấu hình tổng vào:\n{p.name}")
+
+    def _load_unified_profile_dialog(self):
+        fpath = filedialog.askopenfilename(
+            title="Nạp Hồ Sơ Cấu Hình Tổng",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if fpath:
+            ok, msg = self._load_unified_profile(Path(fpath))
+            if ok:
+                messagebox.showinfo("Thành công", msg)
+            else:
+                messagebox.showerror("Lỗi", msg)
 
     # =========================================================================
     # TAB 2: THẢO PHẠT
@@ -763,9 +1010,6 @@ class Dashboard(tk.Tk):
         ttk.Entry(btn_bar, textvariable=self.bld_target_lvl_var, width=5).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_bld_target_lvl).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="🌟 Đặt tất cả", style="Action.TButton", command=self._set_bld_target_lvl_all).pack(side="left", padx=2)
-
-        ttk.Button(btn_bar, text="💾 Lưu file", style="Action.TButton", command=self._save_build_plans).pack(side="left", padx=2)
-        ttk.Button(btn_bar, text="📂 Nạp file", style="Action.TButton", command=self._load_build_plans).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="🔄 Tải công trình", style="Action.TButton", command=self._fetch_city_buildings).pack(side="left", padx=2)
 
         self.bld_start_btn = ttk.Button(btn_bar, text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton", command=self._toggle_building)
@@ -1114,9 +1358,6 @@ class Dashboard(tk.Tk):
         ttk.Entry(res_bar, textvariable=self.res_target_lvl_var, width=5).pack(side="left", padx=2)
         ttk.Button(res_bar, text="✏️ Đặt cấp", style="Action.TButton", command=self._set_res_target_lvl).pack(side="left", padx=2)
         ttk.Button(res_bar, text="🌟 Đặt tất cả", style="Action.TButton", command=self._set_res_target_lvl_all).pack(side="left", padx=2)
-
-        ttk.Button(res_bar, text="💾 Lưu", style="Action.TButton", command=self._save_tech_plans).pack(side="left", padx=2)
-        ttk.Button(res_bar, text="📂 Nạp", style="Action.TButton", command=self._load_tech_plans).pack(side="left", padx=2)
 
         self.res_tree = ttk.Treeview(f_res, columns=("select", "id", "target_lvl"), show="tree headings", selectmode="browse")
         self.res_tree.heading("#0", text="Tên Kỹ Thuật Đại Học")
