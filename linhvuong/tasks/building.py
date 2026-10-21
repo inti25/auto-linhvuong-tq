@@ -114,6 +114,11 @@ class BuildingTask:
         self.max_boxes_per_round = max_boxes_per_round
         self.auto_fallback_box = auto_fallback_box
         self.notify = notify
+        self.skipped_pids: set[int] = set()
+
+    def reset_skipped(self):
+        """Xóa danh sách các slot công trình tạm thời bị bỏ qua."""
+        self.skipped_pids.clear()
 
     def _log(self, msg: str):
         if self.city_name:
@@ -359,42 +364,41 @@ class BuildingTask:
                 elif "bid" in s:
                     busy_pids.add(int(s["bid"]))
 
-        # 5. Tìm tối đa available_slots công trình ưu tiên cần nâng cấp hoặc hạ cấp
-        # Mỗi phần tử: (plan, current_level, action_type) với action_type: 1 (nâng cấp), 2 (hạ cấp)
-        targets_to_process: list[tuple[BuildingPlan, int, int]] = []
+        # 5. Duyệt danh sách quy hoạch và gửi lệnh nâng/hạ cấp cho tới khi lấp đầy available_slots
+        processed_count = 0
         has_uncompleted = False
+        has_eligible_candidate = False
+        last_error = None
 
         for plan in self.plans:
             if not getattr(plan, "enabled", True):
                 continue
             cur = real_buildings.get(plan.pid, {"gid": plan.gid, "level": 0})
             cur_lvl = cur["level"]
-            if cur_lvl != plan.target_level:
-                has_uncompleted = True
-                if plan.pid in busy_pids:
-                    continue
-                action_type = 1 if cur_lvl < plan.target_level else 2
-                targets_to_process.append((plan, cur_lvl, action_type))
-                busy_pids.add(plan.pid)
-                if len(targets_to_process) >= available_slots:
-                    break
+            if cur_lvl == plan.target_level:
+                continue
 
-        if not targets_to_process:
-            if not has_uncompleted:
-                return "all_buildings_completed"
-            return "slots_busy"
+            has_uncompleted = True
 
-        # 6. Gửi lệnh nâng/hạ cấp tuần tự cho các công trình đã chọn qua OPT.ashx?id=65
-        processed_count = 0
-        last_error = None
+            if plan.pid in busy_pids:
+                continue
 
-        for target_plan, current_level, action_type in targets_to_process:
+            if plan.pid in self.skipped_pids:
+                continue
+
+            has_eligible_candidate = True
+            action_type = 1 if cur_lvl < plan.target_level else 2
+            bname = plan.name or BUILDING_NAMES.get(plan.gid, f"Công trình {plan.gid}")
+            action_verb = "nâng cấp" if action_type == 1 else "hạ cấp"
+            next_lvl = cur_lvl + 1 if action_type == 1 else cur_lvl - 1
+            icon = "🏗️" if action_type == 1 else "🏚️"
+
             resp = self.gateway.call(
                 "OPT.ashx",
                 65,
                 {
-                    "pid": str(target_plan.pid),
-                    "gid": str(target_plan.gid),
+                    "pid": str(plan.pid),
+                    "gid": str(plan.gid),
                     "type": str(action_type),
                     "tid": str(self.city_id),
                     "_": "",
@@ -404,45 +408,71 @@ class BuildingTask:
             if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
                 raise CaptchaRequired()
 
-            bname = target_plan.name or BUILDING_NAMES.get(target_plan.gid, f"Công trình {target_plan.gid}")
-            action_verb = "nâng cấp" if action_type == 1 else "hạ cấp"
-            next_lvl = current_level + 1 if action_type == 1 else current_level - 1
-            icon = "🏗️" if action_type == 1 else "🏚️"
-
             if ret == RET_OK:
-                self._log(f"{icon} Đang {action_verb} slot {target_plan.pid} ({bname}) từ cấp {current_level} {'lên' if action_type == 1 else 'xuống'} {next_lvl}")
+                self._log(f"{icon} Đang {action_verb} slot {plan.pid} ({bname}) từ cấp {cur_lvl} {'lên' if action_type == 1 else 'xuống'} {next_lvl}")
                 if self.auto_speedup:
                     self.speedup_slot(1)
                 processed_count += 1
+                busy_pids.add(plan.pid)
+                if processed_count >= available_slots:
+                    break
+            elif ret == 261:
+                self._log(f"⚠️ {action_verb.capitalize()} slot {plan.pid} ({bname}) bị chặn (mã 261). Bỏ qua, nâng cấp công trình khác...")
+                self.skipped_pids.add(plan.pid)
+                if not last_error:
+                    last_error = "blocked_error_261"
+                continue
+            elif ret == 245:
+                self._log(f"⚠️ Chưa đủ điều kiện tiên quyết để {action_verb} slot {plan.pid} ({bname}) (mã 245). Bỏ qua, nâng cấp công trình khác...")
+                self.skipped_pids.add(plan.pid)
+                if not last_error:
+                    last_error = "prerequisites_not_met"
+                continue
             elif ret == 36:
-                self._log(f"⚠️ Không thể hạ cấp slot {target_plan.pid} ({bname}) (đã đến cấp tối thiểu)")
+                self._log(f"⚠️ Không thể hạ cấp slot {plan.pid} ({bname}) (đã đến cấp tối thiểu)")
+                self.skipped_pids.add(plan.pid)
                 if not last_error:
                     last_error = "cannot_downgrade_min_level"
+                continue
             elif ret in (32, 37):
                 if self.auto_open_box:
-                    self._log(f"📦 Không đủ tài nguyên để {action_verb} slot {target_plan.pid} ({bname}), tiến hành mở đạo cụ...")
-                    retry_ok = self._try_open_box_and_retry(target_plan, current_level, action_type)
+                    self._log(f"📦 Không đủ tài nguyên để {action_verb} slot {plan.pid} ({bname}), tiến hành mở đạo cụ...")
+                    retry_ok = self._try_open_box_and_retry(plan, cur_lvl, action_type)
                     if retry_ok:
                         processed_count += 1
+                        busy_pids.add(plan.pid)
+                        if processed_count >= available_slots:
+                            break
                         continue
                     else:
                         last_error = "insufficient_resources"
                         break
                 else:
-                    self._log(f"⚠️ Không đủ tài nguyên để {action_verb} slot {target_plan.pid} ({bname})")
+                    self._log(f"⚠️ Không đủ tài nguyên để {action_verb} slot {plan.pid} ({bname})")
                     last_error = "insufficient_resources"
                     break
-            elif ret == 245:
-                self._log(f"⚠️ Chưa đủ điều kiện tiên quyết để {action_verb} slot {target_plan.pid} ({bname})")
-                if not last_error:
-                    last_error = "prerequisites_not_met"
             else:
-                self._log(f"❌ {action_verb.capitalize()} slot {target_plan.pid} ({bname}) thất bại (mã {ret})")
+                self._log(f"❌ {action_verb.capitalize()} slot {plan.pid} ({bname}) thất bại (mã {ret}). Bỏ qua, nâng cấp công trình khác...")
+                self.skipped_pids.add(plan.pid)
                 if not last_error:
                     last_error = f"{'upgrade' if action_type == 1 else 'downgrade'}_failed:{ret}"
+                continue
 
+        # 6. Tổng kết kết quả sau vòng lặp
         if processed_count > 0:
+            self.skipped_pids.clear()
             return "upgrading"
+
+        if not has_uncompleted:
+            return "all_buildings_completed"
+
+        if not has_eligible_candidate and self.skipped_pids:
+            self.skipped_pids.clear()
+            if not last_error:
+                last_error = "all_eligible_buildings_skipped"
+
         if last_error:
             return last_error
+
         return "slots_busy"
+

@@ -538,5 +538,124 @@ def test_building_task_stops_opening_when_storage_full():
     assert len(box_calls) == 1
 
 
+def test_building_task_skips_error_261_and_upgrades_next_eligible():
+    logs = []
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 5, 0, 0],
+                    [2, 2, "Tường Thành", 5, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": [{"ret": 261}, {"ret": 0}],  # pid 1 bị 261, pid 2 thành công
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=10, name="Quan Phủ"),
+        BuildingPlan(pid=2, gid=2, target_level=10, name="Tường Thành"),
+    ]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        max_slots=1,
+        auto_comfort=False,
+        auto_boost=False,
+        notify=logs.append,
+    )
+    out = task.run_once()
+    assert out == "upgrading"
+
+    # Kiểm tra log thông báo bỏ qua mã 261
+    assert any("bị chặn (mã 261). Bỏ qua, nâng cấp công trình khác" in m for m in logs)
+    assert any("Đang nâng cấp slot 2" in m for m in logs)
+
+    # Kiểm tra server nhận 2 cuộc gọi OPT.ashx?id=65 (pid 1 rồi tới pid 2)
+    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(opt_calls) == 2
+    assert opt_calls[0]["pid"] == "1"
+    assert opt_calls[1]["pid"] == "2"
+
+
+def test_building_task_skips_multiple_261_and_fills_available_slots():
+    logs = []
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 5, 0, 0],
+                    [2, 2, "Tường Thành", 5, 0, 0],
+                    [3, 3, "Nhà Dân", 5, 0, 0],
+                    [4, 4, "Kho", 5, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": [{"ret": 261}, {"ret": 0}, {"ret": 261}, {"ret": 0}],
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=10),  # 261 -> skip
+        BuildingPlan(pid=2, gid=2, target_level=10),  # ret 0 -> success 1
+        BuildingPlan(pid=3, gid=3, target_level=10),  # 261 -> skip
+        BuildingPlan(pid=4, gid=4, target_level=10),  # ret 0 -> success 2
+    ]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        max_slots=2,  # Cần 2 slot
+        auto_comfort=False,
+        auto_boost=False,
+        notify=logs.append,
+    )
+    out = task.run_once()
+    assert out == "upgrading"
+
+    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(opt_calls) == 4
+    assert [c["pid"] for c in opt_calls] == ["1", "2", "3", "4"]
+
+
+def test_building_task_all_blocked_by_261_returns_blocked():
+    logs = []
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [1, 1, "Quan Phủ", 5, 0, 0],
+                    [2, 2, "Tường Thành", 5, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 261},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=10),
+        BuildingPlan(pid=2, gid=2, target_level=10),
+    ]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        max_slots=2,
+        auto_comfort=False,
+        auto_boost=False,
+        notify=logs.append,
+    )
+    out = task.run_once()
+    assert out == "blocked_error_261"
+    assert len(task.skipped_pids) == 2
+
+
+
 
 
