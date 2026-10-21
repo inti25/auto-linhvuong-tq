@@ -97,6 +97,7 @@ class BuildingTask:
         box_id: int = 24,
         max_boxes_per_round: int = 5,
         auto_fallback_box: bool = True,
+        even_upgrade: bool = False,
         notify: Callable[[str], None] = print,
         city_name: str = "",
     ):
@@ -113,6 +114,7 @@ class BuildingTask:
         self.box_id = box_id
         self.max_boxes_per_round = max_boxes_per_round
         self.auto_fallback_box = auto_fallback_box
+        self.even_upgrade = even_upgrade
         self.notify = notify
         self.skipped_pids: set[int] = set()
         self.deferred_pids: set[int] = set()
@@ -378,6 +380,24 @@ class BuildingTask:
         # Sắp xếp danh sách duyệt: Công trình bình thường duyệt trước, các ô lỗi 261/245 kiểm tra sau cùng
         normal_plans = [p for p in self.plans if p.pid not in self.deferred_pids]
         deferred_plans = [p for p in self.plans if p.pid in self.deferred_pids]
+
+        if self.even_upgrade:
+            def sort_even(plans_list):
+                upgrades = []
+                downgrades = []
+                for p in plans_list:
+                    cur = real_buildings.get(p.pid, {"gid": p.gid, "level": 0})
+                    if cur["level"] < p.target_level:
+                        upgrades.append(p)
+                    else:
+                        downgrades.append(p)
+                # Sắp xếp ổn định (stable sort): cấp độ hiện tại thấp lên cao
+                upgrades.sort(key=lambda p: real_buildings.get(p.pid, {}).get("level", 0))
+                return upgrades + downgrades
+
+            normal_plans = sort_even(normal_plans)
+            deferred_plans = sort_even(deferred_plans)
+
         ordered_plans = normal_plans + deferred_plans
 
         for plan in ordered_plans:

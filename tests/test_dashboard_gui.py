@@ -692,6 +692,30 @@ def test_dashboard_bld_tree_tag_colors():
         dash.destroy()
 
 
+def test_dashboard_even_upgrade_and_research_profile_sync():
+    dash = safe_dashboard()
+    try:
+        dash.bld_even_var.set(True)
+        dash.res_even_var.set(True)
+
+        data = dash._collect_unified_profile()
+        assert data["building"].get("even_upgrade") is True
+        assert data["research"].get("even_research") is True
+
+        # Đặt lại False rồi nạp lại từ data
+        dash.bld_even_var.set(False)
+        dash.res_even_var.set(False)
+        assert dash.bld_even_var.get() is False
+        assert dash.res_even_var.get() is False
+
+        dash._apply_unified_profile(data)
+        assert dash.bld_even_var.get() is True
+        assert dash.res_even_var.get() is True
+    finally:
+        dash.destroy()
+
+
+
 
 
 

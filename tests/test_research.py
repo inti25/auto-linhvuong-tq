@@ -274,5 +274,60 @@ def test_research_task_skips_prerequisites_not_met_and_tries_next():
     assert calls_opt44 == ["1", "2"]  # Tech 1 gặp 245, tự động bỏ qua và chuyển sang Tech 2 thành công
 
 
+def test_research_task_even_research_ordering():
+    calls_default = []
+    calls_even = []
+
+    def make_server(calls_list):
+        class EvenServer(FakeServer):
+            def post(self, url, data=None, headers=None, timeout=None):
+                key = url.split("/GateWay/")[1]
+                if key == "City.ashx?id=37":
+                    return Resp({"ret": 0, "tech": {}})
+                if key == "City.ashx?id=50":
+                    return Resp({"ret": 0})
+                if key == "City.ashx?id=5":
+                    return Resp({"ret": 0, "infos": [[5, 6, "大学殿", 20]]})
+                if key == "Build.ashx?id=2":
+                    return Resp({
+                        "ret": 0,
+                        "list": [
+                            [1, "Tech1", 7],
+                            [2, "Tech2", 2],
+                            [3, "Tech3", 4],
+                            [4, "Tech4", 2],
+                        ],
+                    })
+                if key == "OPT.ashx?id=44":
+                    calls_list.append(dict(data or {}).get("techid"))
+                    return Resp({"ret": 261})  # Giả lập fail để xem thứ tự duyệt hết
+                return Resp({"ret": 0})
+        return EvenServer()
+
+    plans = [
+        TechPlan(tech_id=1, target_level=10, name="Tech1"),
+        TechPlan(tech_id=2, target_level=10, name="Tech2"),
+        TechPlan(tech_id=3, target_level=10, name="Tech3"),
+        TechPlan(tech_id=4, target_level=10, name="Tech4"),
+    ]
+
+    # 1. Khi even_research=False: Duyệt tuần tự theo bảng 1, 2, 3, 4
+    gw_default = GatewayClient(53, make_server(calls_default), sleep=lambda s: None)
+    task_default = ResearchTask(gw_default, city_id=21936, plans=plans, even_research=False)
+    task_default.run_once()
+    assert calls_default == ["1", "2", "3", "4"]
+
+    # 2. Khi even_research=True:
+    # Tech 2 (cấp 2) và Tech 4 (cấp 2) duyệt trước, giữ thứ tự 2 rồi tới 4.
+    # Tiếp theo Tech 3 (cấp 4).
+    # Cuối cùng Tech 1 (cấp 7).
+    # Thứ tự kỳ vọng: ["2", "4", "3", "1"]
+    gw_even = GatewayClient(53, make_server(calls_even), sleep=lambda s: None)
+    task_even = ResearchTask(gw_even, city_id=21936, plans=plans, even_research=True)
+    task_even.run_once()
+    assert calls_even == ["2", "4", "3", "1"]
+
+
+
 
 

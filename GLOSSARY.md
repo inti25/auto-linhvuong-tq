@@ -140,6 +140,11 @@ _Avoid_: Đập nhà, phá hủy, demolish
 Cơ chế tự động đưa các công trình gặp mã lỗi 261 (bị chặn) hoặc 245 (chưa đủ điều kiện tiên quyết) xuống cuối hàng đợi duyệt trong các vòng lặp tiếp theo, ưu tiên thi công các công trình khác trước và tự động giải phóng khỏi danh sách hoãn ngay khi thi công thành công.
 _Avoid_: Bỏ qua vĩnh viễn, skip queue, lặp lại lỗi đầu vòng
 
+**Nâng Đồng Đều**:
+Chế độ tự động điều phối thứ tự thi công công trình hoặc nghiên cứu kỹ thuật viện đại học ưu tiên các đối tượng có cấp độ hiện tại thấp nhất lên trước (`current_level` tăng dần), kết hợp sắp xếp ổn định (bảo toàn thứ tự hàng đợi khi bằng cấp độ) nhằm phát triển cân bằng hạ tầng công trình và năng lực công nghệ.
+_Avoid_: Cân bằng cấp, level balance, round-robin
+
+
 
 **Đạo Cụ Tài Nguyên**:
 Vật phẩm dạng hòm/rương/đỉnh trong túi đồ của người chơi, khi mở sẽ cung cấp một lượng lớn tài nguyên xây dựng (Gỗ, Đá, Sắt, Lúa). Điển hình: Dân Sinh Bảo Đỉnh (ID: 24), Dân Sinh Chi Độc (ID: 16), Dân Sinh Chi Hạp (ID: 11), Dân Sinh Chi Nang (ID: 1), Bạch Kim Tài Nguyên Lễ Hộp (ID: 35).

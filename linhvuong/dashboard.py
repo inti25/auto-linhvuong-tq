@@ -478,6 +478,7 @@ class Dashboard(tk.Tk):
                 "auto_speedup": bool(self.bld_speedup_var.get()) if hasattr(self, "bld_speedup_var") else False,
                 "auto_boost": bool(self.bld_boost_var.get()) if hasattr(self, "bld_boost_var") else True,
                 "auto_comfort": bool(self.bld_comfort_var.get()) if hasattr(self, "bld_comfort_var") else True,
+                "even_upgrade": bool(self.bld_even_var.get()) if hasattr(self, "bld_even_var") else False,
                 "auto_open_box": bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False,
                 "box_type_idx": self.bld_box_combo.current() if hasattr(self, "bld_box_combo") else 0,
                 "box_max": self.bld_box_max_var.get() if hasattr(self, "bld_box_max_var") else "5",
@@ -487,6 +488,7 @@ class Dashboard(tk.Tk):
             },
             "research": {
                 "art_speedup": bool(self.res_art_var.get()) if hasattr(self, "res_art_var") else False,
+                "even_research": bool(self.res_even_var.get()) if hasattr(self, "res_even_var") else False,
                 "interval": self.res_interval_var.get() if hasattr(self, "res_interval_var") else "30",
                 "techs": [],
             },
@@ -585,6 +587,8 @@ class Dashboard(tk.Tk):
                 self.bld_boost_var.set(bool(bld_data["auto_boost"]))
             if hasattr(self, "bld_comfort_var") and "auto_comfort" in bld_data:
                 self.bld_comfort_var.set(bool(bld_data["auto_comfort"]))
+            if hasattr(self, "bld_even_var") and "even_upgrade" in bld_data:
+                self.bld_even_var.set(bool(bld_data["even_upgrade"]))
             if hasattr(self, "bld_open_box_var") and "auto_open_box" in bld_data:
                 self.bld_open_box_var.set(bool(bld_data["auto_open_box"]))
             if hasattr(self, "bld_box_combo") and "box_type_idx" in bld_data:
@@ -650,6 +654,8 @@ class Dashboard(tk.Tk):
             res_data = data["research"]
             if hasattr(self, "res_art_var") and "art_speedup" in res_data:
                 self.res_art_var.set(bool(res_data["art_speedup"]))
+            if hasattr(self, "res_even_var") and "even_research" in res_data:
+                self.res_even_var.set(bool(res_data["even_research"]))
             if hasattr(self, "res_interval_var") and "interval" in res_data:
                 self.res_interval_var.set(str(res_data["interval"]))
             techs_list = res_data.get("techs") or res_data.get("plans")
@@ -1378,6 +1384,17 @@ class Dashboard(tk.Tk):
             activebackground=BG,
         ).pack(side="left", padx=4)
 
+        self.bld_even_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            top,
+            text="⚖️ Nâng đồng đều",
+            variable=self.bld_even_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+        ).pack(side="left", padx=4)
+
         tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(8, 2))
         self.bld_interval_var = tk.StringVar(value="20")
         ttk.Entry(top, textvariable=self.bld_interval_var, width=4).pack(side="left", padx=(0, 6))
@@ -1989,6 +2006,7 @@ class Dashboard(tk.Tk):
                     box_id=box_id,
                     max_boxes_per_round=max_boxes,
                     auto_fallback_box=auto_fallback_box,
+                    even_upgrade=bool(self.bld_even_var.get()) if hasattr(self, "bld_even_var") else False,
                     notify=lambda m, cname=base_name: self.after(0, self._append_bld_log, f"[{cname}] {m}"),
                     city_name=base_name,
                 )
@@ -2041,6 +2059,17 @@ class Dashboard(tk.Tk):
             res_top,
             text="📜 Binh Pháp tăng tốc",
             variable=self.res_art_var,
+            bg=CARD,
+            fg=FG,
+            selectcolor=BG,
+            activebackground=CARD,
+        ).pack(side="left", padx=6)
+
+        self.res_even_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            res_top,
+            text="⚖️ Nghiên cứu đồng đều",
+            variable=self.res_even_var,
             bg=CARD,
             fg=FG,
             selectcolor=BG,
@@ -2380,6 +2409,7 @@ class Dashboard(tk.Tk):
                 city_id=city_id,
                 plans=plans,
                 auto_art_of_war=self.res_art_var.get(),
+                even_research=bool(self.res_even_var.get()) if hasattr(self, "res_even_var") else False,
                 notify=lambda m: self.after(0, self._append_logis_log, m),
             )
             try:

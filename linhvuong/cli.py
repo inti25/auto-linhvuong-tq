@@ -85,6 +85,7 @@ def load_build_task(
         paytype=cfg.get("paytype", 1),
         auto_comfort=auto_comfort,
         auto_boost=auto_boost,
+        even_upgrade=cfg.get("even_upgrade", False),
     )
 
 
@@ -121,6 +122,7 @@ def load_research_task(
         city_id=city_id,
         plans=plans,
         auto_art_of_war=auto_art,
+        even_research=cfg.get("even_research", False),
     )
 
 

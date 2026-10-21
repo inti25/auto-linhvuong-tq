@@ -734,6 +734,63 @@ def test_building_task_deferred_cleared_on_target_reached_and_reset():
     assert len(task.deferred_pids) == 0
 
 
+def test_building_task_even_upgrade_ordering():
+    # Cấu hình các công trình với cấp độ hiện tại khác nhau:
+    # pid 1: cấp 8 (target 10) -> Nâng cấp
+    # pid 2: cấp 2 (target 10) -> Nâng cấp
+    # pid 3: cấp 5 (target 10) -> Nâng cấp
+    # pid 4: cấp 6 (target 2)  -> Hạ cấp
+    # pid 5: cấp 2 (target 10) -> Nâng cấp (hòa cấp với pid 2)
+    city_infos = [
+        [1, 1, "Quan Phủ", 8, 0, 0],
+        [2, 2, "Tường Thành", 2, 0, 0],
+        [3, 3, "Nhà Dân", 5, 0, 0],
+        [4, 4, "Kho", 6, 0, 0],
+        [5, 5, "Hồng Lư Tự", 2, 0, 0],
+    ]
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=10),
+        BuildingPlan(pid=2, gid=2, target_level=10),
+        BuildingPlan(pid=3, gid=3, target_level=10),
+        BuildingPlan(pid=4, gid=4, target_level=2),
+        BuildingPlan(pid=5, gid=5, target_level=10),
+    ]
+
+    # 1. Khi even_upgrade=False: Duyệt theo thứ tự bảng 1, 2, 3, 4, 5
+    server_default = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {"ret": 0, "infos": city_infos},
+            "OPT.ashx?id=65": [{"ret": 261}] * 5,  # Cho fail hết để xem trọn vẹn thứ tự duyệt
+        }
+    )
+    gw_default = GatewayClient(57, server_default, sleep=lambda s: None)
+    task_default = BuildingTask(gw_default, city_id=101, plans=plans, max_slots=5, even_upgrade=False)
+    task_default.run_once()
+    calls_default = [d["pid"] for k, d in server_default.calls if k == "OPT.ashx?id=65"]
+    assert calls_default == ["1", "2", "3", "4", "5"]
+
+    # 2. Khi even_upgrade=True:
+    # Nâng cấp cấp thấp nhất lên trước: pid 2 (cấp 2) và pid 5 (cấp 2) xếp trước.
+    # Hòa cấp thì giữ thứ tự ban đầu: 2 trước, 5 sau.
+    # Tiếp theo: pid 3 (cấp 5), pid 1 (cấp 8).
+    # Cuối cùng là công trình hạ cấp: pid 4.
+    # Kết quả kỳ vọng: ["2", "5", "3", "1", "4"]
+    server_even = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {"ret": 0, "infos": city_infos},
+            "OPT.ashx?id=65": [{"ret": 261}] * 5,
+        }
+    )
+    gw_even = GatewayClient(57, server_even, sleep=lambda s: None)
+    task_even = BuildingTask(gw_even, city_id=101, plans=plans, max_slots=5, even_upgrade=True)
+    task_even.run_once()
+    calls_even = [d["pid"] for k, d in server_even.calls if k == "OPT.ashx?id=65"]
+    assert calls_even == ["2", "5", "3", "1", "4"]
+
+
+
 
 
 

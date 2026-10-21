@@ -68,12 +68,14 @@ class ResearchTask:
         city_id: int,
         plans: list[TechPlan],
         auto_art_of_war: bool = False,
+        even_research: bool = False,
         notify: Callable[[str], None] = print,
     ):
         self.gateway = gateway
         self.city_id = city_id
         self.plans = plans
         self.auto_art_of_war = auto_art_of_war
+        self.even_research = even_research
         self.notify = notify
 
     def is_research_ongoing(self) -> tuple[bool, Optional[int]]:
@@ -191,6 +193,10 @@ class ResearchTask:
             cur_lvl = current_levels.get(plan.tech_id, 0)
             if cur_lvl < plan.target_level:
                 eligible_plans.append((plan, cur_lvl))
+
+        if self.even_research:
+            # Sắp xếp ổn định (stable sort): cấp độ hiện tại thấp lên cao
+            eligible_plans.sort(key=lambda item: item[1])
 
         if not eligible_plans:
             return "all_techs_completed"
