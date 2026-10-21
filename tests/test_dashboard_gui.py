@@ -294,26 +294,32 @@ def test_dashboard_thaophat_controls_and_profile_sync(tmp_path):
     dash = safe_dashboard()
     try:
         # Kiểm tra sự tồn tại và giá trị mặc định của các control Thảo Phạt mới
-        assert hasattr(dash, "tp_army_type_combo")
+        assert hasattr(dash, "tp_target_inf_var")
+        assert hasattr(dash, "tp_target_cav_var")
+        assert hasattr(dash, "tp_target_arc_var")
         assert hasattr(dash, "tp_auto_recruit_var")
         assert hasattr(dash, "tp_auto_morale_var")
         assert hasattr(dash, "tp_min_morale_var")
 
-        assert dash.tp_army_type_combo.current() == 0
+        assert dash.tp_target_inf_var.get() == "5000"
+        assert dash.tp_target_cav_var.get() == "0"
+        assert dash.tp_target_arc_var.get() == "0"
         assert dash.tp_auto_recruit_var.get() is True
         assert dash.tp_auto_morale_var.get() is True
         assert dash.tp_min_morale_var.get() == "95"
 
         # Thay đổi giá trị và thu thập hồ sơ
-        dash.tp_army_type_combo.current(2)  # Cung binh
-        dash.tp_min_army_var.set("8000")
+        dash.tp_target_inf_var.set("3000")
+        dash.tp_target_cav_var.set("1000")
+        dash.tp_target_arc_var.set("2000")
         dash.tp_auto_recruit_var.set(False)
         dash.tp_auto_morale_var.set(True)
         dash.tp_min_morale_var.set("90")
 
         profile = dash._collect_unified_profile()
-        assert profile["thao_phat"]["army_type_idx"] == 2
-        assert profile["thao_phat"]["min_army"] == "8000"
+        assert profile["thao_phat"]["target_infantry"] == "3000"
+        assert profile["thao_phat"]["target_cavalry"] == "1000"
+        assert profile["thao_phat"]["target_archers"] == "2000"
         assert profile["thao_phat"]["auto_recruit"] is False
         assert profile["thao_phat"]["auto_morale"] is True
         assert profile["thao_phat"]["min_morale"] == "90"
@@ -321,8 +327,9 @@ def test_dashboard_thaophat_controls_and_profile_sync(tmp_path):
         # Nạp lại profile khác
         new_data = {
             "thao_phat": {
-                "army_type_idx": 1,  # Kỵ binh
-                "min_army": "6500",
+                "target_infantry": "4000",
+                "target_cavalry": "1500",
+                "target_archers": "500",
                 "auto_recruit": True,
                 "auto_morale": False,
                 "min_morale": "85",
@@ -330,13 +337,43 @@ def test_dashboard_thaophat_controls_and_profile_sync(tmp_path):
         }
         loaded = dash._apply_unified_profile(new_data)
         assert "Thảo Phạt" in loaded
-        assert dash.tp_army_type_combo.current() == 1
-        assert dash.tp_min_army_var.get() == "6500"
+        assert dash.tp_target_inf_var.get() == "4000"
+        assert dash.tp_target_cav_var.get() == "1500"
+        assert dash.tp_target_arc_var.get() == "500"
         assert dash.tp_auto_recruit_var.get() is True
         assert dash.tp_auto_morale_var.get() is False
         assert dash.tp_min_morale_var.get() == "85"
     finally:
         dash.destroy()
+
+
+def test_dashboard_thaophat_row_layout_and_troops_columns():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+        dash.tp_city_combo.current(0)
+        dash._on_tp_city_selected()
+
+        # Kiểm tra bảng tướng có 8 cột chi tiết
+        cols = dash.tp_gen_tree["columns"]
+        assert "infantry" in cols
+        assert "cavalry" in cols
+        assert "archers" in cols
+        assert "total_army" in cols
+
+        tp_gens = dash.tp_gen_tree.get_children()
+        assert len(tp_gens) == 1
+        vals = dash.tp_gen_tree.item(tp_gens[0], "values")
+        # values: ("☐", g.level, stamina, morale, inf, cav, arc, total)
+        assert vals[0] == "☐"
+        assert int(vals[4]) == 100  # Bộ binh
+        assert int(vals[5]) == 200  # Kỵ binh
+        assert int(vals[6]) == 300  # Cung binh
+        assert int(vals[7]) == 600  # Tổng quân
+    finally:
+        dash.destroy()
+
 
 
 

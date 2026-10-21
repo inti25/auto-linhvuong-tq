@@ -405,9 +405,11 @@ class Dashboard(tk.Tk):
                 "techs": [],
             },
             "thao_phat": {
-                "min_army": self.tp_min_army_var.get() if hasattr(self, "tp_min_army_var") else "5000",
+                "min_army": self.tp_target_inf_var.get() if hasattr(self, "tp_target_inf_var") else (self.tp_min_army_var.get() if hasattr(self, "tp_min_army_var") else "5000"),
+                "target_infantry": self.tp_target_inf_var.get() if hasattr(self, "tp_target_inf_var") else "5000",
+                "target_cavalry": self.tp_target_cav_var.get() if hasattr(self, "tp_target_cav_var") else "0",
+                "target_archers": self.tp_target_arc_var.get() if hasattr(self, "tp_target_arc_var") else "0",
                 "mission_idx": self.tp_mission_combo.current() if hasattr(self, "tp_mission_combo") else 0,
-                "army_type_idx": self.tp_army_type_combo.current() if hasattr(self, "tp_army_type_combo") else 0,
                 "auto_recruit": bool(self.tp_auto_recruit_var.get()) if hasattr(self, "tp_auto_recruit_var") else True,
                 "auto_morale": bool(self.tp_auto_morale_var.get()) if hasattr(self, "tp_auto_morale_var") else True,
                 "min_morale": self.tp_min_morale_var.get() if hasattr(self, "tp_min_morale_var") else "95",
@@ -524,16 +526,22 @@ class Dashboard(tk.Tk):
         # 3. Thảo Phạt
         if "thao_phat" in data and isinstance(data["thao_phat"], dict):
             tp_data = data["thao_phat"]
-            if hasattr(self, "tp_min_army_var") and "min_army" in tp_data:
+            if hasattr(self, "tp_target_inf_var"):
+                if "target_infantry" in tp_data:
+                    self.tp_target_inf_var.set(str(tp_data["target_infantry"]))
+                elif "min_army" in tp_data:
+                    self.tp_target_inf_var.set(str(tp_data["min_army"]))
+            elif hasattr(self, "tp_min_army_var") and "min_army" in tp_data:
                 self.tp_min_army_var.set(str(tp_data["min_army"]))
+
+            if hasattr(self, "tp_target_cav_var") and "target_cavalry" in tp_data:
+                self.tp_target_cav_var.set(str(tp_data["target_cavalry"]))
+            if hasattr(self, "tp_target_arc_var") and "target_archers" in tp_data:
+                self.tp_target_arc_var.set(str(tp_data["target_archers"]))
+
             if hasattr(self, "tp_mission_combo") and "mission_idx" in tp_data:
                 try:
                     self.tp_mission_combo.current(int(tp_data["mission_idx"]))
-                except Exception:
-                    pass
-            if hasattr(self, "tp_army_type_combo") and "army_type_idx" in tp_data:
-                try:
-                    self.tp_army_type_combo.current(int(tp_data["army_type_idx"]))
                 except Exception:
                     pass
             if hasattr(self, "tp_auto_recruit_var") and "auto_recruit" in tp_data:
@@ -637,31 +645,39 @@ class Dashboard(tk.Tk):
         top_ctrl = tk.Frame(parent, bg=BG)
         top_ctrl.pack(fill="x", pady=6)
 
-        # Hàng 1: Thành trì, Chiến dịch, Binh chủng, Quân số MT, Nút Bắt đầu
+        # Hàng 1: Thành trì, Chiến dịch, Cấu hình biên chế MT (Bộ, Kỵ, Cung), Nút Biên chế ngay, Nút Bắt đầu
         row1 = tk.Frame(top_ctrl, bg=BG)
         row1.pack(fill="x", pady=(0, 4))
 
-        tk.Label(row1, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
-        self.tp_city_combo = ttk.Combobox(row1, state="readonly", width=18)
-        self.tp_city_combo.pack(side="left", padx=(0, 12))
+        tk.Label(row1, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 4))
+        self.tp_city_combo = ttk.Combobox(row1, state="readonly", width=16)
+        self.tp_city_combo.pack(side="left", padx=(0, 10))
         self.tp_city_combo.bind("<<ComboboxSelected>>", self._on_tp_city_selected)
 
-        tk.Label(row1, text="Chiến dịch:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
-        self.tp_mission_combo = ttk.Combobox(row1, state="readonly", width=15)
+        tk.Label(row1, text="Chiến dịch:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 4))
+        self.tp_mission_combo = ttk.Combobox(row1, state="readonly", width=14)
         self.tp_mission_combo["values"] = [f"{m['name']} (ID: {mid})" for mid, m in THAOPHAT_MISSIONS.items()]
         self.tp_mission_combo.current(0)
-        self.tp_mission_combo.pack(side="left", padx=(0, 12))
+        self.tp_mission_combo.pack(side="left", padx=(0, 10))
 
-        tk.Label(row1, text="Binh chủng:", bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side="left", padx=(0, 6))
-        self.tp_army_type_combo = ttk.Combobox(row1, state="readonly", width=12)
-        self.tp_army_type_combo["values"] = ["1: Bộ binh", "2: Kỵ binh", "3: Cung binh"]
-        self.tp_army_type_combo.current(0)
-        self.tp_army_type_combo.pack(side="left", padx=(0, 12))
+        # Cấu hình biên chế quân đội: Bộ, Kỵ, Cung
+        tk.Label(row1, text="Bộ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
+        self.tp_target_inf_var = tk.StringVar(value="5000")
+        self.tp_min_army_var = self.tp_target_inf_var  # Giữ alias tương thích
+        ttk.Entry(row1, textvariable=self.tp_target_inf_var, width=6).pack(side="left", padx=(0, 8))
 
-        tk.Label(row1, text="Quân số MT:", bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side="left", padx=(0, 6))
-        self.tp_min_army_var = tk.StringVar(value="5000")
-        ttk.Entry(row1, textvariable=self.tp_min_army_var, width=7).pack(side="left", padx=(0, 12))
+        tk.Label(row1, text="Kỵ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
+        self.tp_target_cav_var = tk.StringVar(value="0")
+        ttk.Entry(row1, textvariable=self.tp_target_cav_var, width=6).pack(side="left", padx=(0, 8))
 
+        tk.Label(row1, text="Cung MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
+        self.tp_target_arc_var = tk.StringVar(value="0")
+        ttk.Entry(row1, textvariable=self.tp_target_arc_var, width=6).pack(side="left", padx=(0, 10))
+
+        # Nút Biên chế ngay
+        ttk.Button(row1, text="⚔️ Biên chế ngay", style="Action.TButton", command=self._manual_adjust_tp_troops).pack(side="left", padx=(0, 6))
+
+        # Nút Bắt đầu Thảo Phạt
         self.tp_start_btn = ttk.Button(row1, text="▶️ Bắt đầu Thảo Phạt", style="Success.TButton", command=self._toggle_tp)
         self.tp_start_btn.pack(side="left", padx=4)
 
@@ -681,35 +697,58 @@ class Dashboard(tk.Tk):
 
         tk.Label(row2, text="(Tự động tính toán thời gian hành quân để xuất quân tối ưu)", bg=BG, fg="#888888", font=("Segoe UI", 8, "italic")).pack(side="left", padx=4)
 
-        # Bảng tướng & Log
+        # Bảng tướng & Log sắp xếp theo ROW (Trên: Bảng tướng, Dưới: Nhật ký)
         body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, pady=6)
+        body.pack(fill="both", expand=True, pady=4)
         body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
-        body.rowconfigure(0, weight=1)
+        body.rowconfigure(0, weight=3)
+        body.rowconfigure(1, weight=2)
 
-        f_left = ttk.LabelFrame(body, text="Võ tướng xuất kích (Chọn tối đa 5)", style="Card.TLabelframe")
-        f_left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        self.tp_gen_tree = ttk.Treeview(f_left, columns=("select", "lv", "stamina", "morale", "army"), show="tree headings", selectmode="browse")
+        # Row 0: Bảng danh sách võ tướng
+        f_top = ttk.LabelFrame(body, text="Võ tướng xuất kích (Chọn tối đa 5)", style="Card.TLabelframe")
+        f_top.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
+
+        self.tp_gen_tree = ttk.Treeview(
+            f_top,
+            columns=("select", "lv", "stamina", "morale", "infantry", "cavalry", "archers", "total_army"),
+            show="tree headings",
+            selectmode="browse",
+        )
         self.tp_gen_tree.heading("#0", text="Tên võ tướng")
         self.tp_gen_tree.heading("select", text="Chọn")
         self.tp_gen_tree.heading("lv", text="Cấp")
         self.tp_gen_tree.heading("stamina", text="Thể lực")
         self.tp_gen_tree.heading("morale", text="Sĩ khí")
-        self.tp_gen_tree.heading("army", text="Quân số")
-        self.tp_gen_tree.column("#0", width=115)
-        self.tp_gen_tree.column("select", width=45, anchor="center")
-        self.tp_gen_tree.column("lv", width=40, anchor="center")
-        self.tp_gen_tree.column("stamina", width=65, anchor="center")
-        self.tp_gen_tree.column("morale", width=55, anchor="center")
-        self.tp_gen_tree.column("army", width=70, anchor="e")
-        self.tp_gen_tree.pack(fill="both", expand=True, padx=6, pady=6)
+        self.tp_gen_tree.heading("infantry", text="Bộ binh")
+        self.tp_gen_tree.heading("cavalry", text="Kỵ binh")
+        self.tp_gen_tree.heading("archers", text="Cung binh")
+        self.tp_gen_tree.heading("total_army", text="Tổng quân")
+
+        self.tp_gen_tree.column("#0", width=140)
+        self.tp_gen_tree.column("select", width=50, anchor="center")
+        self.tp_gen_tree.column("lv", width=50, anchor="center")
+        self.tp_gen_tree.column("stamina", width=75, anchor="center")
+        self.tp_gen_tree.column("morale", width=65, anchor="center")
+        self.tp_gen_tree.column("infantry", width=80, anchor="e")
+        self.tp_gen_tree.column("cavalry", width=80, anchor="e")
+        self.tp_gen_tree.column("archers", width=80, anchor="e")
+        self.tp_gen_tree.column("total_army", width=85, anchor="e")
+
+        gen_scroll = ttk.Scrollbar(f_top, orient="vertical", command=self.tp_gen_tree.yview)
+        self.tp_gen_tree.configure(yscrollcommand=gen_scroll.set)
+        self.tp_gen_tree.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
+        gen_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
         self.tp_gen_tree.bind("<ButtonRelease-1>", self._on_tp_gen_toggle)
 
-        f_right = ttk.LabelFrame(body, text="Nhật ký chiến dịch Thảo Phạt", style="Card.TLabelframe")
-        f_right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        self.tp_log_text = tk.Text(f_right, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
-        self.tp_log_text.pack(fill="both", expand=True, padx=6, pady=6)
+        # Row 1: Khung nhật ký log Thảo Phạt
+        f_bottom = ttk.LabelFrame(body, text="Nhật ký chiến dịch Thảo Phạt", style="Card.TLabelframe")
+        f_bottom.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+
+        log_scroll = ttk.Scrollbar(f_bottom, orient="vertical")
+        self.tp_log_text = tk.Text(f_bottom, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0, yscrollcommand=log_scroll.set)
+        log_scroll.config(command=self.tp_log_text.yview)
+        self.tp_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
+        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
 
     def _on_tp_city_selected(self, _event=None):
         sel_idx = self.tp_city_combo.current()
@@ -722,13 +761,16 @@ class Dashboard(tk.Tk):
             if g.role != "vo":
                 continue
             army = self.roster.army_of(g.id)
-            army_count = army.total if army else 0
+            inf = army.infantry if army else 0
+            cav = army.cavalry if army else 0
+            arc = army.archers if army else 0
+            total = army.total if army else 0
             self.tp_gen_tree.insert(
                 "",
                 "end",
                 iid=str(g.id),
                 text=g.name,
-                values=("☐", g.level, f"{g.stamina}/{g.stamina_max}", g.morale, army_count),
+                values=("☐", g.level, f"{g.stamina}/{g.stamina_max}", g.morale, inf, cav, arc, total),
             )
 
     def _on_tp_gen_toggle(self, event):
@@ -738,6 +780,95 @@ class Dashboard(tk.Tk):
         vals = list(self.tp_gen_tree.item(item, "values"))
         vals[0] = "☑" if vals[0] == "☐" else "☐"
         self.tp_gen_tree.item(item, values=vals)
+
+    def _manual_adjust_tp_troops(self):
+        """Bổ sung/biên chế quân lính thủ công ngay lập tức cho các tướng đã chọn."""
+        sel_idx = self.tp_city_combo.current()
+        bases = self.roster.bases if (self.roster and self.roster.bases) else []
+        if sel_idx < 0 or sel_idx >= len(bases):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ!")
+            return
+        city_id = bases[sel_idx].id
+        sel_gens = [int(iid) for iid in self.tp_gen_tree.get_children() if self.tp_gen_tree.item(iid, "values")[0] == "☑"]
+        if not sel_gens:
+            messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 võ tướng để biên chế!")
+            return
+
+        try:
+            inf = int(self.tp_target_inf_var.get() or "0")
+            cav = int(self.tp_target_cav_var.get() or "0")
+            arc = int(self.tp_target_arc_var.get() or "0")
+        except ValueError:
+            messagebox.showerror("Lỗi", "Quân số biên chế phải là số nguyên!")
+            return
+
+        target_army = TargetArmy(infantry=inf, cavalry=cav, archers=arc)
+        auto_recruit = bool(self.tp_auto_recruit_var.get())
+
+        def _worker():
+            self.after(0, self._append_tp_log, "⚔️ Bắt đầu tiến trình biên chế quân đội thủ công...")
+            self.after(0, self._append_tp_log, f"   Mục tiêu: Bộ={inf}, Kỵ={cav}, Cung={arc} | Tự động chiêu mộ tân binh: {'Bật' if auto_recruit else 'Tắt'}")
+            executor = getattr(self, "tp_executor", None) or ThaoPhatExecutor(self.gateway)
+            try:
+                # 1. Tính tổng tân binh cần và chiêu mộ trước nếu bật auto_recruit
+                if auto_recruit:
+                    fresh_roster = fetch_roster(self.gateway)
+                    total_needed = 0
+                    for gid in sel_gens:
+                        cur_army = fresh_roster.army_of(gid)
+                        cur_inf = cur_army.infantry if cur_army else 0
+                        cur_cav = cur_army.cavalry if cur_army else 0
+                        cur_arc = cur_army.archers if cur_army else 0
+                        total_needed += max(0, target_army.infantry - cur_inf)
+                        total_needed += max(0, target_army.cavalry - cur_cav)
+                        total_needed += max(0, target_army.archers - cur_arc)
+                    if total_needed > 0:
+                        avail = executor.check_recruits(city_id)
+                        if avail is not None and avail < total_needed:
+                            missing = total_needed - avail
+                            self.after(0, self._append_tp_log, f"📦 [Tân binh] Kho có {avail}/{total_needed}, tự động chiêu mộ thêm {missing} tân binh...")
+                            b_succ, b_ret = executor.buy_recruits(city_id, missing)
+                            if b_succ:
+                                self.after(0, self._append_tp_log, f"   [Chiêu mộ] ✅ Đã chiêu mộ thành công {missing} tân binh!")
+                            else:
+                                err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
+                                self.after(0, self._append_tp_log, f"   [Chiêu mộ] ⚠️ Chiêu mộ thất bại ({err_desc})")
+
+                # 2. Biên chế lính cho từng tướng
+                fresh_roster = fetch_roster(self.gateway)
+                city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                for gid in sel_gens:
+                    g = city_gens.get(gid)
+                    gname = g.name if g else str(gid)
+                    cur_army = fresh_roster.army_of(gid)
+                    results = executor.adjust_troops(
+                        city_id,
+                        gid,
+                        cur_army,
+                        target_army,
+                        auto_recruit=auto_recruit,
+                        on_log=lambda m: self.after(0, self._append_tp_log, m),
+                    )
+                    if results:
+                        for stype, diff, succ, ret_code in results:
+                            tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(stype, "Quân")
+                            if succ:
+                                self.after(0, self._append_tp_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ✅ Thành công")
+                            else:
+                                err_desc = ERROR_MESSAGES.get(ret_code, f"Mã lỗi: {ret_code}")
+                                self.after(0, self._append_tp_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
+                    else:
+                        self.after(0, self._append_tp_log, f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
+
+                self.after(0, self._append_tp_log, "🏁 Hoàn tất tiến trình biên chế quân đội!")
+                # Tải lại roster để cập nhật cây tướng
+                new_roster = fetch_roster(self.gateway)
+                self.roster = new_roster
+                self.after(0, self._on_tp_city_selected)
+            except Exception as e:
+                self.after(0, self._append_tp_log, f"❌ Lỗi ngoại lệ khi biên chế: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _toggle_tp(self):
         if not self._tp_running:
@@ -755,23 +886,26 @@ class Dashboard(tk.Tk):
             task_id = list(THAOPHAT_MISSIONS.keys())[mission_idx]
 
             try:
-                min_army = int(self.tp_min_army_var.get() or "5000")
+                target_inf = int(self.tp_target_inf_var.get() or "0")
             except ValueError:
-                min_army = 5000
+                target_inf = 5000
+
+            try:
+                target_cav = int(self.tp_target_cav_var.get() or "0")
+            except ValueError:
+                target_cav = 0
+
+            try:
+                target_arc = int(self.tp_target_arc_var.get() or "0")
+            except ValueError:
+                target_arc = 0
 
             try:
                 min_morale = int(self.tp_min_morale_var.get() or "95")
             except ValueError:
                 min_morale = 95
 
-            soldier_type_idx = self.tp_army_type_combo.current() if hasattr(self, "tp_army_type_combo") else 0
-            if soldier_type_idx == 1:
-                target_army = TargetArmy(cavalry=min_army)
-            elif soldier_type_idx == 2:
-                target_army = TargetArmy(archers=min_army)
-            else:
-                target_army = TargetArmy(infantry=min_army)
-
+            target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
             auto_recruit = bool(self.tp_auto_recruit_var.get()) if hasattr(self, "tp_auto_recruit_var") else True
             auto_morale = bool(self.tp_auto_morale_var.get()) if hasattr(self, "tp_auto_morale_var") else True
 
