@@ -106,7 +106,8 @@ def test_dashboard_building_tree_interactive_controls():
     dash = safe_dashboard()
     try:
         bld_items = dash.bld_tree.get_children()
-        assert len(bld_items) == 32
+        assert len(bld_items) == 16
+        assert dash.bld_tree.item(bld_items[0], "text") == "官府 - Quan Phủ"
 
         # Kiểm tra Select All / Deselect All
         dash._select_all_bld(False)

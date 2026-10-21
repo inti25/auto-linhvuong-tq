@@ -107,3 +107,32 @@ _Avoid_: Mức an toàn, return threshold
 **Thời Gian Đóng Băng**:
 Khoảng thời gian Doanh trại phải tạm dừng sau mỗi bước dời vị trí trước khi có thể dời tiếp hoặc xuất trận (`frozen_time`).
 _Avoid_: Cooldown dời trại, frozen time
+
+## Danh Mục Công Trình (Nhà)
+
+Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:
+
+| GID | Tên Kiến Trúc Chuẩn (ZBuild / ZMan) | Chức Năng |
+|:---:|:---|:---|
+| 1 | `官府 - Quan Phủ` | Trung tâm chỉ huy thành, mở khóa ô đất và công trình |
+| 2 | `城墙 - Tường Thành` | Phòng thủ thành trì, xây cạm bẫy tên nỏ |
+| 3 | `民房 - Nhà Dân` | Tăng trần dân số và sản lượng thuế |
+| 4 | `仓库 - Kho` | Bảo vệ và dự trữ lương thực, tài nguyên |
+| 5 | `鸿胪寺 - Hồng Lư Tự` | Thiết lập liên minh, bang hội và bang giao |
+| 6 | `大学殿 - Đại Học Điện` | Nghiên cứu 29 Kỹ Thuật Đại Học |
+| 7 | `客栈 - Quán Trọ` | Tiếp nhận và theo dõi tướng lang bạt |
+| 8 | `酒馆 - Tửu Quán` | Chiêu mộ tướng tài bằng tiệc rượu |
+| 9 | `聚贤楼 - Tụ Hiền Lâu` | Quản lý danh sách văn võ tướng của thành |
+| 10 | `点将台 - Điểm Tướng Đài` | Điều binh phái tướng, biên chế đạo quân |
+| 11 | `市场 - Chợ` | Mua bán tài nguyên, điều động xe buôn |
+| 12 | `驿站 - Dịch Trạm` | Tăng tốc độ hành quân và chi viện |
+| 13 | `兵器铺 - Xưởng Binh Khí` | Sản xuất vũ khí đao, thương, cung |
+| 14 | `防具铺 - Xưởng Khôi Giáp` | Sản xuất áo giáp, khiên |
+| 15 | `车马间 - Xưởng Ngựa` | Nuôi dưỡng và huấn luyện chiến mã |
+| 16 | `校场 - Binh Trường` | Huấn luyện và mở rộng trần quân số |
+| 17 | `营寨栅栏 - Tường` | Tường phòng thủ của Doanh trại |
+| 18 | `中军大帐 - Trung Quân Đại Trướng` | Đầu não chỉ huy của Doanh trại |
+| 19 | `营寨校场 - Binh Trường` | Doanh trại dã ngoại |
+| 20 | `营寨驿站 - Dịch Trạm` | Trạm liên lạc của Doanh trại |
+| 21 | `营寨仓库 - Kho` | Kho dã ngoại của Doanh trại |
+

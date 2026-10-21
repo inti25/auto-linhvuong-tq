@@ -7,16 +7,22 @@
       "auto_comfort": true,
       "auto_boost": true,
       "plans": [
-        { "pid": 1, "gid": 1, "target_level": 20, "name": "Thái Phủ" },
-        { "pid": 2, "gid": 2, "target_level": 15, "name": "Dân Cư" },
-        { "pid": 3, "gid": 3, "target_level": 15, "name": "Kho Lúa" },
-        { "pid": 4, "gid": 4, "target_level": 15, "name": "Kho Bạc" },
-        { "pid": 8, "gid": 8, "target_level": 20, "name": "Viện Đại Học" },
-        { "pid": 13, "gid": 13, "target_level": 20, "name": "Thành Tường" },
-        { "pid": 21, "gid": 21, "target_level": 20, "name": "Ruộng Lúa" },
-        { "pid": 22, "gid": 22, "target_level": 20, "name": "Tiệm Rèn" },
-        { "pid": 23, "gid": 23, "target_level": 20, "name": "Đào Đá" },
-        { "pid": 24, "gid": 24, "target_level": 20, "name": "Chặt Gỗ" }
+        { "pid": 1, "gid": 1, "target_level": 20, "name": "官府 - Quan Phủ" },
+        { "pid": 2, "gid": 2, "target_level": 15, "name": "城墙 - Tường Thành" },
+        { "pid": 3, "gid": 3, "target_level": 15, "name": "民房 - Nhà Dân" },
+        { "pid": 4, "gid": 4, "target_level": 15, "name": "仓库 - Kho" },
+        { "pid": 5, "gid": 5, "target_level": 15, "name": "鸿胪寺 - Hồng Lư Tự" },
+        { "pid": 6, "gid": 6, "target_level": 20, "name": "大学殿 - Đại Học Điện" },
+        { "pid": 7, "gid": 7, "target_level": 15, "name": "客栈 - Quán Trọ" },
+        { "pid": 8, "gid": 8, "target_level": 15, "name": "酒馆 - Tửu Quán" },
+        { "pid": 9, "gid": 9, "target_level": 15, "name": "聚贤楼 - Tụ Hiền Lâu" },
+        { "pid": 10, "gid": 10, "target_level": 20, "name": "点将台 - Điểm Tướng Đài" },
+        { "pid": 11, "gid": 11, "target_level": 20, "name": "市场 - Chợ" },
+        { "pid": 12, "gid": 12, "target_level": 20, "name": "驿站 - Dịch Trạm" },
+        { "pid": 13, "gid": 13, "target_level": 20, "name": "兵器铺 - Xưởng Binh Khí" },
+        { "pid": 14, "gid": 14, "target_level": 20, "name": "防具铺 - Xưởng Khôi Giáp" },
+        { "pid": 15, "gid": 15, "target_level": 20, "name": "车马间 - Xưởng Ngựa" },
+        { "pid": 16, "gid": 16, "target_level": 20, "name": "校场 - Binh Trường" }
       ]
     }
   }

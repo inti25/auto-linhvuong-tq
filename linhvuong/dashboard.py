@@ -780,14 +780,14 @@ class Dashboard(tk.Tk):
             show="tree headings",
             selectmode="browse",
         )
-        self.bld_tree.heading("#0", text="Tên công trình")
+        self.bld_tree.heading("#0", text="Nhà")
         self.bld_tree.heading("select", text="Chọn")
         self.bld_tree.heading("pid", text="Ô đất")
         self.bld_tree.heading("gid", text="Mã loại")
         self.bld_tree.heading("current_lvl", text="Cấp HT")
         self.bld_tree.heading("target_lvl", text="Cấp MT")
 
-        self.bld_tree.column("#0", width=125)
+        self.bld_tree.column("#0", width=175)
         self.bld_tree.column("select", width=45, anchor="center")
         self.bld_tree.column("pid", width=50, anchor="center")
         self.bld_tree.column("gid", width=55, anchor="center")
@@ -810,38 +810,22 @@ class Dashboard(tk.Tk):
     def _populate_default_buildings(self):
         self.bld_tree.delete(*self.bld_tree.get_children())
         default_plots = [
-            (1, 1, "Thái Phủ", 20),
-            (2, 2, "Tường Lũy", 20),
-            (3, 3, "Kho Lương", 20),
-            (4, 4, "Doanh Trại", 20),
-            (5, 5, "Trường Luyện Binh", 20),
-            (6, 6, "Dịch Trạm", 20),
-            (7, 7, "Tiệm Rèn", 20),
-            (8, 8, "Viện Đại Học", 20),
-            (9, 9, "Thị Trường", 20),
-            (10, 10, "Chiêu Hiền Quán", 20),
-            (11, 11, "Thần Miếu", 20),
-            (12, 12, "Sứ Quán", 20),
-            (13, 13, "Thái Y Viện", 20),
-            (14, 14, "Quân Giới Phủ", 20),
-            (15, 15, "Hồng Kê Quán", 20),
-            (16, 16, "Nhà Dân 1", 20),
-            (17, 16, "Nhà Dân 2", 20),
-            (18, 16, "Nhà Dân 3", 20),
-            (19, 16, "Nhà Dân 4", 20),
-            (20, 16, "Nhà Dân 5", 20),
-            (21, 21, "Ruộng Lúa 1", 20),
-            (22, 21, "Ruộng Lúa 2", 20),
-            (23, 21, "Ruộng Lúa 3", 20),
-            (24, 22, "Xưởng Gỗ 1", 20),
-            (25, 22, "Xưởng Gỗ 2", 20),
-            (26, 22, "Xưởng Gỗ 3", 20),
-            (27, 23, "Mỏ Đá 1", 20),
-            (28, 23, "Mỏ Đá 2", 20),
-            (29, 23, "Mỏ Đá 3", 20),
-            (30, 24, "Mỏ Sắt 1", 20),
-            (31, 24, "Mỏ Sắt 2", 20),
-            (32, 24, "Mỏ Sắt 3", 20),
+            (1, 1, "官府 - Quan Phủ", 20),
+            (2, 2, "城墙 - Tường Thành", 20),
+            (3, 3, "民房 - Nhà Dân", 20),
+            (4, 4, "仓库 - Kho", 20),
+            (5, 5, "鸿胪寺 - Hồng Lư Tự", 20),
+            (6, 6, "大学殿 - Đại Học Điện", 20),
+            (7, 7, "客栈 - Quán Trọ", 20),
+            (8, 8, "酒馆 - Tửu Quán", 20),
+            (9, 9, "聚贤楼 - Tụ Hiền Lâu", 20),
+            (10, 10, "点将台 - Điểm Tướng Đài", 20),
+            (11, 11, "市场 - Chợ", 20),
+            (12, 12, "驿站 - Dịch Trạm", 20),
+            (13, 13, "兵器铺 - Xưởng Binh Khí", 20),
+            (14, 14, "防具铺 - Xưởng Khôi Giáp", 20),
+            (15, 15, "车马间 - Xưởng Ngựa", 20),
+            (16, 16, "校场 - Binh Trường", 20),
         ]
         for pid, gid, name, target in default_plots:
             self.bld_tree.insert("", "end", iid=str(pid), text=name, values=("☑", pid, gid, 0, target))
@@ -932,15 +916,24 @@ class Dashboard(tk.Tk):
                 pid = int(b[0])
                 bmap[pid] = (int(b[1]), int(b[2]))
 
+        existing_pids = set()
         for iid in self.bld_tree.get_children(""):
             vals = list(self.bld_tree.item(iid, "values"))
             pid = int(vals[1])
+            existing_pids.add(pid)
             if pid in bmap:
                 gid, cur_lvl = bmap[pid]
                 vals[2] = gid
                 vals[3] = cur_lvl
                 name = BUILDING_NAMES.get(gid, self.bld_tree.item(iid, "text"))
                 self.bld_tree.item(iid, text=name, values=vals)
+
+        for pid in sorted(bmap.keys()):
+            if pid not in existing_pids:
+                gid, cur_lvl = bmap[pid]
+                name = BUILDING_NAMES.get(gid, f"Công trình {gid}")
+                self.bld_tree.insert("", "end", iid=str(pid), text=name, values=("☑", pid, gid, cur_lvl, 20))
+
         self._append_bld_log(f"🔄 Đã cập nhật cấp hiện tại của {len(bmap)} công trình trong thành.")
 
     def _load_build_plans(self):
@@ -958,7 +951,8 @@ class Dashboard(tk.Tk):
         if plans_list:
             self.bld_tree.delete(*self.bld_tree.get_children())
             for p in plans_list:
-                name = p.get("name") or BUILDING_NAMES.get(p.get("gid"), f"Công trình {p.get('gid')}")
+                gid = p.get("gid", 1)
+                name = BUILDING_NAMES.get(gid, p.get("name") or f"Công trình {gid}")
                 en = "☑" if p.get("enabled", True) else "☐"
                 self.bld_tree.insert(
                     "",
