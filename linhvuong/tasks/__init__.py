@@ -2,6 +2,7 @@
 
 from .binh_man import BinhMan
 from .building import BuildingPlan, BuildingTask
+from .di_trai import DiTrai
 from .goi_dan import GoiDan
 from .logistics import ArmyTransferOrder, LogisticsTask
 from .research import ResearchTask, TechPlan
@@ -11,6 +12,7 @@ __all__ = [
     "BinhMan",
     "BuildingPlan",
     "BuildingTask",
+    "DiTrai",
     "GoiDan",
     "ArmyTransferOrder",
     "LogisticsTask",
@@ -18,3 +20,4 @@ __all__ = [
     "TechPlan",
     "ThaoPhat",
 ]
+

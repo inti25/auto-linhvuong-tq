@@ -151,3 +151,10 @@ def test_martial_generals_in_camps_have_army_composition():
     assert (army.infantry, army.cavalry, army.archers) == (0, 1500, 0)
     assert army.total == 1500
 
+    # Test update_camp_position
+    r.update_camp_position(-3035, 120, 130)
+    camp = r.base_by_id(-3035)
+    assert camp is not None
+    assert camp.pos_x == 120
+    assert camp.pos_y == 130
+

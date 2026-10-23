@@ -22,8 +22,16 @@ Tướng chuyên về mưu lược, nội chính và điều hành (loại 1), �
 _Avoid_: Văn tướng, mưu sĩ (khi chỉ chung văn chức)
 
 **Di trại**:
-Hành động dời Doanh trại dã ngoại từng bước trên bản đồ tọa độ về hướng mục tiêu trước khi xuất kích.
+Hành động dời Doanh trại dã ngoại từng bước trên bản đồ tọa độ về hướng mục tiêu trước khi xuất kích hoặc theo tọa độ chỉ định.
 _Avoid_: Dời trại, di chuyển trại, relocate
+
+**Di Trại Độc Lập**:
+Hành động điều khiển Doanh trại dời vị trí tuần tự từng bước trên bản đồ tọa độ đến vị trí đích (X, Y) chỉ định mà không gắn liền với chu trình Bình Man.
+_Avoid_: Dời trại thủ công, di chuyển trại tự do, camp navigation
+
+**Lách Vật Cản**:
+Cơ chế tự động dò tìm các ô phụ cận có cự ly Chebyshev gần đích nhất khi bước di chuyển thẳng của Doanh trại bị chặn bởi chướng ngại vật địa hình hoặc công trình (mã lỗi 39).
+_Avoid_: Dò đường tránh vật cản, bypass obstacle, detour
 
 **Tăng tốc**:
 Hành động sử dụng đạo cụ (Lệnh bài tăng tốc / Vàng) để giảm thời gian hoặc hoàn tất tức thì một tiến trình nâng cấp công trình hoặc nghiên cứu.

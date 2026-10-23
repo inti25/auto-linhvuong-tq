@@ -793,6 +793,49 @@ def test_dashboard_sync_city_techs_data_preserves_queue_order():
         dash.destroy()
 
 
+def test_dashboard_ditrai_ui_controls(monkeypatch):
+    import tkinter.messagebox
+    monkeypatch.setattr(tkinter.messagebox, "showwarning", lambda *a, **k: None)
+    monkeypatch.setattr(tkinter.messagebox, "showerror", lambda *a, **k: None)
+    monkeypatch.setattr(tkinter.messagebox, "showinfo", lambda *a, **k: None)
+
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra sự tồn tại của các widget Di Trại
+        assert hasattr(dash, "dt_camp_combo")
+        assert hasattr(dash, "dt_origin_lbl")
+        assert hasattr(dash, "dt_dest_x_var")
+        assert hasattr(dash, "dt_dest_y_var")
+        assert hasattr(dash, "dt_start_btn")
+        assert hasattr(dash, "dt_stop_btn")
+        assert hasattr(dash, "dt_status_lbl")
+
+        # 2. Tạo một camp trong Roster và kiểm tra nạp vào combobox
+        r = Roster()
+        camp = City(id=-1001, name="DoanhTrại1", type="Doanh trại", pos_x=50, pos_y=60)
+        r.camps = [camp]
+        dash._loaded(r)
+
+        # Kiểm tra dt_camp_combo và bm_city_combo nạp danh sách camp
+        assert len(dash.dt_camp_combo["values"]) > 0
+        dash.dt_camp_combo.current(0)
+        dash._on_dt_camp_selected()
+        assert "(50, 60)" in dash.dt_origin_lbl.cget("text")
+
+        # Kiểm tra bm_city_combo tự động gán bm_camp_id_var
+        dash.bm_city_combo.current(0)
+        dash._on_bm_city_selected()
+        assert dash.bm_camp_id_var.get() == "-1001"
+
+        # 3. Kiểm tra validation khi chưa nhập tọa độ đích
+        dash.dt_dest_x_var.set("")
+        dash.dt_dest_y_var.set("")
+        dash._start_ditrai()
+        assert str(dash.dt_start_btn["state"]) == "normal"
+    finally:
+        dash.destroy()
+
+
 
 
 

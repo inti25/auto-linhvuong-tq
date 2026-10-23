@@ -22,11 +22,7 @@ from typing import Callable, Optional
 
 from ..scan import Target
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired, TaskContext, attack
-
-
-def chebyshev_distance(x1: int, y1: int, x2: int, y2: int) -> int:
-    """Khoảng cách ô lưới chuẩn trong bản đồ Linh Vương: max(|dx|, |dy|)."""
-    return max(abs(x1 - x2), abs(y1 - y2))
+from .di_trai import DiTrai, chebyshev_distance
 
 
 class BinhMan:
@@ -64,17 +60,15 @@ class BinhMan:
 
     def step_towards(self, target_x: int, target_y: int, step_limit: Optional[int] = None) -> tuple[int, int]:
         """Tính tọa độ bước dời kế tiếp hướng về mục tiêu, giới hạn bởi step_limit."""
-        cx, cy = self.origin
-        dx = target_x - cx
-        dy = target_y - cy
-        limit = step_limit if step_limit is not None else self.max_step
-
-        def clamp(val: int, lim: int) -> int:
-            return max(-lim, min(lim, val))
-
-        sx = cx + clamp(dx, limit)
-        sy = cy + clamp(dy, limit)
-        return sx, sy
+        mover = DiTrai(
+            ctx=self.ctx,
+            camp_id=self.camp_id or 0,
+            origin=self.origin,
+            destination=(target_x, target_y),
+            max_step=self.max_step,
+            sleep_fn=self.sleep_fn,
+        )
+        return mover.step_towards(target_x, target_y, step_limit)
 
     def move_camp(self, dest_x: int, dest_y: int) -> tuple[bool, int, str]:
         """Gửi lệnh dời Trại Di Chuyển qua Common.ashx?id=55."""
@@ -82,52 +76,37 @@ class BinhMan:
             self.origin = (dest_x, dest_y)
             return True, 0, "ok"
 
-        payload = {
-            "lDestX": str(dest_x),
-            "lDestY": str(dest_y),
-            "lTentID": str(self.camp_id),
-            "_": "",
-        }
-        resp = self.ctx.gateway.call("Common.ashx", 55, payload) or {}
-        ret = resp.get("ret", RET_OK)
-
-        if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
-            raise CaptchaRequired()
-
-        if ret == RET_OK:
-            frozen_time = int(resp.get("frozen", 0))
-            self.origin = (dest_x, dest_y)
-            if frozen_time > 0:
-                self.sleep_fn(frozen_time)
-            return True, frozen_time, "ok"
-
-        if ret == 39:
-            # ret=39: Đã có công trình hoặc vật cản tại tọa độ đích
-            return False, 0, "obstacle"
-
-        if ret == 42:
-            # ret=42: Đang trong thời gian đóng băng
-            return False, 0, "frozen"
-
-        return False, 0, f"error:{ret}"
+        mover = DiTrai(
+            ctx=self.ctx,
+            camp_id=self.camp_id,
+            origin=self.origin,
+            destination=(dest_x, dest_y),
+            max_step=self.max_step,
+            sleep_fn=self.sleep_fn,
+        )
+        success, frozen, reason = mover.move_step(dest_x, dest_y)
+        if success:
+            self.origin = mover.origin
+        return success, frozen, reason
 
     def advance_camp_to_target(self, target: Target) -> bool:
         """Dời Trại Di Chuyển từng bước hướng tới mục tiêu cho đến khi khoảng cách <= 2 ô."""
-        while chebyshev_distance(self.origin[0], self.origin[1], target.x, target.y) > 2:
-            # 1. Thử bước nhảy lớn nhất (max_step)
-            sx, sy = self.step_towards(target.x, target.y, self.max_step)
-            success, _, reason = self.move_camp(sx, sy)
+        if not self.camp_id:
+            return True
 
-            if not success and reason == "obstacle":
-                # Thử lùi về bước nhỏ hơn 1 ô (backoff)
-                sx, sy = self.step_towards(target.x, target.y, max(1, self.max_step - 1))
-                success, _, reason = self.move_camp(sx, sy)
+        mover = DiTrai(
+            ctx=self.ctx,
+            camp_id=self.camp_id,
+            origin=self.origin,
+            destination=(target.x, target.y),
+            max_step=self.max_step,
+            sleep_fn=self.sleep_fn,
+            stop_at_distance=2,
+        )
+        res = mover.advance_to_destination()
+        self.origin = mover.origin
+        return res in ("arrived", "stopped")
 
-            if not success:
-                self.ctx.notify(f"❌ Dời trại tới ({target.x}, {target.y}) thất bại: {reason}")
-                return False
-
-        return True
 
     def retreat_to_safety(self) -> None:
         """Hồi binh về thành mẹ để trị thương và bổ sung quân lực."""

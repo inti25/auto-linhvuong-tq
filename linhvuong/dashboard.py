@@ -20,10 +20,11 @@ from typing import Callable, Optional, Union
 
 from .gateway import GatewayClient
 from .locks import TargetLocks
-from .roster import Army, General, Roster, fetch_roster
+from .roster import Army, City, General, Roster, fetch_roster
 from .scan import Scanner
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import BinhMan
+from .tasks.di_trai import DiTrai
 from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask
 from .tasks.goi_dan import GoiDan, VONG_LINH
 from .tasks.logistics import ArmyTransferOrder, LogisticsTask
@@ -276,6 +277,8 @@ class Dashboard(tk.Tk):
         self._tp_runner = None
         self._gd_runner = None
         self._bm_runner = None
+        self._ditrai_runner = None
+        self._ditrai_stop_event = threading.Event()
         self._bld_runner = None
         self._res_runner = None
         self._city_building_plans: dict[int, list[dict]] = {}
@@ -1246,52 +1249,213 @@ class Dashboard(tk.Tk):
     # TAB 4: BÌNH MAN & DI TRẠI
     # =========================================================================
     def _build_binhman_tab(self, parent):
-        top = tk.Frame(parent, bg=BG)
-        top.pack(fill="x", pady=6)
+        # 1. Khung Bình Man Tự Động
+        f_bm = ttk.LabelFrame(parent, text="🗡️ Tự Động Bình Man", style="Card.TLabelframe")
+        f_bm.pack(fill="x", padx=4, pady=4)
 
-        tk.Label(top, text="Căn cứ xuất phát:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        self.bm_city_combo = ttk.Combobox(top, state="readonly", width=18)
+        tk.Label(f_bm, text="Căn cứ xuất phát:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        self.bm_city_combo = ttk.Combobox(f_bm, state="readonly", width=22)
         self.bm_city_combo.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        self.bm_city_combo.bind("<<ComboboxSelected>>", self._on_bm_city_selected)
 
-        tk.Label(top, text="Thành mẹ (Hồi quân):", bg=BG, fg=FG, font=("Segoe UI", 10)).grid(row=0, column=2, sticky="w", padx=4, pady=4)
-        self.bm_parent_city_combo = ttk.Combobox(top, state="readonly", width=18)
+        tk.Label(f_bm, text="Thành mẹ (Hồi quân):", bg=BG, fg=FG, font=("Segoe UI", 10)).grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        self.bm_parent_city_combo = ttk.Combobox(f_bm, state="readonly", width=18)
         self.bm_parent_city_combo.grid(row=0, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(top, text="Doanh trại ID:", bg=BG, fg=FG).grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Doanh trại ID:", bg=BG, fg=FG).grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self.bm_camp_id_var = tk.StringVar(value="")
-        ttk.Entry(top, textvariable=self.bm_camp_id_var, width=12).grid(row=1, column=1, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_camp_id_var, width=12).grid(row=1, column=1, sticky="w", padx=4, pady=4)
 
-        tk.Label(top, text="Ngưỡng An Toàn (%):", bg=BG, fg=FG).grid(row=1, column=2, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Ngưỡng An Toàn (%):", bg=BG, fg=FG).grid(row=1, column=2, sticky="w", padx=4, pady=4)
         self.bm_threshold_var = tk.StringVar(value="30")
-        ttk.Entry(top, textvariable=self.bm_threshold_var, width=8).grid(row=1, column=3, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_threshold_var, width=8).grid(row=1, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(top, text="Bán kính quét:", bg=BG, fg=FG).grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Bán kính quét:", bg=BG, fg=FG).grid(row=2, column=0, sticky="w", padx=4, pady=4)
         self.bm_radius_var = tk.StringVar(value="10")
-        ttk.Entry(top, textvariable=self.bm_radius_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_radius_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
 
-        tk.Label(top, text="Cấp Man (1..10):", bg=BG, fg=FG).grid(row=2, column=2, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Cấp Man (1..10):", bg=BG, fg=FG).grid(row=2, column=2, sticky="w", padx=4, pady=4)
         self.bm_mantypes_var = tk.StringVar(value="7,8,9,10")
-        ttk.Entry(top, textvariable=self.bm_mantypes_var, width=18).grid(row=2, column=3, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_mantypes_var, width=18).grid(row=2, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", padx=4, pady=4)
         self.bm_interval_var = tk.StringVar(value="15")
-        ttk.Entry(top, textvariable=self.bm_interval_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_interval_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=4)
 
-        ctrl_frame = tk.Frame(top, bg=BG)
+        ctrl_frame = tk.Frame(f_bm, bg=BG)
         ctrl_frame.grid(row=0, column=4, rowspan=4, padx=16)
         self.bm_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Bình Man", style="Success.TButton", command=self._toggle_binhman)
         self.bm_start_btn.pack(side="top", pady=2)
         self.bm_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
         self.bm_once_btn.pack(side="top", pady=2)
 
+        # 2. Khung Di Trại Độc Lập
+        f_dt = ttk.LabelFrame(parent, text="🏕️ Di Trại Độc Lập (Tới Tọa Độ Chỉ Định)", style="Card.TLabelframe")
+        f_dt.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(f_dt, text="Doanh trại:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        self.dt_camp_combo = ttk.Combobox(f_dt, state="readonly", width=22)
+        self.dt_camp_combo.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        self.dt_camp_combo.bind("<<ComboboxSelected>>", self._on_dt_camp_selected)
+
+        self.dt_origin_lbl = tk.Label(f_dt, text="Vị trí hiện tại: (---, ---)", bg=BG, fg=ACCENT, font=("Segoe UI", 9, "bold"))
+        self.dt_origin_lbl.grid(row=0, column=2, columnspan=2, sticky="w", padx=8, pady=4)
+
+        tk.Label(f_dt, text="Tọa độ Đích X:", bg=BG, fg=FG, font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        self.dt_dest_x_var = tk.StringVar(value="")
+        ttk.Entry(f_dt, textvariable=self.dt_dest_x_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=4)
+
+        tk.Label(f_dt, text="Y:", bg=BG, fg=FG, font=("Segoe UI", 10)).grid(row=1, column=2, sticky="w", padx=4, pady=4)
+        self.dt_dest_y_var = tk.StringVar(value="")
+        ttk.Entry(f_dt, textvariable=self.dt_dest_y_var, width=8).grid(row=1, column=3, sticky="w", padx=4, pady=4)
+
+        dt_ctrl_frame = tk.Frame(f_dt, bg=BG)
+        dt_ctrl_frame.grid(row=0, column=4, rowspan=2, padx=16)
+        self.dt_start_btn = ttk.Button(dt_ctrl_frame, text="▶️ Bắt đầu Di Trại", style="Success.TButton", command=self._start_ditrai)
+        self.dt_start_btn.pack(side="top", pady=2)
+        self.dt_stop_btn = ttk.Button(dt_ctrl_frame, text="⏹️ Dừng Di Trại", style="Danger.TButton", command=self._stop_ditrai, state="disabled")
+        self.dt_stop_btn.pack(side="top", pady=2)
+
+        self.dt_status_lbl = tk.Label(f_dt, text="Trạng thái: Sẵn sàng", bg=BG, fg="#4ade80", font=("Segoe UI", 9, "bold"))
+        self.dt_status_lbl.grid(row=2, column=0, columnspan=5, sticky="w", padx=4, pady=4)
+
+        # 3. Khung Nhật ký chung
         f_log = ttk.LabelFrame(parent, text="Nhật ký Bình Man & Di Trại", style="Card.TLabelframe")
-        f_log.pack(fill="both", expand=True, pady=6)
+        f_log.pack(fill="both", expand=True, padx=4, pady=4)
         self.bm_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
         self.bm_log_text.pack(fill="both", expand=True, padx=6, pady=6)
 
     def _append_bm_log(self, msg: str):
         self.bm_log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {msg}\n")
         self.bm_log_text.see("end")
+
+    def _on_bm_city_selected(self, _event=None):
+        sel_idx = self.bm_city_combo.current()
+        bases = self.roster.camps if self.roster.camps else self.roster.bases
+        if 0 <= sel_idx < len(bases):
+            base = bases[sel_idx]
+            if base.is_camp:
+                self.bm_camp_id_var.set(str(base.id))
+            else:
+                self.bm_camp_id_var.set("")
+
+    def _on_dt_camp_selected(self, _event=None):
+        sel_idx = self.dt_camp_combo.current()
+        camps = self.roster.camps if self.roster.camps else self.roster.bases
+        if 0 <= sel_idx < len(camps):
+            camp = camps[sel_idx]
+            self.dt_origin_lbl.configure(text=f"Vị trí hiện tại: ({camp.pos_x}, {camp.pos_y})")
+
+    def _start_ditrai(self):
+        if self._ditrai_runner and self._ditrai_runner.is_alive():
+            messagebox.showinfo("Thông báo", "Tiến trình Di Trại đang chạy!")
+            return
+
+        camps = self.roster.camps if self.roster.camps else self.roster.bases
+        sel_idx = self.dt_camp_combo.current()
+        if sel_idx < 0 or sel_idx >= len(camps):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn Doanh trại cần di chuyển!")
+            return
+        camp = camps[sel_idx]
+
+        dest_x_str = self.dt_dest_x_var.get().strip()
+        dest_y_str = self.dt_dest_y_var.get().strip()
+        if not dest_x_str or not dest_y_str:
+            messagebox.showwarning("Cảnh báo", "Vui lòng nhập đầy đủ tọa độ đích X và Y!")
+            return
+
+        try:
+            dest_x = int(dest_x_str)
+            dest_y = int(dest_y_str)
+        except ValueError:
+            messagebox.showerror("Lỗi", "Tọa độ đích X và Y phải là số nguyên hợp lệ!")
+            return
+
+        self._ditrai_stop_event.clear()
+        self.dt_start_btn.configure(state="disabled")
+        self.dt_stop_btn.configure(state="normal")
+        self.dt_status_lbl.configure(text=f"🚀 Đang di chuyển tới ({dest_x}, {dest_y})...", fg="#38bdf8")
+        self._append_bm_log(f"🚀 Bắt đầu Di Trại {camp.name} từ ({camp.pos_x}, {camp.pos_y}) tới ({dest_x}, {dest_y})")
+
+        self._ditrai_runner = threading.Thread(
+            target=self._run_ditrai_thread,
+            args=(camp, dest_x, dest_y),
+            daemon=True,
+        )
+        self._ditrai_runner.start()
+
+    def _stop_ditrai(self):
+        self._ditrai_stop_event.set()
+        self.dt_status_lbl.configure(text="⏹️ Đang gửi tín hiệu dừng Di Trại...", fg="#facc15")
+        self._append_bm_log("⏹️ Người chơi bấm dừng Di Trại, chờ bước hiện tại kết thúc an toàn...")
+
+    def _run_ditrai_thread(self, camp: City, dest_x: int, dest_y: int):
+        def on_step_callback(new_x: int, new_y: int, frozen: int):
+            self.roster.update_camp_position(camp.id, new_x, new_y)
+            self.after(0, lambda: self.dt_origin_lbl.configure(text=f"Vị trí hiện tại: ({new_x}, {new_y})"))
+            for rem in range(frozen, 0, -1):
+                if self._ditrai_stop_event.is_set():
+                    break
+                self.after(0, lambda r=rem: self.dt_status_lbl.configure(text=f"⏳ Đang đóng băng: {r}s...", fg="#facc15"))
+                time.sleep(1)
+
+            if not self._ditrai_stop_event.is_set():
+                self.after(0, lambda: self.dt_status_lbl.configure(text="🏃 Đang di chuyển bước tiếp theo...", fg="#38bdf8"))
+
+        ctx = TaskContext(
+            self.gateway,
+            None,
+            TargetLocks(),
+            notify=lambda m: self.after(0, self._append_bm_log, m),
+        )
+
+        task = DiTrai(
+            ctx=ctx,
+            camp_id=camp.id,
+            origin=(camp.pos_x, camp.pos_y),
+            destination=(dest_x, dest_y),
+            max_step=2,
+            sleep_fn=time.sleep,
+            on_step=on_step_callback,
+            stop_event=self._ditrai_stop_event,
+        )
+
+        try:
+            result = task.advance_to_destination()
+        except Exception as e:
+            result = f"error: {e}"
+            self.after(0, self._append_bm_log, f"❌ Lỗi ngoại lệ trong quá trình Di Trại: {e}")
+
+        def finalize():
+            self.dt_start_btn.configure(state="normal")
+            self.dt_stop_btn.configure(state="disabled")
+            if result == "arrived":
+                self.dt_status_lbl.configure(text=f"🎯 Đã đến đích ({dest_x}, {dest_y}) thành công!", fg="#4ade80")
+            elif result == "stopped":
+                self.dt_status_lbl.configure(text=f"⏹️ Đã dừng an toàn tại ({task.origin[0]}, {task.origin[1]})", fg="#94a3b8")
+            elif result == "insufficient_resources":
+                self.dt_status_lbl.configure(text="❌ Thiếu tài nguyên di chuyển!", fg="#f87171")
+            else:
+                self.dt_status_lbl.configure(text=f"❌ Dừng: {result}", fg="#f87171")
+
+            self._update_all_combos_coordinates()
+
+        self.after(0, finalize)
+
+    def _update_all_combos_coordinates(self):
+        camps_items = [c.display_name for c in self.roster.camps] if self.roster.camps else [b.display_name for b in self.roster.bases]
+        if hasattr(self, "dt_camp_combo") and camps_items:
+            cur_idx = self.dt_camp_combo.current()
+            self.dt_camp_combo["values"] = camps_items
+            if cur_idx >= 0 and cur_idx < len(camps_items):
+                self.dt_camp_combo.current(cur_idx)
+                self._on_dt_camp_selected()
+        if hasattr(self, "bm_city_combo") and camps_items:
+            bm_idx = self.bm_city_combo.current()
+            self.bm_city_combo["values"] = camps_items
+            if bm_idx >= 0 and bm_idx < len(camps_items):
+                self.bm_city_combo.current(bm_idx)
+                self._on_bm_city_selected()
 
     def _create_binhman_task(self) -> Optional[BinhMan]:
         sel_idx = self.bm_city_combo.current()
@@ -1308,7 +1472,7 @@ class Dashboard(tk.Tk):
         parent_idx = self.bm_parent_city_combo.current()
         parent_city_id = self.roster.cities[parent_idx].id if (parent_idx >= 0 and parent_idx < len(self.roster.cities)) else base.id
         parent_id = self.roster.cities[parent_idx].id if parent_idx >= 0 else None
-        camp_id = int(self.bm_camp_id_var.get()) if self.bm_camp_id_var.get().strip() else None
+        camp_id = int(self.bm_camp_id_var.get()) if self.bm_camp_id_var.get().strip() else (base.id if base.is_camp else None)
         radius = int(self.bm_radius_var.get() or "10")
         threshold = int(self.bm_threshold_var.get() or "30")
         man_types = [int(x.strip()) for x in self.bm_mantypes_var.get().split(",") if x.strip()]
@@ -1320,13 +1484,13 @@ class Dashboard(tk.Tk):
         return BinhMan(
             ctx=ctx,
             generals=gens,
-            origin=(0, 0),
+            origin=(base.pos_x, base.pos_y),
             radius=radius,
             man_types=man_types,
             camp_id=camp_id,
             parent_city_id=parent_id,
             return_threshold=threshold,
-            sleep_fn=lambda s: None,
+            sleep_fn=time.sleep,
         )
 
     def _run_binhman_once(self):
@@ -1355,6 +1519,7 @@ class Dashboard(tk.Tk):
         else:
             self._bm_runner.stop()
             self.bm_start_btn.configure(text="▶️ Bắt đầu Bình Man", style="Success.TButton")
+
 
     # =========================================================================
     # TAB 5: XÂY DỰNG CÔNG TRÌNH
@@ -2686,6 +2851,13 @@ class Dashboard(tk.Tk):
         self.bm_city_combo["values"] = camps_items
         if camps_items and not self.bm_city_combo.get():
             self.bm_city_combo.current(0)
+            self._on_bm_city_selected()
+
+        if hasattr(self, "dt_camp_combo"):
+            self.dt_camp_combo["values"] = camps_items
+            if camps_items and not self.dt_camp_combo.get():
+                self.dt_camp_combo.current(0)
+                self._on_dt_camp_selected()
 
         if all_base_items:
             self._on_tp_city_selected()

@@ -125,6 +125,21 @@ class Roster:
     def upgrading_time_of(self, general_id: int) -> int:
         return self._upgrading_time.get(general_id, 0)
 
+    def update_camp_position(self, camp_id: int, pos_x: int, pos_y: int) -> None:
+        """Cập nhật tọa độ mới cho Doanh trại sau mỗi bước di chuyển thành công."""
+        for i, c in enumerate(self.camps):
+            if c.id == camp_id:
+                self.camps[i] = City(
+                    id=c.id, name=c.name, type=c.type, pos_x=pos_x, pos_y=pos_y, level=c.level
+                )
+                return
+        for i, c in enumerate(self.cities):
+            if c.id == camp_id:
+                self.cities[i] = City(
+                    id=c.id, name=c.name, type=c.type, pos_x=pos_x, pos_y=pos_y, level=c.level
+                )
+                return
+
 
 _ROLES = {1: "van", 2: "vo"}
 
