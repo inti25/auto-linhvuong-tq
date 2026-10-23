@@ -106,8 +106,8 @@ class ResearchTask:
 
         return False, None
 
-    def get_university_pid(self) -> Optional[int]:
-        """Tìm vị trí ô đất (pid) của Viện Đại Học (Đại Học Điện, gid=6) trong thành."""
+    def get_university_info(self) -> tuple[Optional[int], int]:
+        """Tìm vị trí ô đất (pid) và loại kiến trúc (gid: 6=Đại Học Điện, 59=Thái Học Điện) trong thành."""
         resp = self.gateway.call("City.ashx", 5, {"tid": str(self.city_id), "_": ""}) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
@@ -117,27 +117,35 @@ class ResearchTask:
         for b in buildings:
             if isinstance(b, (list, tuple)) and len(b) >= 2:
                 try:
-                    if int(b[1]) == 6:
-                        return int(b[0])
+                    gid = int(b[1])
+                    if gid in (6, 59):
+                        return int(b[0]), gid
                 except (ValueError, TypeError):
                     pass
             elif isinstance(b, dict):
-                if int(b.get("gid", 0)) == 6:
-                    return int(b.get("pid", 0))
-        return None
+                gid = int(b.get("gid", 0))
+                if gid in (6, 59):
+                    return int(b.get("pid", 0)), gid
+        return None, 6
+
+    def get_university_pid(self) -> Optional[int]:
+        """Tìm vị trí ô đất (pid) của Viện Đại Học (Đại Học Điện gid=6 hoặc Thái Học Điện gid=59) trong thành."""
+        pid, _ = self.get_university_info()
+        return pid
 
     def get_current_tech_levels(self) -> dict[int, int]:
-        """Lấy cấp độ hiện tại của 29 kỹ thuật tại viện Đại Học qua Build.ashx?id=2."""
+        """Lấy cấp độ hiện tại của 29 kỹ thuật tại viện Đại Học / Thái Học Điện qua Build.ashx?id=2."""
         # Chuyển focus thành thị trước khi đọc kiến trúc (bắt buộc trên server game thật)
         self.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""})
 
-        univ_pid = self.get_university_pid()
+        univ_pid, univ_gid = self.get_university_info()
         if univ_pid is None:
             univ_pid = 6  # Fallback cho mock/test
+            univ_gid = 6
 
         payload = {
             "pid": str(univ_pid),
-            "gid": "6",
+            "gid": str(univ_gid),
             "tab": "1",
             "tid": str(self.city_id),
             "_": "",

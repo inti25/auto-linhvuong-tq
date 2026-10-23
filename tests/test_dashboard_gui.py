@@ -695,21 +695,24 @@ def test_dashboard_bld_tree_tag_colors():
 def test_dashboard_even_upgrade_and_research_profile_sync():
     dash = safe_dashboard()
     try:
-        dash.bld_even_var.set(True)
+        # Building tab không còn bld_even_var
+        assert not hasattr(dash, "bld_even_var")
+
+        # Research tab vẫn giữ res_even_var
         dash.res_even_var.set(True)
 
         data = dash._collect_unified_profile()
-        assert data["building"].get("even_upgrade") is True
+        assert "even_upgrade" not in data["building"]
         assert data["research"].get("even_research") is True
 
         # Đặt lại False rồi nạp lại từ data
-        dash.bld_even_var.set(False)
         dash.res_even_var.set(False)
-        assert dash.bld_even_var.get() is False
         assert dash.res_even_var.get() is False
 
-        dash._apply_unified_profile(data)
-        assert dash.bld_even_var.get() is True
+        # Tương thích ngược: Nạp profile cũ có chứa cả even_upgrade ở building
+        old_profile = dict(data)
+        old_profile["building"]["even_upgrade"] = True
+        dash._apply_unified_profile(old_profile)
         assert dash.res_even_var.get() is True
     finally:
         dash.destroy()
@@ -793,6 +796,35 @@ def test_dashboard_sync_city_techs_data_preserves_queue_order():
         dash.destroy()
 
 
+def test_dashboard_fetch_city_techs_supports_thai_hoc_dien():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+        calls = []
+
+        def fake_call(path, api_id, payload):
+            calls.append((path, api_id, payload))
+            if path == "City.ashx" and api_id == 5:
+                # Thành có Thái Học Điện (gid=59) ở ô đất pid=12
+                return {"ret": 0, "infos": [[12, 59, "太学殿", 20]]}
+            elif path == "Build.ashx" and api_id == 2:
+                return {"ret": 0, "list": [[1, "Tech1", 10], [2, "Tech2", 5]]}
+            return {"ret": 0}
+
+        dash.gateway.call = fake_call
+        dash._fetch_city_techs_thread(15230)
+
+        # Kiểm tra gọi Build.ashx?id=2 với pid=12 và gid=59 (không tự chuyển sang thành khác)
+        build_calls = [p for pth, aid, p in calls if pth == "Build.ashx" and aid == 2]
+        assert len(build_calls) == 1
+        assert build_calls[0]["pid"] == "12"
+        assert build_calls[0]["gid"] == "59"
+    finally:
+        dash.destroy()
+
+
+
 def test_dashboard_ditrai_ui_controls(monkeypatch):
     import tkinter.messagebox
     monkeypatch.setattr(tkinter.messagebox, "showwarning", lambda *a, **k: None)
@@ -834,6 +866,228 @@ def test_dashboard_ditrai_ui_controls(monkeypatch):
         assert str(dash.dt_start_btn["state"]) == "normal"
     finally:
         dash.destroy()
+
+
+def test_dashboard_building_tree_hierarchy_and_checkbox_actions():
+    dash = safe_dashboard()
+    try:
+        dash._current_bld_city_id = 15230
+        dash.bld_tree.delete(*dash.bld_tree.get_children())
+
+        # Tạo danh sách công trình: Quan Phủ (đơn chiếc) và 2 Nhà Dân (đa ô)
+        plans = [
+            {"pid": 1, "gid": 1, "name": "Quan Phủ", "cur_lvl": 10, "target_level": 20, "enabled": True},
+            {"pid": 11, "gid": 3, "name": "Nhà Dân", "cur_lvl": 5, "target_level": 15, "enabled": True},
+            {"pid": 12, "gid": 3, "name": "Nhà Dân", "cur_lvl": 8, "target_level": 15, "enabled": True},
+        ]
+        dash._city_building_plans[15230] = list(plans)
+        dash._render_bld_tree_from_plans(plans)
+
+        # 1. Cấu trúc cây: Quan Phủ ở root, Nhà Dân có node cha group_3
+        roots = dash.bld_tree.get_children("")
+        assert list(roots) == ["1", "group_3"]
+
+        children_g3 = dash.bld_tree.get_children("group_3")
+        assert list(children_g3) == ["11", "12"]
+
+        vals_g3 = dash.bld_tree.item("group_3", "values")
+        assert vals_g3[0] == "☑"
+        assert vals_g3[1] == "2 ô"
+        assert int(vals_g3[2]) == 3
+        assert vals_g3[3] == "5 - 8"
+        assert vals_g3[4] == "15"
+        # Mặc định danh sách công trình đa ô là collapse (đóng)
+        assert bool(dash.bld_tree.item("group_3", "open")) is False
+
+        # Khi người dùng mở nhóm ra và re-render, trạng thái mở được bảo toàn
+        dash.bld_tree.item("group_3", open=True)
+        dash._render_bld_tree_from_plans(plans)
+        assert bool(dash.bld_tree.item("group_3", "open")) is True
+
+        # 2. Click checkbox (#1) trên group_3 -> tất cả con chuyển sang "☐"
+        ev = MagicMock()
+        ev.x = 10
+        ev.y = 10
+        dash.bld_tree.identify_row = MagicMock(return_value="group_3")
+        dash.bld_tree.identify_column = MagicMock(return_value="#1")
+        dash._on_bld_tree_click(ev)
+
+        assert dash.bld_tree.item("group_3", "values")[0] == "☐"
+        assert dash.bld_tree.item("11", "values")[0] == "☐"
+        assert dash.bld_tree.item("12", "values")[0] == "☐"
+
+        # 3. Click checkbox (#1) trên ô con 11 -> con 11 thành "☑", node cha group_3 thành "▣" (bán phần)
+        dash.bld_tree.identify_row = MagicMock(return_value="11")
+        dash.bld_tree.identify_column = MagicMock(return_value="#1")
+        dash._on_bld_tree_click(ev)
+
+        assert dash.bld_tree.item("11", "values")[0] == "☑"
+        assert dash.bld_tree.item("12", "values")[0] == "☐"
+        assert dash.bld_tree.item("group_3", "values")[0] == "▣"
+
+        # 4. Đặt Cấp MT khi chọn group_3 -> cả 2 con nhận cấp MT mới
+        dash.bld_tree.selection_set("group_3")
+        dash.bld_target_lvl_var.set("18")
+        dash._set_bld_target_lvl()
+
+        assert int(dash.bld_tree.item("11", "values")[4]) == 18
+        assert int(dash.bld_tree.item("12", "values")[4]) == 18
+        assert dash.bld_tree.item("group_3", "values")[4] == "18"
+
+        # 5. Thu thập lại danh sách phẳng: bảo toàn thứ tự root và con
+        collected = dash._collect_bld_plans_from_tree()
+        assert [p["pid"] for p in collected] == [1, 11, 12]
+        assert [p["target_level"] for p in collected] == [20, 18, 18]
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_sync_city_buildings_auto_inherits_when_group_all_selected():
+    dash = safe_dashboard()
+    try:
+        dash._current_bld_city_id = 15230
+        dash.bld_tree.delete(*dash.bld_tree.get_children())
+
+        # Nhóm Nhà Dân (gid=3) đang chọn all (enabled=True, target_level=16)
+        # Nhóm Kho (gid=4) không chọn all (enabled=False)
+        custom_plans = [
+            {"pid": 11, "gid": 3, "name": "Nhà Dân", "cur_lvl": 10, "target_level": 16, "enabled": True},
+            {"pid": 12, "gid": 3, "name": "Nhà Dân", "cur_lvl": 12, "target_level": 16, "enabled": True},
+            {"pid": 21, "gid": 4, "name": "Kho", "cur_lvl": 5, "target_level": 10, "enabled": False},
+        ]
+        dash._city_building_plans[15230] = list(custom_plans)
+        dash._render_bld_tree_from_plans(custom_plans)
+
+        # Server báo về có thêm 2 ô đất mới: pid 13 (Nhà Dân) và pid 22 (Kho)
+        server_buildings = [
+            {"pid": 11, "gid": 3, "level": 10, "name": "Nhà Dân"},
+            {"pid": 12, "gid": 3, "level": 12, "name": "Nhà Dân"},
+            {"pid": 13, "gid": 3, "level": 1, "name": "Nhà Dân"},  # Mới
+            {"pid": 21, "gid": 4, "level": 5, "name": "Kho"},
+            {"pid": 22, "gid": 4, "level": 1, "name": "Kho"},      # Mới
+        ]
+
+        dash._sync_city_buildings_data(15230, server_buildings, from_auto_cycle=True)
+
+        cached = dash._city_building_plans[15230]
+        plan_13 = next(p for p in cached if p["pid"] == 13)
+        plan_22 = next(p for p in cached if p["pid"] == 22)
+
+        # Ô 13 kế thừa nhóm Nhà Dân: enabled=True, target_level=16
+        assert plan_13["enabled"] is True
+        assert plan_13["target_level"] == 16
+
+        # Ô 22 không kế thừa (nhóm Kho không chọn all): enabled=False, target_level=cur_lvl=1
+        assert plan_22["enabled"] is False
+        assert plan_22["target_level"] == 1
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_move_building_group_up_down():
+    dash = safe_dashboard()
+    try:
+        dash._current_bld_city_id = 15230
+        dash.bld_tree.delete(*dash.bld_tree.get_children())
+
+        # Thứ tự ban đầu: Quan Phủ (gid=1), Nhà Dân (group_3: 11, 12), Đại Học Điện (gid=6)
+        plans = [
+            {"pid": 1, "gid": 1, "name": "Quan Phủ", "cur_lvl": 10, "target_level": 20, "enabled": True},
+            {"pid": 11, "gid": 3, "name": "Nhà Dân", "cur_lvl": 5, "target_level": 15, "enabled": True},
+            {"pid": 12, "gid": 3, "name": "Nhà Dân", "cur_lvl": 8, "target_level": 15, "enabled": True},
+            {"pid": 6, "gid": 6, "name": "Đại Học Điện", "cur_lvl": 5, "target_level": 20, "enabled": True},
+        ]
+        dash._city_building_plans[15230] = list(plans)
+        dash._render_bld_tree_from_plans(plans)
+
+        assert list(dash.bld_tree.get_children("")) == ["1", "group_3", "6"]
+
+        # Chọn group_3 và di chuyển lên
+        dash.bld_tree.selection_set("group_3")
+        dash._move_bld_up()
+
+        # Thứ tự root mới: group_3 lên đầu
+        assert list(dash.bld_tree.get_children("")) == ["group_3", "1", "6"]
+        # Các ô con bên trong group_3 vẫn nguyên vẹn
+        assert list(dash.bld_tree.get_children("group_3")) == ["11", "12"]
+
+        # Kiểm tra danh sách lưu trong cache
+        cached = dash._city_building_plans[15230]
+        assert [p["pid"] for p in cached] == [11, 12, 1, 6]
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_sync_city_buildings_filters_unbuilt_dummy_plots():
+    dash = safe_dashboard()
+    try:
+        # Giả lập chuyển sang căn cứ chưa từng tải cấu hình (gọi _populate_default_buildings)
+        dash._switch_bld_base(21999)
+
+        # Server trả về dữ liệu thực tế của thành (chỉ có 1 Nhà dân ở ô 16 và 1 Quán trọ ở ô 29)
+        # Các ô 3 (Nhà Dân mẫu), 7 (Quán Trọ mẫu) không có trên thực tế
+        server_buildings = [
+            [0, 2, "城墙", 1, 0, 0],
+            [8, 1, "官府", 7, 1, 360],
+            [16, 3, "民房", 1, 0, 0],
+            [29, 7, "客栈", 1, 0, 0],
+        ]
+
+        dash._sync_city_buildings_data(21999, server_buildings)
+
+        plans = dash._city_building_plans[21999]
+        nha_dan = [p for p in plans if p["gid"] == 3]
+        quan_tro = [p for p in plans if p["gid"] == 7]
+
+        # Phải lọc bỏ hoàn toàn các ô mẫu giả định không có thật trên server
+        assert len(nha_dan) == 1
+        assert nha_dan[0]["pid"] == 16
+        assert nha_dan[0]["cur_lvl"] == 1
+
+        assert len(quan_tro) == 1
+        assert quan_tro[0]["pid"] == 29
+        assert quan_tro[0]["cur_lvl"] == 1
+
+        # Treeview không gom nhóm thừa (chỉ có 1 ô mỗi loại, hiển thị ở root)
+        roots = list(dash.bld_tree.get_children(""))
+        assert "16" in roots
+        assert "29" in roots
+        assert not dash.bld_tree.exists("group_3")
+        assert not dash.bld_tree.exists("group_7")
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_gateway_relogin_callback(monkeypatch):
+    if _tkinter is None:
+        pytest.skip("tkinter not available")
+    session = MagicMock()
+    login_mock = MagicMock()
+    monkeypatch.setattr("linhvuong.dashboard.login", login_mock)
+
+    with patch("threading.Thread"):
+        dash = Dashboard(session, 53, username="quilia", password="secret_password")
+        dash.withdraw()
+
+    try:
+        assert dash.gateway.relogin_callback is not None
+        # Gọi thử relogin_callback
+        success = dash.gateway.relogin_callback()
+        assert success is True
+        login_mock.assert_called_once_with(
+            session,
+            53,
+            "quilia",
+            "secret_password",
+            proxy=None,
+            proxy_user=None,
+            proxy_pass=None,
+        )
+    finally:
+        dash.destroy()
+
+
+
 
 
 

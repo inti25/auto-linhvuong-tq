@@ -186,6 +186,22 @@ _Avoid_: Refresh dữ liệu, reload thực tế, fetch lặp
 Nguyên tắc bất biến duy trì chính xác vị trí sắp xếp của các đối tượng trong Hàng Đợi Xây Dựng và Hàng Đợi Nghiên Cứu qua các lần nạp dữ liệu thực tế, chuyển đổi căn cứ hoặc nạp hồ sơ cấu hình.
 _Avoid_: Reset thứ tự, xếp lại theo server, auto-sort mặc định
 
+**Nhật Ký Tác Vụ**:
+Bản ghi tuần tự các sự kiện, hành động và kết quả thực thi của các phân hệ tự động hóa (Thảo Phạt, Bình Man, Gọi Dân, Xây Dựng, Nghiên Cứu, Hậu Cần) theo mốc thời gian thực.
+_Avoid_: File log thô, console output
+
+**Vết Lỗi Thực Thi**:
+Thông tin ngữ cảnh chi tiết (mã phản hồi máy chủ, tham số lệnh, vết ngăn xếp ngoại lệ) được ghi nhận khi phát sinh sự cố trong tiến trình tự động hóa nhằm phục vụ việc khoanh vùng nguyên nhân khi chạy dài hạn.
+_Avoid_: Crash dump, log lỗi
+
+**Quy Hoạch Theo Loại Công Trình**:
+Cơ chế gom nhóm và điều phối thứ tự ưu tiên thi công theo từng chủng loại kiến trúc, cho phép thiết lập cấp mục tiêu chung và tự động nâng đồng đều các ô đất cùng loại.
+_Avoid_: Gom nhóm nhà, group building, cây công trình
+
+**Tự Động Kế Thừa Quy Hoạch Nhóm**:
+Cơ chế tự động kết nạp các ô đất mới xây vào nhóm loại công trình tương ứng, tự động bật thi công và kế thừa cấp mục tiêu chung khi nhóm đó đang ở trạng thái chọn tất cả.
+_Avoid_: Kế thừa cấp, auto inherit plot, tự add nhà
+
 ## Danh Mục Công Trình (Nhà)
 
 Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuild và ZMan:
@@ -213,4 +229,19 @@ Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuil
 | 19 | `营寨校场 - Binh Trường` | Doanh trại dã ngoại |
 | 20 | `营寨驿站 - Dịch Trạm` | Trạm liên lạc của Doanh trại |
 | 21 | `营寨仓库 - Kho` | Kho dã ngoại của Doanh trại |
-
+| 54 | `宫殿 - Cung Điện` | Đầu não chỉ huy Thiên Thành / Châu Thành (cấp cao của Quan Phủ) |
+| 55 | `壁垒 - Bích Lũy` | Phòng thủ Thiên Thành (cấp cao của Tường Thành) |
+| 56 | `高级民居 - Cao Cấp Dân Cư` | Nhà dân cao cấp (cấp cao của Nhà Dân) |
+| 57 | `国库 - Quốc Khố` | Kho dự trữ cao cấp (cấp cao của Kho) |
+| 58 | `使节殿 - Sứ Tiết Điện` | Sứ quán bang giao Thiên Thành (cấp cao của Hồng Lư Tự) |
+| 59 | `太学殿 - Thái Học Điện` | Viện nghiên cứu 29 Kỹ Thuật Đại Học tại Thiên Thành / Châu Thành (cấp cao của Đại Học Điện) |
+| 60 | `水镜庐 - Thủy Kính Lư` | Chiêu mộ và theo dõi danh tướng (cấp cao của Quán Trọ) |
+| 61 | `酒肆 - Tửu Tứ` | Yến tiệc chiêu hiền đãi sĩ (cấp cao của Tửu Quán) |
+| 62 | `幕僚邸 - Mạc Liêu Để` | Dinh thự quân sư, tướng lĩnh (cấp cao của Tụ Hiền Lâu) |
+| 63 | `将帅府 - Tướng Soái Phủ` | Bộ chỉ huy quân sự (cấp cao của Điểm Tướng Đài) |
+| 64 | `集市 - Tập Thị` | Chợ giao thương cao cấp (cấp cao của Chợ) |
+| 65 | `中央驿所 - Trung Ương Dịch Sở` | Trung tâm trạm dịch cấp cao (cấp cao của Dịch Trạm) |
+| 66 | `兵器司 - Binh Khí Ty` | Xưởng vũ khí cấp cao (cấp cao của Xưởng Binh Khí) |
+| 67 | `防具司 - Phòng Cụ Ty` | Xưởng khôi giáp cấp cao (cấp cao của Xưởng Khôi Giáp) |
+| 68 | `车马司 - Xa Mã Ty` | Trại ngựa chiến cấp cao (cấp cao của Xưởng Ngựa) |
+| 69 | `督军场 - Đốc Quân Trường` | Doanh trại huấn luyện cao cấp (cấp cao của Binh Trường) |

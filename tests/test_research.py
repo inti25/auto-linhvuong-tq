@@ -391,6 +391,42 @@ def test_research_task_syncs_on_first_cycle_even_if_busy():
     assert synced_events[0][2] == (True, 1)  # is_busy=True, tech_id=1
 
 
+def test_research_task_supports_thai_hoc_dien_gid_59():
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=37": {"ret": 0, "tech": {}},
+            "City.ashx?id=50": {"ret": 0},
+            # Thành có Thái Học Điện (gid=59) ở ô đất pid=7
+            "City.ashx?id=5": {"ret": 0, "infos": [[7, 59, "太学殿", 20]]},
+            "Build.ashx?id=2": {
+                "ret": 0,
+                "list": [
+                    [1, "Tech1", 5],
+                    [2, "Tech2", 3],
+                ],
+            },
+            "OPT.ashx?id=44": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [TechPlan(tech_id=1, target_level=10)]
+    task = ResearchTask(gw, city_id=21936, plans=plans)
+
+    # 1. Nhận diện được Thái Học Điện (gid=59)
+    univ_pid = task.get_university_pid()
+    assert univ_pid == 7
+
+    # 2. Đọc cấp độ kỹ thuật qua Build.ashx?id=2 với gid=59
+    levels = task.get_current_tech_levels()
+    assert levels == {1: 5, 2: 3}
+
+    build_calls = [d for k, d in server.calls if k == "Build.ashx?id=2"]
+    assert len(build_calls) == 1
+    assert build_calls[0]["pid"] == "7"
+    assert build_calls[0]["gid"] == "59"
+
+
+
 
 
 

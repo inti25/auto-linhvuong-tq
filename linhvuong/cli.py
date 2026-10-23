@@ -10,6 +10,7 @@ Mật khẩu lấy từ biến môi trường LINHVUONG_PASSWORD (ưu tiên) ho�
 
 import argparse
 import json
+import logging
 import os
 import sys
 import time
@@ -21,6 +22,7 @@ import requests
 from .auth import LoginError, login
 from .gateway import GatewayClient
 from .locks import TargetLocks
+from .logger import setup_logger
 from .scan import Scanner
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import BinhMan
@@ -221,10 +223,17 @@ def main(argv=None) -> int:
     ap.add_argument("--proxy", default=None, help="Proxy URL (http://, https://, socks5://)")
     ap.add_argument("--proxy-user", default=None, help="Tài khoản xác thực proxy (tùy chọn)")
     ap.add_argument("--proxy-pass", default=None, help="Mật khẩu xác thực proxy (tùy chọn)")
+    ap.add_argument("--debug", "-v", action="store_true", help="Bật chế độ ghi log chi tiết (DEBUG)")
     args = ap.parse_args(argv)
 
     with open(args.config, encoding="utf-8") as f:
         cfg = json.load(f)
+
+    username = cfg.get("username", "guest")
+    server_id = cfg.get("server", 0)
+    setup_logger(username=username, server_id=server_id, debug=args.debug, console=True)
+    logger = logging.getLogger(f"linhvuong.cli.{args.task}")
+
     password = os.environ.get("LINHVUONG_PASSWORD") or cfg.get("password")
     if not password:
         raise SystemExit("Thiếu mật khẩu (LINHVUONG_PASSWORD hoặc config).")
@@ -244,9 +253,29 @@ def main(argv=None) -> int:
             proxy_pass=proxy_pass,
         )
     except (LoginError, ValueError) as e:
+        logger.error(f"Đăng nhập thất bại: {e}")
         raise SystemExit(str(e))
 
-    gateway = GatewayClient(cfg["server"], session)
+    def auto_relogin() -> bool:
+        try:
+            logger.info(
+                f"Đang tự động đăng nhập lại tài khoản {cfg['username']} (Server {cfg['server']})..."
+            )
+            login(
+                session,
+                cfg["server"],
+                cfg["username"],
+                password,
+                proxy=proxy,
+                proxy_user=proxy_user,
+                proxy_pass=proxy_pass,
+            )
+            return True
+        except Exception as ex:
+            logger.error(f"Tự động đăng nhập lại thất bại: {ex}")
+            return False
+
+    gateway = GatewayClient(cfg["server"], session, relogin_callback=auto_relogin)
     locks = TargetLocks()
     scanner = Scanner(
         gateway, locks, delay=cfg.get("scan_delay", 0.2), step=cfg.get("scan_step", 5)
@@ -257,16 +286,20 @@ def main(argv=None) -> int:
     try:
         while True:
             res = task.run_once()
-            print(f"[{time.strftime('%H:%M:%S')}] {args.task} -> {res}")
+            logger.info(f"{args.task} -> {res}")
             if args.once:
                 break
             time.sleep(cfg.get("loop_interval", 5))
     except CaptchaRequired:
-        print(f"[{time.strftime('%H:%M:%S')}] ⚠️ Server yêu cầu Captcha! Dừng tác vụ.")
+        logger.warning("⚠️ Server yêu cầu Captcha! Dừng tác vụ.")
         return 2
     except KeyboardInterrupt:
+        logger.info("Người dùng dừng tác vụ qua bàn phím.")
         scanner.stop()
         return 0
+    except Exception as e:
+        logger.exception(f"Lỗi ngoại lệ trong tác vụ CLI {args.task}: {e}")
+        return 1
 
     return 0
 

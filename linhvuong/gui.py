@@ -288,13 +288,16 @@ class LoginWindow(tk.Tk):
             proxy_raw,
             proxy_user,
             proxy_pass,
+            password,
         )
 
     def _failed(self, msg):
         self.status.set(msg)
         self.btn.state(["!disabled"])
 
-    def _succeeded(self, session, server_id, username, proxy_raw, proxy_user, proxy_pass):
+    def _succeeded(
+        self, session, server_id, username, proxy_raw, proxy_user, proxy_pass, password=""
+    ):
         acc_key = f"{username} @ S{server_id}"
         if not hasattr(self, "accounts_dict") or not isinstance(self.accounts_dict, dict):
             self.accounts_dict = {}
@@ -316,16 +319,24 @@ class LoginWindow(tk.Tk):
         }
         SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self.session, self.server_id, self.username = session, server_id, username
+        self.password = password
+        self.proxy_raw = proxy_raw
+        self.proxy_user = proxy_user
+        self.proxy_pass = proxy_pass
         self.destroy()
 
 
 def ask_login():
-    """Hiện cửa sổ đăng nhập; trả (session, server_id, username) hoặc None nếu đóng cửa sổ."""
+    """Hiện cửa sổ đăng nhập; trả (session, server_id, username, password, proxy_raw, proxy_user, proxy_pass) hoặc None nếu đóng cửa sổ."""
     win = LoginWindow()
     win.mainloop()
     if win.session:
         user = getattr(win, "username", win.user_var.get().strip())
-        return (win.session, win.server_id, user)
+        pwd = getattr(win, "password", win.pass_var.get())
+        p_raw = getattr(win, "proxy_raw", win.proxy_var.get().strip())
+        p_user = getattr(win, "proxy_user", win.proxy_user_var.get().strip())
+        p_pass = getattr(win, "proxy_pass", win.proxy_pass_var.get())
+        return (win.session, win.server_id, user, pwd, p_raw, p_user, p_pass)
     return None
 
 
@@ -334,4 +345,18 @@ if __name__ == "__main__":
     if result:
         from .dashboard import Dashboard
 
-        Dashboard(*result).mainloop()
+        session, server_id, *rest = result
+        username = rest[0] if len(rest) > 0 else ""
+        password = rest[1] if len(rest) > 1 else ""
+        proxy_raw = rest[2] if len(rest) > 2 else ""
+        proxy_user = rest[3] if len(rest) > 3 else ""
+        proxy_pass = rest[4] if len(rest) > 4 else ""
+        Dashboard(
+            session,
+            server_id,
+            username=username,
+            password=password,
+            proxy_raw=proxy_raw,
+            proxy_user=proxy_user,
+            proxy_pass=proxy_pass,
+        ).mainloop()

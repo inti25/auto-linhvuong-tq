@@ -850,8 +850,68 @@ def test_building_task_syncs_on_first_cycle_even_if_slots_busy():
     assert synced_events[0][1][2]["level"] == 5
 
 
+def test_order_plans_by_type_even_preserves_type_order_and_balances_intra_type():
+    gw = GatewayClient(53, FakeServer(), sleep=lambda s: None)
+    # Plans: Quan Phủ (gid=1), Nhà Dân (gid=3, 3 ô), Kho (gid=4, 2 ô)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=15, name="Quan Phủ"),
+        BuildingPlan(pid=10, gid=3, target_level=10, name="Nhà Dân 1"),
+        BuildingPlan(pid=11, gid=3, target_level=10, name="Nhà Dân 2"),
+        BuildingPlan(pid=12, gid=3, target_level=10, name="Nhà Dân 3"),
+        BuildingPlan(pid=20, gid=4, target_level=12, name="Kho 1"),
+        BuildingPlan(pid=21, gid=4, target_level=12, name="Kho 2"),
+    ]
+    real_buildings = {
+        1: {"gid": 1, "level": 12},
+        10: {"gid": 3, "level": 6},
+        11: {"gid": 3, "level": 2},
+        12: {"gid": 3, "level": 8},
+        20: {"gid": 4, "level": 9},
+        21: {"gid": 4, "level": 4},
+    }
+    task = BuildingTask(gw, city_id=101, plans=plans)
+    ordered = task._order_plans_by_type_even(plans, real_buildings)
+
+    # 1. Thứ tự nhóm bảo toàn: gid 1 -> gid 3 -> gid 4
+    gids = [p.gid for p in ordered]
+    assert gids == [1, 3, 3, 3, 4, 4]
+
+    # 2. Trong cùng nhóm gid 3: cấp thấp (pid 11, lvl 2) -> (pid 10, lvl 6) -> (pid 12, lvl 8)
+    pids_g3 = [p.pid for p in ordered if p.gid == 3]
+    assert pids_g3 == [11, 10, 12]
+
+    # 3. Trong cùng nhóm gid 4: cấp thấp (pid 21, lvl 4) -> (pid 20, lvl 9)
+    pids_g4 = [p.pid for p in ordered if p.gid == 4]
+    assert pids_g4 == [21, 20]
 
 
+def test_building_task_upgrades_lowest_level_of_same_type_first():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},  # slot trống
+            "City.ashx?id=5": {
+                "ret": 0,
+                "buildings": [
+                    {"pid": 11, "gid": 3, "level": 7},
+                    {"pid": 12, "gid": 3, "level": 3},
+                ],
+            },
+            "City.ashx?id=20": {"ret": 0},  # đủ tài nguyên
+            "OPT.ashx?id=65": {"ret": 0},   # nâng cấp thành công
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    # Plans đưa pid 11 trước pid 12
+    plans = [
+        BuildingPlan(pid=11, gid=3, target_level=10, name="Nhà Dân 1"),
+        BuildingPlan(pid=12, gid=3, target_level=10, name="Nhà Dân 2"),
+    ]
+    task = BuildingTask(gw, city_id=101, plans=plans, auto_comfort=False, auto_boost=False)
+    out = task.run_once()
+    assert out == "upgrading"
 
-
-
+    # Mặc định theo quy hoạch nhóm (ADR-0016), ô có cấp thấp hơn (pid=12, level 3)
+    # phải được nâng trước pid=11 (level 7)
+    upgrade_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
+    assert upgrade_call["pid"] == "12"
+    assert upgrade_call["gid"] == "3"

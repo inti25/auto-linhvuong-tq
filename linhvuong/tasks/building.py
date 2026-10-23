@@ -248,6 +248,34 @@ class BuildingTask:
             raise CaptchaRequired()
         return ret == RET_OK
 
+    def _order_plans_by_type_even(
+        self, plans_list: list[BuildingPlan], real_buildings: dict[int, dict]
+    ) -> list[BuildingPlan]:
+        """Sắp xếp danh sách thi công bảo toàn thứ tự Loại công trình, trong đó các ô cùng loại được nâng đồng đều."""
+        groups: dict[int, list[BuildingPlan]] = {}
+        for p in plans_list:
+            groups.setdefault(p.gid, []).append(p)
+
+        ordered = []
+        for gid, group_plans in groups.items():
+            upgrades = []
+            downgrades = []
+            completed = []
+            for p in group_plans:
+                cur = real_buildings.get(p.pid, {"gid": p.gid, "level": 0})
+                cur_lvl = cur.get("level", 0)
+                if cur_lvl < p.target_level:
+                    upgrades.append(p)
+                elif cur_lvl > p.target_level:
+                    downgrades.append(p)
+                else:
+                    completed.append(p)
+            # Cùng loại: nâng các ô cấp thấp hơn lên trước để đồng đều
+            upgrades.sort(key=lambda p: real_buildings.get(p.pid, {}).get("level", 0))
+            downgrades.sort(key=lambda p: real_buildings.get(p.pid, {}).get("level", 0), reverse=True)
+            ordered.extend(upgrades + downgrades + completed)
+        return ordered
+
     def _try_open_box_and_retry(self, target_plan: BuildingPlan, current_level: int, action_type: int) -> bool:
         """Thử mở đạo cụ tài nguyên qua Common.ashx?id=48 và gửi lại lệnh nâng/hạ cấp."""
         # 1. Chuyển ngữ cảnh về thành trì đang thi công
@@ -414,6 +442,7 @@ class BuildingTask:
         deferred_plans = [p for p in self.plans if p.pid in self.deferred_pids]
 
         if self.even_upgrade:
+            # Cân bằng cấp độ toàn thành phố (toàn cục)
             def sort_even(plans_list):
                 upgrades = []
                 downgrades = []
@@ -423,12 +452,15 @@ class BuildingTask:
                         upgrades.append(p)
                     else:
                         downgrades.append(p)
-                # Sắp xếp ổn định (stable sort): cấp độ hiện tại thấp lên cao
                 upgrades.sort(key=lambda p: real_buildings.get(p.pid, {}).get("level", 0))
                 return upgrades + downgrades
 
             normal_plans = sort_even(normal_plans)
             deferred_plans = sort_even(deferred_plans)
+        else:
+            # Mặc định: Bảo toàn thứ tự Loại công trình, nâng đồng đều nội bộ loại (ADR-0016)
+            normal_plans = self._order_plans_by_type_even(normal_plans, real_buildings)
+            deferred_plans = self._order_plans_by_type_even(deferred_plans, real_buildings)
 
         ordered_plans = normal_plans + deferred_plans
 

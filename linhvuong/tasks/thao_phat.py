@@ -10,9 +10,12 @@ Reverse engineered từ ZMan.exe:
 - Gửi Thảo Phạt: OPT.ashx?id=62 (taskid, counts, general1..5).
 """
 
+import logging
 import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+logger = logging.getLogger("linhvuong.tasks.thao_phat")
 
 from ..battle import BattleController
 from ..gateway import GatewayClient
@@ -762,6 +765,7 @@ class ThaoPhatAutoRunner:
                 self.wait_cycle(min(3.0, self.check_interval))
 
             except Exception as e:
+                logger.exception(f"Ngoại lệ trong vòng lặp Thảo Phạt: {e}")
                 self.log(f"❌ Ngoại lệ trong vòng lặp Thảo Phạt: {e}. Thử lại sau {int(self.check_interval)}s...")
                 if self.wait_cycle(self.check_interval):
                     break
