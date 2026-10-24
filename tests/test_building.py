@@ -915,3 +915,116 @@ def test_building_task_upgrades_lowest_level_of_same_type_first():
     upgrade_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
     assert upgrade_call["pid"] == "12"
     assert upgrade_call["gid"] == "3"
+
+
+def test_building_task_skips_resource_starved_building_and_builds_next_eligible():
+    def opt_handler():
+        call = server.calls[-1]
+        data = call[1]
+        if data.get("pid") == "1":
+            return {"ret": 32}
+        return {"ret": 0}
+
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "buildings": [
+                    {"pid": 1, "gid": 1, "level": 10},
+                    {"pid": 2, "gid": 2, "level": 5},
+                ],
+            },
+            "City.ashx?id=20": {"ret": 0},
+            "OPT.ashx?id=65": opt_handler,
+            "Common.ashx?id=48": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=12, name="Quan Phủ"),
+        BuildingPlan(pid=2, gid=2, target_level=6, name="Tường Thành"),
+    ]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        max_slots=1,
+        auto_comfort=False,
+        auto_boost=False,
+        auto_open_box=True,
+        box_id=24,
+    )
+    res = task.run_once()
+    assert res == "upgrading"
+
+    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(opt_calls) == 2
+    assert opt_calls[0]["pid"] == "1"
+    assert opt_calls[1]["pid"] == "2"
+
+    box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
+    assert len(box_calls) == 0
+
+
+def test_building_task_opens_one_box_when_all_starved_then_retries_from_top_in_priority_order():
+    box_opened = False
+
+    def opt_handler():
+        nonlocal box_opened
+        call = server.calls[-1]
+        data = call[1]
+        if not box_opened:
+            return {"ret": 32}
+        if data.get("pid") == "1":
+            return {"ret": 0}
+        return {"ret": 32}
+
+    def box_handler():
+        nonlocal box_opened
+        box_opened = True
+        return {"ret": 0}
+
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {
+                "ret": 0,
+                "buildings": [
+                    {"pid": 1, "gid": 1, "level": 10},
+                    {"pid": 2, "gid": 2, "level": 5},
+                ],
+            },
+            "City.ashx?id=20": {"ret": 0, "data": {"max_storage": 1000000, "wood": 10000}},
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=65": opt_handler,
+            "Common.ashx?id=48": box_handler,
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=1, gid=1, target_level=12, name="Quan Phủ"),
+        BuildingPlan(pid=2, gid=2, target_level=6, name="Tường Thành"),
+    ]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        max_slots=1,
+        auto_comfort=False,
+        auto_boost=False,
+        auto_open_box=True,
+        box_id=24,
+    )
+    res = task.run_once()
+    assert res == "upgrading"
+
+    box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
+    assert len(box_calls) == 1
+    assert box_calls[0]["lBoxID"] == "24"
+
+    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(opt_calls) == 3
+    assert opt_calls[0]["pid"] == "1"
+    assert opt_calls[1]["pid"] == "2"
+    assert opt_calls[2]["pid"] == "1"

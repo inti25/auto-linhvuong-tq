@@ -42,18 +42,17 @@ def dummy_roster():
     )
 
 
-def test_dashboard_initializes_six_tabs():
+def test_dashboard_initializes_five_tabs():
     dash = safe_dashboard()
     try:
         tabs = dash.notebook.tabs()
-        assert len(tabs) == 6
+        assert len(tabs) == 5
         tab_texts = [dash.notebook.tab(t, "text") for t in tabs]
-        assert "🏰 Tổng quan & Quân đội" in tab_texts[0]
+        assert "🏛️ Nội Chính & Nghiên Cứu" in tab_texts[0]
         assert "⚔️ Thảo Phạt" in tab_texts[1]
-        assert "🧛 Gọi Dân & Vong Linh" in tab_texts[2]
-        assert "🏕️ Bình Man & Di Trại" in tab_texts[3]
-        assert "🏗️ Xây Dựng" in tab_texts[4]
-        assert "🔬 Đại Học & Hậu Cần" in tab_texts[5]
+        assert "🏕️ Bình Man" in tab_texts[2]
+        assert "🧛 Vong Linh" in tab_texts[3]
+        assert "🏰 Tổng quan" in tab_texts[4]
     finally:
         dash.destroy()
 
@@ -440,8 +439,8 @@ def test_dashboard_multi_city_building_ui_and_plan_separation():
         # Mặc định căn cứ đầu tiên được chọn
         b0_vals = dash.bld_bases_tree.item(base_items[0], "values")
         assert b0_vals[0] == "☑"
-        assert b0_vals[1] == "Thành"
-        assert int(b0_vals[2]) == 15230
+        assert b0_vals[3] == "Thành"
+        assert int(b0_vals[4]) == 15230
 
         # Kiểm tra Select All / Deselect All cho căn cứ
         dash._select_all_bld_bases(False)
@@ -864,6 +863,26 @@ def test_dashboard_ditrai_ui_controls(monkeypatch):
         dash.dt_dest_y_var.set("")
         dash._start_ditrai()
         assert str(dash.dt_start_btn["state"]) == "normal"
+
+        # 4. Kiểm tra chọn camp trong bld_bases_tree tự động đồng bộ sang dt_camp_combo
+        if hasattr(dash, "bld_bases_tree") and dash.bld_bases_tree.exists("-1001"):
+            dash.bld_bases_tree.selection_set("-1001")
+            dash._on_bld_base_selected()
+            assert "(50, 60)" in dash.dt_origin_lbl.cget("text")
+
+        # 5. Kiểm tra lưu và nạp profile cho Dịch Trại
+        dash.dt_dest_x_var.set("123")
+        dash.dt_dest_y_var.set("456")
+        profile = dash._collect_unified_profile()
+        assert profile.get("ditrai", {}).get("dest_x") == "123"
+        assert profile.get("ditrai", {}).get("dest_y") == "456"
+
+        dash.dt_dest_x_var.set("")
+        dash.dt_dest_y_var.set("")
+        sections = dash._apply_unified_profile(profile)
+        assert "Dịch Trại" in sections
+        assert dash.dt_dest_x_var.get() == "123"
+        assert dash.dt_dest_y_var.get() == "456"
     finally:
         dash.destroy()
 
@@ -904,21 +923,21 @@ def test_dashboard_building_tree_hierarchy_and_checkbox_actions():
         dash._render_bld_tree_from_plans(plans)
         assert bool(dash.bld_tree.item("group_3", "open")) is True
 
-        # 2. Click checkbox (#1) trên group_3 -> tất cả con chuyển sang "☐"
+        # 2. Click checkbox (#3: Chạy) trên group_3 -> tất cả con chuyển sang "☐"
         ev = MagicMock()
         ev.x = 10
         ev.y = 10
         dash.bld_tree.identify_row = MagicMock(return_value="group_3")
-        dash.bld_tree.identify_column = MagicMock(return_value="#1")
+        dash.bld_tree.identify_column = MagicMock(return_value="#3")
         dash._on_bld_tree_click(ev)
 
         assert dash.bld_tree.item("group_3", "values")[0] == "☐"
         assert dash.bld_tree.item("11", "values")[0] == "☐"
         assert dash.bld_tree.item("12", "values")[0] == "☐"
 
-        # 3. Click checkbox (#1) trên ô con 11 -> con 11 thành "☑", node cha group_3 thành "▣" (bán phần)
+        # 3. Click checkbox (#3: Chạy) trên ô con 11 -> con 11 thành "☑", node cha group_3 thành "▣" (bán phần)
         dash.bld_tree.identify_row = MagicMock(return_value="11")
-        dash.bld_tree.identify_column = MagicMock(return_value="#1")
+        dash.bld_tree.identify_column = MagicMock(return_value="#3")
         dash._on_bld_tree_click(ev)
 
         assert dash.bld_tree.item("11", "values")[0] == "☑"
@@ -1085,6 +1104,336 @@ def test_dashboard_gateway_relogin_callback(monkeypatch):
         )
     finally:
         dash.destroy()
+
+
+def test_dashboard_unified_internal_and_research_controls():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # 1. Quản lý nhà: [Hạ] đặt cấp mục tiêu về 0
+        bld_items = dash.bld_tree.get_children()
+        first_bld = bld_items[0]
+        dash.bld_tree.selection_set(first_bld)
+        dash._lower_bld_target_lvl()
+        assert int(dash.bld_tree.item(first_bld, "values")[4]) == 0
+        assert dash.bld_target_lvl_var.get() == "0"
+
+        # 2. Base controls: Chọn, Bỏ chọn, Chọn NC, Bỏ NC
+        base_items = dash.bld_bases_tree.get_children()
+        assert len(base_items) == 3
+        dash.bld_bases_tree.selection_set(base_items[1])  # 15237
+        dash._set_selected_base_state(True)
+        assert dash.bld_bases_tree.item(base_items[1], "values")[0] == "☑"
+        assert 15237 in dash._selected_building_cities
+
+        dash._set_selected_base_state(False)
+        assert dash.bld_bases_tree.item(base_items[1], "values")[0] == "☐"
+        assert 15237 not in dash._selected_building_cities
+
+        # Chọn NC
+        dash._set_selected_base_as_nc()
+        assert dash._research_city_id == 15237
+        assert dash.bld_bases_tree.item(base_items[1], "values")[2] == "★"
+        assert dash.bld_bases_tree.item(base_items[0], "values")[2] == "☐"
+
+        # Bỏ NC
+        dash._clear_all_nc_bases()
+        assert dash._research_city_id is None
+        assert dash.bld_bases_tree.item(base_items[1], "values")[2] == "☐"
+
+        # 3. Giám sát tài nguyên: Toggle On/Off
+        assert dash._res_monitor_running is False
+        dash._selected_resource_cities.add(15230)
+        dash._toggle_resource_monitor()
+        assert dash._res_monitor_running is True
+        assert dash.res_monitor_btn.cget("text") == "Đang Giữ TN"
+
+        dash._toggle_resource_monitor()
+        assert dash._res_monitor_running is False
+        assert dash.res_monitor_btn.cget("text") == "Tài Nguyên"
+
+        # 4. Xem Log popup window
+        dash._open_log_window()
+        assert dash._log_win is not None
+        assert dash._log_win.winfo_exists()
+        dash._append_bld_log("Test log message")
+        assert "Test log message" in dash.bld_log_text.get("1.0", "end")
+        dash._log_win.destroy()
+        dash._log_win = None
+
+        # 5. Chuyển quân giới: Add & Delete order
+        dash.log_from_city_combo.set("Thành 1")
+        dash.log_to_city_combo.set("Thành 2")
+        dash.log_amount_var.set("500")
+        dash._add_army_transfer_order()
+        t_items = dash.log_transfers_tree.get_children()
+        assert len(t_items) == 1
+        row_vals = dash.log_transfers_tree.item(t_items[0], "values")
+        assert "Thành 1 ➔ Thành 2" in row_vals[0]
+        assert str(row_vals[1]) == "500"
+
+        dash.log_transfers_tree.selection_set(t_items[0])
+        dash._delete_army_transfer_order()
+        assert len(dash.log_transfers_tree.get_children()) == 0
+
+        # 6. DS kiến trúc
+        assert hasattr(dash, "aux_boost_var")
+        assert hasattr(dash, "aux_boost_time_lbl")
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_save_unified_profile_with_grouped_buildings(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+        b_data = [
+            {"pid": 1, "gid": 1, "level": 20, "name": "Quan Phủ"},
+            {"pid": 11, "gid": 3, "level": 10, "name": "Nhà Dân"},
+            {"pid": 12, "gid": 3, "level": 10, "name": "Nhà Dân"},
+        ]
+        dash._sync_city_buildings_data(15230, b_data)
+        assert dash.bld_tree.exists("group_3")
+
+        # Lưu hồ sơ cấu hình tổng hợp không được văng lỗi ValueError
+        saved_file = dash._save_unified_profile(tmp_path / "test_grouped_profile.json")
+        assert saved_file.exists()
+
+        # Kiểm tra nội dung lưu
+        import json
+        saved_data = json.loads(saved_file.read_text(encoding="utf-8"))
+        assert "building" in saved_data
+        plans = saved_data["building"]["plans"]
+        assert len(plans) == 3
+        # Đảm bảo các ô trong group_3 đều được lưu phẳng với đúng pid
+        pids = [p["pid"] for p in plans]
+        assert 1 in pids
+        assert 11 in pids
+        assert 12 in pids
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_treeview_checkbox_click_in_chay_column():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        class DummyEvent:
+            def __init__(self, x=0, y=0):
+                self.x = x
+                self.y = y
+
+        # 1. bld_tree: Cột Chạy là displaycolumn #3 (sau current_lvl #1 và target_lvl #2)
+        assert dash.bld_tree.heading("current_lvl", "text") == "Cấp HT"
+        assert dash.bld_tree.heading("target_lvl", "text") == "Cấp MT"
+        assert dash.bld_tree.heading("select", "text") == "Chạy"
+
+        bld_item = dash.bld_tree.get_children()[0]
+        init_vals = list(dash.bld_tree.item(bld_item, "values"))
+        assert init_vals[0] == "☐"
+
+        # Click vào display column #3 (Chạy) phải toggle checkbox từ ☐ -> ☑
+        dash.bld_tree.identify_row = lambda y: bld_item
+        dash.bld_tree.identify_column = lambda x: "#3"
+        dash._on_bld_tree_click(DummyEvent(0, 0))
+        after_vals = list(dash.bld_tree.item(bld_item, "values"))
+        assert after_vals[0] == "☑", f"Click vào cột Chạy (#3) phải chuyển ☐ -> ☑, nhưng nhận: {after_vals[0]}"
+
+        # 2. res_tree: Cột Chạy là displaycolumn #3
+        assert dash.res_tree.heading("current_lvl", "text") == "Cấp HT"
+        assert dash.res_tree.heading("target_lvl", "text") == "Cấp MT"
+        assert dash.res_tree.heading("select", "text") == "Chạy"
+
+        res_item = dash.res_tree.get_children()[0]
+        init_res_vals = list(dash.res_tree.item(res_item, "values"))
+        assert init_res_vals[0] == "☐"
+        assert init_res_vals[3] == "-"  # Ban đầu khi chưa tải từ server là "-"
+
+        dash.res_tree.identify_row = lambda y: res_item
+        dash.res_tree.identify_column = lambda x: "#3"
+        dash._on_res_tree_click(DummyEvent(0, 0))
+        after_res_vals = list(dash.res_tree.item(res_item, "values"))
+        assert after_res_vals[0] == "☑", f"Click vào cột Chạy (#3) ở res_tree phải chuyển ☐ -> ☑, nhưng nhận: {after_res_vals[0]}"
+
+        # 3. bld_bases_tree: Cột Tài nguyên là #2, Chọn là #1
+        base_item = dash.bld_bases_tree.get_children()[0]
+        dash.bld_bases_tree.identify_row = lambda y: base_item
+        dash.bld_bases_tree.identify_column = lambda x: "#2"
+        dash._on_bld_bases_click(DummyEvent(0, 0))
+        base_vals = list(dash.bld_bases_tree.item(base_item, "values"))
+        assert base_vals[1] == "☑"
+
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_boost_status_time_parsing_and_cid():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        calls = []
+        def fake_call(path, api_id, payload):
+            calls.append((path, api_id, payload))
+            # Giả lập phản hồi thật từ server S53: 2234:39:14 = 8,044,754 giây
+            if path == "Common.ashx" and api_id == 77:
+                return {
+                    "ret": 0,
+                    "list": [
+                        [15230, "ThanhChinh", 596952, 8044754, [], []]
+                    ]
+                }
+            return {}
+
+        dash.gateway.call = fake_call
+        dash._check_and_update_boost_status(async_check=False)
+
+        # Kiểm tra payload phải có cid
+        assert any(c[0] == "Common.ashx" and c[1] == 77 and "cid" in c[2] for c in calls)
+        assert dash.aux_boost_time_lbl.cget("text") == "(Còn: 2234:39:14)"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_resource_box_combobox_width():
+    dash = safe_dashboard()
+    try:
+        # Độ rộng của Combobox chọn rương phải đủ hiển thị tên đầy đủ
+        assert dash.res_gold_box_combo.cget("width") >= 30
+        assert dash.res_tn_box_combo.cget("width") >= 30
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_current_and_target_levels_sync_and_tagging():
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra ban đầu của res_tree: tất cả kỹ thuật có Cấp HT là "-" và tag upgrade
+        for iid in dash.res_tree.get_children(""):
+            vals = dash.res_tree.item(iid, "values")
+            tags = dash.res_tree.item(iid, "tags")
+            assert vals[3] == "-"
+            assert "upgrade" in tags
+
+        # 2. Đồng bộ dữ liệu thực tế từ server (ví dụ kỹ thuật 1 cấp 20, kỹ thuật 2 cấp 5)
+        # Kỹ thuật 1: MT=20, HT=20 -> tag completed
+        # Kỹ thuật 2: MT=20, HT=5 -> tag upgrade
+        levels_map = {1: 20, 2: 5}
+        dash._sync_city_techs_data(15230, levels_map, from_auto_cycle=False)
+
+        vals_1 = dash.res_tree.item("1", "values")
+        tags_1 = dash.res_tree.item("1", "tags")
+        assert int(vals_1[3]) == 20
+        assert "completed" in tags_1
+
+        vals_2 = dash.res_tree.item("2", "values")
+        tags_2 = dash.res_tree.item("2", "tags")
+        assert int(vals_2[3]) == 5
+        assert "upgrade" in tags_2
+
+        # 3. Đặt Cấp MT của kỹ thuật 2 xuống cấp 5 -> chuyển sang completed
+        dash.res_tree.selection_set("2")
+        dash.res_target_lvl_var.set("5")
+        dash._set_res_target_lvl()
+        tags_2_updated = dash.res_tree.item("2", "tags")
+        assert "completed" in tags_2_updated
+    finally:
+        dash.destroy()
+
+
+def test_two_way_target_level_binding():
+    """Kiểm tra cơ chế đồng bộ hai chiều của ô nhập Cấp mục tiêu khi chọn công trình và kỹ thuật."""
+    dash = safe_dashboard()
+    try:
+        # 1. Quản lý nhà (bld_tree): Khi chọn item, ô nhập cập nhật theo item
+        # Đặt Quan Phủ (pid 1) MT=25
+        dash.bld_tree.selection_set("1")
+        dash.bld_target_lvl_var.set("25")
+        dash._set_bld_target_lvl()
+        assert int(dash.bld_tree.item("1", "values")[4]) == 25
+
+        # Đặt Tường Thành (pid 2) MT=0 (Hạ)
+        dash.bld_tree.selection_set("2")
+        dash._lower_bld_target_lvl()
+        assert int(dash.bld_tree.item("2", "values")[4]) == 0
+        assert dash.bld_target_lvl_var.get() == "0"
+
+        # Chọn lại Quan Phủ -> ô nhập phải nhảy về 25 (hai chiều)
+        dash.bld_tree.selection_set("1")
+        dash._on_bld_tree_selected()
+        assert dash.bld_target_lvl_var.get() == "25"
+
+        # Chọn lại Tường Thành -> ô nhập phải nhảy về 0
+        dash.bld_tree.selection_set("2")
+        dash._on_bld_tree_selected()
+        assert dash.bld_target_lvl_var.get() == "0"
+
+        # Click mô phỏng trên dòng (không phải cột checkbox)
+        ev = MagicMock()
+        ev.x = 20
+        ev.y = 20
+        dash.bld_tree.identify_row = MagicMock(return_value="1")
+        dash.bld_tree.identify_column = MagicMock(return_value="#1")
+        dash._on_bld_tree_click(ev)
+        assert dash.bld_tree.selection() == ("1",)
+        assert dash.bld_target_lvl_var.get() == "25"
+
+        # Kiểm tra nhóm đa ô đất (group)
+        plans = [
+            {"pid": 11, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 5, "target_level": 15, "enabled": True},
+            {"pid": 12, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 8, "target_level": 18, "enabled": True},
+        ]
+        dash._render_bld_tree_from_plans(plans)
+        dash.bld_tree.selection_set("group_3")
+        dash._on_bld_tree_selected()
+        assert dash.bld_target_lvl_var.get() == "18"
+
+        dash.bld_tree.selection_set("11")
+        dash._on_bld_tree_selected()
+        assert dash.bld_target_lvl_var.get() == "15"
+
+        # Kiểm tra _collect_bld_plans_from_tree an toàn với cur_lvl = "-"
+        dash.bld_tree.item("11", values=("☑", 11, 3, "-", 15))
+        collected = dash._collect_bld_plans_from_tree()
+        p11 = [p for p in collected if p["pid"] == 11][0]
+        assert p11["cur_lvl"] == 0
+        assert p11["target_level"] == 15
+
+        # 2. Nâng cấp kỹ thuật (res_tree): Khi chọn item, ô nhập cập nhật theo kỹ thuật
+        dash.res_tree.selection_set("1")
+        dash.res_target_lvl_var.set("28")
+        dash._set_res_target_lvl()
+        assert int(dash.res_tree.item("1", "values")[2]) == 28
+
+        dash.res_tree.selection_set("2")
+        dash._on_res_tree_selected()
+        assert dash.res_target_lvl_var.get() == "20"
+
+        dash.res_tree.selection_set("1")
+        dash._on_res_tree_selected()
+        assert dash.res_target_lvl_var.get() == "28"
+
+        # Click mô phỏng trên res_tree
+        ev_res = MagicMock()
+        ev_res.x = 20
+        ev_res.y = 20
+        dash.res_tree.identify_row = MagicMock(return_value="2")
+        dash.res_tree.identify_column = MagicMock(return_value="#2")
+        dash._on_res_tree_click(ev_res)
+        assert dash.res_tree.selection() == ("2",)
+        assert dash.res_target_lvl_var.get() == "20"
+    finally:
+        dash.destroy()
+
+
+
 
 
 

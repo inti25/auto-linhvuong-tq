@@ -37,8 +37,8 @@ _Avoid_: Dò đường tránh vật cản, bypass obstacle, detour
 Hành động sử dụng đạo cụ (Lệnh bài tăng tốc / Vàng) để giảm thời gian hoặc hoàn tất tức thì một tiến trình nâng cấp công trình hoặc nghiên cứu.
 _Avoid_: Speedup, cắn bùa tăng tốc
 
-**Kích hoạt kiến trúc**:
-Hành động kích hoạt hiệu ứng đặc quyền tăng 20% tốc độ xây dựng công trình trên toàn bộ các thành trong thời gian hiệu lực (`OPT.ashx?id=69, type=3`).
+**DS kiến trúc** (Đại Sư Kiến Trúc / Kích hoạt kiến trúc):
+Đặc quyền đạo cụ mở rộng hàng đợi thi công từ 1 công trình mặc định lên tối đa 3 công trình xây dựng cùng lúc (`OPT.ashx?id=69, type=3`), đồng thời tăng 20% tốc độ xây dựng. Thời hạn hiệu lực được kiểm tra qua trường `plus_finish` từ `Common.ashx?id=77`.
 _Avoid_: Boost 20%, kích hoạt bonus
 
 **Chuyển quân giới**:
@@ -201,6 +201,31 @@ _Avoid_: Gom nhóm nhà, group building, cây công trình
 **Tự Động Kế Thừa Quy Hoạch Nhóm**:
 Cơ chế tự động kết nạp các ô đất mới xây vào nhóm loại công trình tương ứng, tự động bật thi công và kế thừa cấp mục tiêu chung khi nhóm đó đang ở trạng thái chọn tất cả.
 _Avoid_: Kế thừa cấp, auto inherit plot, tự add nhà
+
+**Thành Nghiên Cứu**:
+Thành trì được người chơi chỉ định (đánh dấu `NC` trên danh sách thành) làm trung tâm tiến hành nâng cấp 29 Kỹ Thuật Đại Học tại Đại Học Điện hoặc Thái Học Điện.
+_Avoid_: Research city, thành học viện
+
+**Ngưỡng Tài Nguyên**:
+Mức Vàng tối thiểu và tỷ lệ phần trăm khoáng sản (Gỗ, Sắt, Đá, Thực) cài đặt làm mốc để bot tự động kiểm tra định kỳ và cắn mở rương tài nguyên khi số dư thực tế tụt xuống dưới ngưỡng.
+_Avoid_: Resource threshold, mức khoáng sản
+
+**Cấp Hiện Tại** (Cấp HT):
+Cấp độ thực tế của công trình kiến trúc hoặc công nghệ kỹ thuật Viện Đại Học đang hiện hữu trên máy chủ game tại căn cứ được chọn. Đối với nhóm công trình đa ô đất khi thu gọn, Cấp HT thể hiện dải cấp độ từ ô thấp nhất đến ô cao nhất (`min - max`).
+_Avoid_: Cấp thực tế, level hiện tại, current level
+
+**Cấp Mục Tiêu** (Cấp MT):
+Cấp độ mong muốn do người chơi thiết lập trong hàng đợi quy hoạch để bot tự động điều phối tiến trình nâng cấp (hoặc hạ cấp/dỡ bỏ) đạt tới.
+_Avoid_: Cấp đích, target level, max level
+
+**Trạng Thái Thi Công Mặc Định**:
+Quy ước khi nạp công trình hoặc kỹ thuật mới (dữ liệu mặc định hoặc lấy từ server lần đầu), cột checkbox `Chạy` sẽ ở trạng thái chưa chọn (`☐` / uncheck / `enabled=False`) để người chơi chủ động lựa chọn công trình cần xây/nghiên cứu thay vì tự động bật tất cả.
+_Avoid_: Check all mặc định, auto run all, bật sẵn
+
+**Mở Rương Khi Toàn Bộ Thiếu Tài Nguyên**:
+Chiến lược điều phối tài nguyên thông minh trong Hàng Đợi Xây Dựng: Khi một công trình báo thiếu tài nguyên (mã 32 hoặc 37), bot không mở rương ngay mà tạm thời chuyển sang công trình kế tiếp. Chỉ khi toàn bộ công trình hợp lệ trong lượt đều báo thiếu tài nguyên, bot mới mở đúng 1 rương tài nguyên và quay trở lại duyệt từ đầu hàng đợi theo đúng thứ tự ưu tiên.
+_Avoid_: Mở rương tức thì, cắn rương liên tục, greedy box opening
+
 
 ## Danh Mục Công Trình (Nhà)
 

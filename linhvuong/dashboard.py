@@ -339,7 +339,47 @@ class Dashboard(tk.Tk):
         self._res_runner = None
         self._city_building_plans: dict[int, list[dict]] = {}
         self._selected_building_cities: set[int] = set()
+        self._selected_resource_cities: set[int] = set()
+        self._research_city_id: Optional[int] = None
+        self._res_monitor_running: bool = False
+        self._res_monitor_thread: Optional[threading.Thread] = None
         self._current_bld_city_id: Optional[int] = None
+        self._log_win = None
+        self._active_log_texts: list[tk.Text] = []
+
+        # Các biến cấu hình nội chính & tài nguyên
+        self.bld_speedup_var = tk.BooleanVar(value=False)
+        self.bld_speedup_hours_var = tk.StringVar(value="1")
+        self.bld_open_box_var = tk.BooleanVar(value=False)
+        self.bld_target_lvl_var = tk.StringVar(value="20")
+        self.bld_max_lvl_var = tk.BooleanVar(value=False)
+        self.res_target_lvl_var = tk.StringVar(value="20")
+        self.res_art_var = tk.BooleanVar(value=False)
+        self.res_even_var = tk.BooleanVar(value=False)
+        self.res_interval_var = tk.StringVar(value="30")
+        self.bld_interval_var = tk.StringVar(value="20")
+        self.bld_box_max_var = tk.StringVar(value="5")
+        self.bld_box_fallback_var = tk.BooleanVar(value=True)
+        self.res_gold_thresh_var = tk.StringVar(value="100000000")
+        self.res_wood_pct_var = tk.StringVar(value="70")
+        self.res_iron_pct_var = tk.StringVar(value="70")
+        self.res_stone_pct_var = tk.StringVar(value="70")
+        self.res_food_pct_var = tk.StringVar(value="70")
+        self.aux_daily_reward_var = tk.BooleanVar(value=True)
+        self.aux_comfort_var = tk.BooleanVar(value=True)
+        self.aux_boost_var = tk.BooleanVar(value=True)
+        self.bld_boost_var = self.aux_boost_var
+        self.bld_comfort_var = self.aux_comfort_var
+        self.aux_tribute_var = tk.BooleanVar(value=False)
+        self.log_amount_var = tk.StringVar(value="1")
+        self.log_interval_var = tk.StringVar(value="60")
+        self.dt_dest_x_var = tk.StringVar(value="")
+        self.dt_dest_y_var = tk.StringVar(value="")
+
+        # Widget log đệm
+        self.bld_log_text = tk.Text(self)
+        self.logis_log_text = tk.Text(self)
+        self._active_log_texts = [self.bld_log_text, self.logis_log_text]
 
         style = ttk.Style(self)
         style.theme_use("clam")
@@ -421,6 +461,8 @@ class Dashboard(tk.Tk):
         style.map("Success.TButton", background=[("active", "#34c759")])
         style.configure("Danger.TButton", background=DANGER, foreground="white", font=("Segoe UI", 10, "bold"), padding=6)
         style.map("Danger.TButton", background=[("active", "#ff4d4f"), ("disabled", "#552222")])
+        style.configure("Warning.TButton", background="#f59e0b", foreground="white", font=("Segoe UI", 10, "bold"), padding=6)
+        style.map("Warning.TButton", background=[("active", "#fbbf24")])
 
         # Top Bar
         top = tk.Frame(self, bg=BG)
@@ -437,40 +479,39 @@ class Dashboard(tk.Tk):
         )
         self.open_logs_btn.pack(side="right", padx=(0, 6))
 
-
-        # Notebook chứa 6 Tab
+        # Notebook chứa 5 Tab (theo thứ tự quy hoạch mới):
+        # 1. 🏛️ Nội Chính & Nghiên Cứu
+        # 2. ⚔️ Thảo Phạt
+        # 3. 🏕️ Bình Man
+        # 4. 🧛 Vong Linh
+        # 5. 🏰 Tổng quan
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
-        # Tab 1: Tổng quan & Quân đội
+        # Tab 1: Nội Chính & Nghiên Cứu
         t1 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(t1, text="🏰 Tổng quan & Quân đội")
-        self._build_overview_tab(t1)
+        self.notebook.add(t1, text="🏛️ Nội Chính & Nghiên Cứu")
+        self._build_internal_and_research_tab(t1)
 
         # Tab 2: Thảo Phạt Tự Động
         t2 = tk.Frame(self.notebook, bg=BG)
         self.notebook.add(t2, text="⚔️ Thảo Phạt")
         self._build_thaophat_tab(t2)
 
-        # Tab 3: Gọi Dân & Vong Linh
+        # Tab 3: Bình Man
         t3 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(t3, text="🧛 Gọi Dân & Vong Linh")
-        self._build_goidan_tab(t3)
+        self.notebook.add(t3, text="🏕️ Bình Man")
+        self._build_binhman_tab(t3)
 
-        # Tab 4: Bình Man & Di Trại
+        # Tab 4: Vong Linh
         t4 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(t4, text="🏕️ Bình Man & Di Trại")
-        self._build_binhman_tab(t4)
+        self.notebook.add(t4, text="🧛 Vong Linh")
+        self._build_goidan_tab(t4)
 
-        # Tab 5: Xây Dựng Công Trình
+        # Tab 5: Tổng quan & Quân đội
         t5 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(t5, text="🏗️ Xây Dựng")
-        self._build_building_tab(t5)
-
-        # Tab 6: Đại Học & Hậu Cần
-        t6 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(t6, text="🔬 Đại Học & Hậu Cần")
-        self._build_research_and_logistics_tab(t6)
+        self.notebook.add(t5, text="🏰 Tổng quan")
+        self._build_overview_tab(t5)
 
         # Tự động nạp hồ sơ cấu hình tổng hợp mặc định theo tài khoản
         acc_prof = Path(self.default_profile_name)
@@ -608,6 +649,10 @@ class Dashboard(tk.Tk):
                 "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
                 "amount": self.log_amount_var.get() if hasattr(self, "log_amount_var") else "1000",
             },
+            "ditrai": {
+                "dest_x": self.dt_dest_x_var.get() if hasattr(self, "dt_dest_x_var") else "",
+                "dest_y": self.dt_dest_y_var.get() if hasattr(self, "dt_dest_y_var") else "",
+            },
         }
 
         # Thu thập Hàng đợi Xây dựng (đa căn cứ & tương thích ngược)
@@ -630,17 +675,7 @@ class Dashboard(tk.Tk):
         profile["building"]["cities"] = cities_cfg
 
         if hasattr(self, "bld_tree"):
-            for iid in self.bld_tree.get_children(""):
-                name = self.bld_tree.item(iid, "text")
-                vals = self.bld_tree.item(iid, "values")
-                if len(vals) >= 5:
-                    profile["building"]["plans"].append({
-                        "pid": int(vals[1]),
-                        "gid": int(vals[2]),
-                        "target_level": int(vals[4]),
-                        "name": name,
-                        "enabled": vals[0] == "☑",
-                    })
+            profile["building"]["plans"] = self._collect_bld_plans_from_tree()
 
         # Thu thập Hàng đợi Nghiên cứu
         if hasattr(self, "res_tree"):
@@ -754,12 +789,20 @@ class Dashboard(tk.Tk):
                 tid = int(t.get("id", 1))
                 tname = t.get("name") or TECH_NAMES.get(tid, f"Kỹ thuật {tid}")
                 en = "☑" if t.get("enabled", True) else "☐"
+                target_lvl = int(t.get("target_level", 20))
+                cur_lvl = t.get("current_level", "-")
+                try:
+                    cur_int = int(cur_lvl) if str(cur_lvl) != "-" else None
+                    tag = ("completed" if cur_int >= target_lvl else "upgrade") if cur_int is not None else "upgrade"
+                except (ValueError, TypeError):
+                    tag = "upgrade"
                 self.res_tree.insert(
                     "",
                     "end",
                     iid=str(tid),
                     text=tname,
-                    values=(en, tid, t.get("target_level", 20)),
+                    values=(en, tid, target_lvl, cur_lvl),
+                    tags=(tag,),
                 )
             loaded_sections.append(f"Đại Học ({len(techs_list)} kỹ thuật)")
             if hasattr(self, "_append_logis_log"):
@@ -838,6 +881,15 @@ class Dashboard(tk.Tk):
             if hasattr(self, "log_amount_var") and "amount" in log_data:
                 self.log_amount_var.set(str(log_data["amount"]))
             loaded_sections.append("Hậu Cần")
+
+        # 7. Dịch Trại
+        if "ditrai" in data and isinstance(data["ditrai"], dict):
+            dt_data = data["ditrai"]
+            if hasattr(self, "dt_dest_x_var") and "dest_x" in dt_data:
+                self.dt_dest_x_var.set(str(dt_data["dest_x"]))
+            if hasattr(self, "dt_dest_y_var") and "dest_y" in dt_data:
+                self.dt_dest_y_var.set(str(dt_data["dest_y"]))
+            loaded_sections.append("Dịch Trại")
 
         return loaded_sections
 
@@ -1364,38 +1416,8 @@ class Dashboard(tk.Tk):
         self.bm_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
         self.bm_once_btn.pack(side="top", pady=2)
 
-        # 2. Khung Di Trại Độc Lập
-        f_dt = ttk.LabelFrame(parent, text="🏕️ Di Trại Độc Lập (Tới Tọa Độ Chỉ Định)", style="Card.TLabelframe")
-        f_dt.pack(fill="x", padx=4, pady=4)
-
-        tk.Label(f_dt, text="Doanh trại:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        self.dt_camp_combo = ttk.Combobox(f_dt, state="readonly", width=22)
-        self.dt_camp_combo.grid(row=0, column=1, sticky="w", padx=4, pady=4)
-        self.dt_camp_combo.bind("<<ComboboxSelected>>", self._on_dt_camp_selected)
-
-        self.dt_origin_lbl = tk.Label(f_dt, text="Vị trí hiện tại: (---, ---)", bg=BG, fg=ACCENT, font=("Segoe UI", 9, "bold"))
-        self.dt_origin_lbl.grid(row=0, column=2, columnspan=2, sticky="w", padx=8, pady=4)
-
-        tk.Label(f_dt, text="Tọa độ Đích X:", bg=BG, fg=FG, font=("Segoe UI", 10)).grid(row=1, column=0, sticky="w", padx=4, pady=4)
-        self.dt_dest_x_var = tk.StringVar(value="")
-        ttk.Entry(f_dt, textvariable=self.dt_dest_x_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=4)
-
-        tk.Label(f_dt, text="Y:", bg=BG, fg=FG, font=("Segoe UI", 10)).grid(row=1, column=2, sticky="w", padx=4, pady=4)
-        self.dt_dest_y_var = tk.StringVar(value="")
-        ttk.Entry(f_dt, textvariable=self.dt_dest_y_var, width=8).grid(row=1, column=3, sticky="w", padx=4, pady=4)
-
-        dt_ctrl_frame = tk.Frame(f_dt, bg=BG)
-        dt_ctrl_frame.grid(row=0, column=4, rowspan=2, padx=16)
-        self.dt_start_btn = ttk.Button(dt_ctrl_frame, text="▶️ Bắt đầu Di Trại", style="Success.TButton", command=self._start_ditrai)
-        self.dt_start_btn.pack(side="top", pady=2)
-        self.dt_stop_btn = ttk.Button(dt_ctrl_frame, text="⏹️ Dừng Di Trại", style="Danger.TButton", command=self._stop_ditrai, state="disabled")
-        self.dt_stop_btn.pack(side="top", pady=2)
-
-        self.dt_status_lbl = tk.Label(f_dt, text="Trạng thái: Sẵn sàng", bg=BG, fg="#4ade80", font=("Segoe UI", 9, "bold"))
-        self.dt_status_lbl.grid(row=2, column=0, columnspan=5, sticky="w", padx=4, pady=4)
-
-        # 3. Khung Nhật ký chung
-        f_log = ttk.LabelFrame(parent, text="Nhật ký Bình Man & Di Trại", style="Card.TLabelframe")
+        # 2. Khung Nhật ký chung
+        f_log = ttk.LabelFrame(parent, text="Nhật ký Bình Man", style="Card.TLabelframe")
         f_log.pack(fill="both", expand=True, padx=4, pady=4)
         self.bm_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
         self.bm_log_text.pack(fill="both", expand=True, padx=6, pady=6)
@@ -1413,12 +1435,18 @@ class Dashboard(tk.Tk):
             else:
                 self.bm_camp_id_var.set("")
 
+    def _append_dt_log(self, msg: str):
+        if hasattr(self, "_append_bld_log"):
+            self._append_bld_log(msg)
+        if hasattr(self, "_append_bm_log"):
+            self._append_bm_log(msg)
+
     def _on_dt_camp_selected(self, _event=None):
         sel_idx = self.dt_camp_combo.current()
         camps = self.roster.camps if self.roster.camps else self.roster.bases
         if 0 <= sel_idx < len(camps):
             camp = camps[sel_idx]
-            self.dt_origin_lbl.configure(text=f"Vị trí hiện tại: ({camp.pos_x}, {camp.pos_y})")
+            self.dt_origin_lbl.configure(text=f"Vị trí: ({camp.pos_x}, {camp.pos_y})")
 
     def _start_ditrai(self):
         if self._ditrai_runner and self._ditrai_runner.is_alive():
@@ -1449,7 +1477,7 @@ class Dashboard(tk.Tk):
         self.dt_start_btn.configure(state="disabled")
         self.dt_stop_btn.configure(state="normal")
         self.dt_status_lbl.configure(text=f"🚀 Đang di chuyển tới ({dest_x}, {dest_y})...", fg="#38bdf8")
-        self._append_bm_log(f"🚀 Bắt đầu Di Trại {camp.name} từ ({camp.pos_x}, {camp.pos_y}) tới ({dest_x}, {dest_y})")
+        self._append_dt_log(f"🚀 Bắt đầu Di Trại {camp.name} từ ({camp.pos_x}, {camp.pos_y}) tới ({dest_x}, {dest_y})")
 
         self._ditrai_runner = threading.Thread(
             target=self._run_ditrai_thread,
@@ -1461,12 +1489,12 @@ class Dashboard(tk.Tk):
     def _stop_ditrai(self):
         self._ditrai_stop_event.set()
         self.dt_status_lbl.configure(text="⏹️ Đang gửi tín hiệu dừng Di Trại...", fg="#facc15")
-        self._append_bm_log("⏹️ Người chơi bấm dừng Di Trại, chờ bước hiện tại kết thúc an toàn...")
+        self._append_dt_log("⏹️ Người chơi bấm dừng Di Trại, chờ bước hiện tại kết thúc an toàn...")
 
     def _run_ditrai_thread(self, camp: City, dest_x: int, dest_y: int):
         def on_step_callback(new_x: int, new_y: int, frozen: int):
             self.roster.update_camp_position(camp.id, new_x, new_y)
-            self.after(0, lambda: self.dt_origin_lbl.configure(text=f"Vị trí hiện tại: ({new_x}, {new_y})"))
+            self.after(0, lambda: self.dt_origin_lbl.configure(text=f"Vị trí: ({new_x}, {new_y})"))
             for rem in range(frozen, 0, -1):
                 if self._ditrai_stop_event.is_set():
                     break
@@ -1480,7 +1508,7 @@ class Dashboard(tk.Tk):
             self.gateway,
             None,
             TargetLocks(),
-            notify=lambda m: self.after(0, self._append_bm_log, m),
+            notify=lambda m: self.after(0, self._append_dt_log, m),
         )
 
         task = DiTrai(
@@ -1499,19 +1527,23 @@ class Dashboard(tk.Tk):
         except Exception as e:
             logging.getLogger("linhvuong.tasks.DiTrai").exception(f"Lỗi ngoại lệ trong quá trình Di Trại: {e}")
             result = f"error: {e}"
-            self.after(0, self._append_bm_log, f"❌ Lỗi ngoại lệ trong quá trình Di Trại: {e}")
+            self.after(0, self._append_dt_log, f"❌ Lỗi ngoại lệ trong quá trình Di Trại: {e}")
 
         def finalize():
             self.dt_start_btn.configure(state="normal")
             self.dt_stop_btn.configure(state="disabled")
             if result == "arrived":
                 self.dt_status_lbl.configure(text=f"🎯 Đã đến đích ({dest_x}, {dest_y}) thành công!", fg="#4ade80")
+                self._append_dt_log(f"🎯 Di Trại {camp.name} đã đến đích ({dest_x}, {dest_y}) thành công!")
             elif result == "stopped":
                 self.dt_status_lbl.configure(text=f"⏹️ Đã dừng an toàn tại ({task.origin[0]}, {task.origin[1]})", fg="#94a3b8")
+                self._append_dt_log(f"⏹️ Di Trại {camp.name} đã dừng an toàn tại ({task.origin[0]}, {task.origin[1]})")
             elif result == "insufficient_resources":
                 self.dt_status_lbl.configure(text="❌ Thiếu tài nguyên di chuyển!", fg="#f87171")
+                self._append_dt_log(f"❌ Di Trại {camp.name} thiếu tài nguyên để tiếp tục di chuyển!")
             else:
                 self.dt_status_lbl.configure(text=f"❌ Dừng: {result}", fg="#f87171")
+                self._append_dt_log(f"❌ Di Trại {camp.name} dừng: {result}")
 
             self._update_all_combos_coordinates()
 
@@ -1597,99 +1629,248 @@ class Dashboard(tk.Tk):
 
 
     # =========================================================================
-    # TAB 5: XÂY DỰNG CÔNG TRÌNH
+    # TAB 1: NỘI CHÍNH & NGHIÊN CỨU (HỢP NHẤT 3 CỘT)
     # =========================================================================
     def _build_building_tab(self, parent):
-        top = tk.Frame(parent, bg=BG)
-        top.pack(fill="x", pady=6)
+        self._build_internal_and_research_tab(parent)
 
-        tk.Label(top, text="Căn cứ:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 4))
-        self.bld_city_combo = ttk.Combobox(top, state="readonly", width=18)
-        self.bld_city_combo.pack(side="left", padx=(0, 10))
-        self.bld_city_combo.bind("<<ComboboxSelected>>", self._on_bld_city_combo_selected)
+    def _build_internal_and_research_tab(self, parent):
+        # Các widget tương thích ngược
+        if not hasattr(self, "bld_city_combo"):
+            self.bld_city_combo = ttk.Combobox(self, state="readonly", width=18)
+        if not hasattr(self, "res_city_combo"):
+            self.res_city_combo = ttk.Combobox(self, state="readonly", width=18)
+        if not hasattr(self, "bld_slots_combo"):
+            self.bld_slots_combo = ttk.Combobox(self, state="readonly", width=3, values=["1", "2", "3"])
+            self.bld_slots_combo.set("3")
 
-        tk.Label(top, text="Số slot:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 4))
-        self.bld_slots_combo = ttk.Combobox(top, state="readonly", width=3, values=["1", "2", "3"])
-        self.bld_slots_combo.set("3")
-        self.bld_slots_combo.pack(side="left", padx=(0, 8))
+        # Khung chứa 3 Cột
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill="both", expand=True, padx=6, pady=6)
+        body.columnconfigure(0, weight=2, minsize=240)
+        body.columnconfigure(1, weight=3, minsize=320)
+        body.columnconfigure(2, weight=3, minsize=320)
+        body.rowconfigure(0, weight=1)
 
-        self.bld_speedup_var = tk.BooleanVar(value=False)
+        # ---------------------------------------------------------------------
+        # CỘT 1 (TRÁI): Chức năng, Danh sách thành, Tăng tốc
+        # ---------------------------------------------------------------------
+        col1 = tk.Frame(body, bg=BG)
+        col1.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+
+        # 1. Khung Chức năng
+        f_func = ttk.LabelFrame(col1, text="Chức năng", style="Card.TLabelframe")
+        f_func.pack(fill="x", padx=2, pady=(0, 4))
+
+        r_f1 = tk.Frame(f_func, bg=BG)
+        r_f1.pack(fill="x", padx=4, pady=2)
+        ttk.Button(r_f1, text="Làm Mới", style="Action.TButton", command=self.reload).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(r_f1, text="Xem Log", style="Action.TButton", command=self._open_log_window).pack(side="left", expand=True, fill="x", padx=2)
+
+        r_f2 = tk.Frame(f_func, bg=BG)
+        r_f2.pack(fill="x", padx=4, pady=2)
+        self.bld_start_btn = ttk.Button(r_f2, text="Xây", style="Danger.TButton", command=self._toggle_building)
+        self.bld_start_btn.pack(side="left", expand=True, fill="x", padx=2)
+        self.res_start_btn = ttk.Button(r_f2, text="Nghiên Cứu", style="Danger.TButton", command=self._toggle_research)
+        self.res_start_btn.pack(side="left", expand=True, fill="x", padx=2)
+        self.res_monitor_btn = ttk.Button(r_f2, text="Tài Nguyên", style="Danger.TButton", command=self._toggle_resource_monitor)
+        self.res_monitor_btn.pack(side="left", expand=True, fill="x", padx=2)
+
+        r_f3 = tk.Frame(f_func, bg=BG)
+        r_f3.pack(fill="x", padx=4, pady=2)
+        ttk.Button(r_f3, text="Chọn", style="Success.TButton", command=lambda: self._set_selected_base_state(True)).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(r_f3, text="Bỏ Chọn", style="Danger.TButton", command=lambda: self._set_selected_base_state(False)).pack(side="left", expand=True, fill="x", padx=2)
+
+        r_f4 = tk.Frame(f_func, bg=BG)
+        r_f4.pack(fill="x", padx=4, pady=2)
+        ttk.Button(r_f4, text="Chọn Tất Cả", style="Success.TButton", command=lambda: self._select_all_bld_bases(True)).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(r_f4, text="Bỏ Tất Cả", style="Danger.TButton", command=lambda: self._select_all_bld_bases(False)).pack(side="left", expand=True, fill="x", padx=2)
+
+        r_f5 = tk.Frame(f_func, bg=BG)
+        r_f5.pack(fill="x", padx=4, pady=2)
+        ttk.Button(r_f5, text="★ Chọn NC", style="Warning.TButton", command=self._set_selected_base_as_nc).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(r_f5, text="✖ Bỏ NC", style="Action.TButton", command=self._clear_all_nc_bases).pack(side="left", expand=True, fill="x", padx=2)
+
+        # 2. Khung Danh sách thành
+        f_bases = ttk.LabelFrame(col1, text="Danh sách thành", style="Card.TLabelframe")
+        f_bases.pack(fill="both", expand=True, padx=2, pady=4)
+
+        self.bld_bases_tree = ttk.Treeview(
+            f_bases,
+            columns=("select", "resource", "research", "type", "id"),
+            displaycolumns=("select", "resource", "research"),
+            show="tree headings",
+            selectmode="browse",
+        )
+        self.bld_bases_tree.heading("#0", text="Thành")
+        self.bld_bases_tree.heading("select", text="Chọn")
+        self.bld_bases_tree.heading("resource", text="Tài nguyên")
+        self.bld_bases_tree.heading("research", text="NC")
+
+        self.bld_bases_tree.column("#0", width=105)
+        self.bld_bases_tree.column("select", width=42, anchor="center")
+        self.bld_bases_tree.column("resource", width=68, anchor="center")
+        self.bld_bases_tree.column("research", width=38, anchor="center")
+
+        self.bld_bases_tree.pack(fill="both", expand=True, padx=4, pady=4)
+        self.bld_bases_tree.bind("<ButtonRelease-1>", self._on_bld_bases_click)
+        self.bld_bases_tree.bind("<<TreeviewSelect>>", self._on_bld_base_selected)
+
+        # 3. Khung Tăng tốc xây dựng
+        f_spd = ttk.LabelFrame(col1, text="Tăng tốc xây dựng", style="Card.TLabelframe")
+        f_spd.pack(fill="x", padx=2, pady=(4, 0))
+        r_spd = tk.Frame(f_spd, bg=BG)
+        r_spd.pack(fill="x", padx=4, pady=4)
+
         tk.Checkbutton(
-            top,
-            text="⚡ Tăng tốc",
+            r_spd,
+            text="Tốc nhà bằng",
             variable=self.bld_speedup_var,
             bg=BG,
             fg=FG,
             selectcolor=CARD,
             activebackground=BG,
-        ).pack(side="left", padx=4)
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=2)
 
-        self.bld_boost_var = tk.BooleanVar(value=True)
+        self.bld_speedup_item_combo = ttk.Combobox(r_spd, state="readonly", width=8, values=["Ngân Bảo", "Lệnh Bài"])
+        self.bld_speedup_item_combo.set("Ngân Bảo")
+        self.bld_speedup_item_combo.pack(side="left", padx=2)
+
+        tk.Label(r_spd, text="đến dưới", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        ttk.Entry(r_spd, textvariable=self.bld_speedup_hours_var, width=3).pack(side="left", padx=2)
+        tk.Label(r_spd, text="giờ", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+
+        # 4. Khung Dịch Trại
+        f_dt = ttk.LabelFrame(col1, text="🏕️ Dịch Trại", style="Card.TLabelframe")
+        f_dt.pack(fill="x", padx=2, pady=(4, 0))
+
+        # Doanh trại
+        r_dt1 = tk.Frame(f_dt, bg=BG)
+        r_dt1.pack(fill="x", padx=4, pady=2)
+        tk.Label(r_dt1, text="Trại:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(2, 4))
+        self.dt_camp_combo = ttk.Combobox(r_dt1, state="readonly", width=14)
+        self.dt_camp_combo.pack(side="left", fill="x", expand=True, padx=2)
+        self.dt_camp_combo.bind("<<ComboboxSelected>>", self._on_dt_camp_selected)
+
+        # Vị trí hiện tại
+        r_dt2 = tk.Frame(f_dt, bg=BG)
+        r_dt2.pack(fill="x", padx=4, pady=1)
+        self.dt_origin_lbl = tk.Label(r_dt2, text="Vị trí: (---, ---)", bg=BG, fg=ACCENT, font=("Segoe UI", 9, "bold"))
+        self.dt_origin_lbl.pack(side="left", padx=2)
+
+        # Tọa độ đích X, Y
+        r_dt3 = tk.Frame(f_dt, bg=BG)
+        r_dt3.pack(fill="x", padx=4, pady=2)
+        tk.Label(r_dt3, text="Đích X:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
+        ttk.Entry(r_dt3, textvariable=self.dt_dest_x_var, width=5).pack(side="left", padx=2)
+
+        tk.Label(r_dt3, text="Y:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 2))
+        ttk.Entry(r_dt3, textvariable=self.dt_dest_y_var, width=5).pack(side="left", padx=2)
+
+        # Điều khiển Di Trại
+        r_dt4 = tk.Frame(f_dt, bg=BG)
+        r_dt4.pack(fill="x", padx=4, pady=3)
+        self.dt_start_btn = ttk.Button(r_dt4, text="▶ Dịch Trại", style="Success.TButton", command=self._start_ditrai)
+        self.dt_start_btn.pack(side="left", fill="x", expand=True, padx=2)
+        self.dt_stop_btn = ttk.Button(r_dt4, text="⏹ Dừng", style="Danger.TButton", command=self._stop_ditrai, state="disabled")
+        self.dt_stop_btn.pack(side="left", fill="x", expand=True, padx=2)
+
+        # Trạng thái
+        r_dt5 = tk.Frame(f_dt, bg=BG)
+        r_dt5.pack(fill="x", padx=4, pady=(1, 4))
+        self.dt_status_lbl = tk.Label(r_dt5, text="Trạng thái: Sẵn sàng", bg=BG, fg="#4ade80", font=("Segoe UI", 9, "bold"), anchor="w")
+        self.dt_status_lbl.pack(side="left", fill="x", expand=True, padx=2)
+
+        # ---------------------------------------------------------------------
+        # CỘT 2 (GIỮA): Quản lý nhà & Nâng cấp kỹ thuật
+        # ---------------------------------------------------------------------
+        col2 = tk.Frame(body, bg=BG)
+        col2.grid(row=0, column=1, sticky="nsew", padx=4)
+        col2.rowconfigure(0, weight=1)
+        col2.rowconfigure(1, weight=1)
+        col2.columnconfigure(0, weight=1)
+
+        # 1. Quản lý nhà
+        self.bld_queue_frame = ttk.LabelFrame(col2, text="Quản lý nhà", style="Card.TLabelframe")
+        self.bld_queue_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
+
+        bld_bar = tk.Frame(self.bld_queue_frame, bg=BG)
+        bld_bar.pack(fill="x", padx=4, pady=2)
+        tk.Label(bld_bar, text="Cấp mục tiêu:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
+        ttk.Entry(bld_bar, textvariable=self.bld_target_lvl_var, width=3).pack(side="left", padx=2)
+        ttk.Button(bld_bar, text="Nâng", style="Success.TButton", command=self._set_bld_target_lvl).pack(side="left", padx=2)
+        ttk.Button(bld_bar, text="Hạ", style="Danger.TButton", command=self._lower_bld_target_lvl).pack(side="left", padx=2)
+        ttk.Button(bld_bar, text="↑", style="Action.TButton", width=3, command=self._move_bld_up).pack(side="left", padx=2)
+        ttk.Button(bld_bar, text="↓", style="Action.TButton", width=3, command=self._move_bld_down).pack(side="left", padx=2)
+
+        bld_sub = tk.Frame(self.bld_queue_frame, bg=BG)
+        bld_sub.pack(fill="x", padx=4, pady=(0, 2))
         tk.Checkbutton(
-            top,
-            text="🚀 Boost 20%",
-            variable=self.bld_boost_var,
+            bld_sub,
+            text="Nâng nhà cấp cao nhất",
+            variable=self.bld_max_lvl_var,
             bg=BG,
             fg=FG,
             selectcolor=CARD,
             activebackground=BG,
-        ).pack(side="left", padx=4)
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=2)
 
-        self.bld_comfort_var = tk.BooleanVar(value=True)
+        self.bld_tree = ttk.Treeview(
+            self.bld_queue_frame,
+            columns=("select", "pid", "gid", "current_lvl", "target_lvl"),
+            displaycolumns=("current_lvl", "target_lvl", "select"),
+            show="tree headings",
+            selectmode="browse",
+        )
+        self.bld_tree.heading("#0", text="Nhà")
+        self.bld_tree.heading("current_lvl", text="Cấp HT")
+        self.bld_tree.heading("target_lvl", text="Cấp MT")
+        self.bld_tree.heading("select", text="Chạy")
+
+        self.bld_tree.column("#0", width=130)
+        self.bld_tree.column("current_lvl", width=48, anchor="center")
+        self.bld_tree.column("target_lvl", width=48, anchor="center")
+        self.bld_tree.column("select", width=42, anchor="center")
+
+        self.bld_tree.tag_configure("upgrade", background="#173322", foreground="#86efac")
+        self.bld_tree.tag_configure("downgrade", background="#3a1d1d", foreground="#fca5a5")
+        self.bld_tree.tag_configure("completed", background=CARD, foreground=MUTED)
+
+        self.bld_tree.pack(fill="both", expand=True, padx=4, pady=2)
+        self.bld_tree.bind("<ButtonRelease-1>", self._on_bld_tree_click)
+        self.bld_tree.bind("<<TreeviewSelect>>", self._on_bld_tree_selected)
+        self._populate_default_buildings()
+
+        # 2. Nâng cấp kỹ thuật
+        f_tech = ttk.LabelFrame(col2, text="Nâng cấp kỹ thuật", style="Card.TLabelframe")
+        f_tech.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+
+        tech_bar = tk.Frame(f_tech, bg=BG)
+        tech_bar.pack(fill="x", padx=4, pady=2)
+        tk.Label(tech_bar, text="Cấp mục tiêu:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
+        ttk.Entry(tech_bar, textvariable=self.res_target_lvl_var, width=3).pack(side="left", padx=2)
+        ttk.Button(tech_bar, text="OK", style="Action.TButton", command=self._set_res_target_lvl_all).pack(side="left", padx=2)
+        ttk.Button(tech_bar, text="↑", style="Action.TButton", width=3, command=self._move_res_up).pack(side="left", padx=2)
+        ttk.Button(tech_bar, text="↓", style="Action.TButton", width=3, command=self._move_res_down).pack(side="left", padx=2)
+
+        tech_sub = tk.Frame(f_tech, bg=BG)
+        tech_sub.pack(fill="x", padx=4, pady=(0, 2))
         tk.Checkbutton(
-            top,
-            text="🕊️ An Dân",
-            variable=self.bld_comfort_var,
+            tech_sub,
+            text="墨子 (đến dưới 24h)",
+            variable=self.res_art_var,
             bg=BG,
             fg=FG,
             selectcolor=CARD,
             activebackground=BG,
-        ).pack(side="left", padx=4)
-
-        tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(8, 2))
-        self.bld_interval_var = tk.StringVar(value="20")
-        ttk.Entry(top, textvariable=self.bld_interval_var, width=4).pack(side="left", padx=(0, 6))
-
-        self.bld_start_btn = ttk.Button(top, text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton", command=self._toggle_building)
-        self.bld_start_btn.pack(side="right", padx=4)
-
-        # Dòng phụ: Cấu hình Tự Động Mở Đạo Cụ Tài Nguyên khi thiếu hụt
-        sub_top = tk.Frame(parent, bg=BG)
-        sub_top.pack(fill="x", padx=4, pady=(0, 6))
-
-        self.bld_open_box_var = tk.BooleanVar(value=False)
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=2)
         tk.Checkbutton(
-            sub_top,
-            text="🎁 Mở đạo cụ khi thiếu TN",
-            variable=self.bld_open_box_var,
-            bg=BG,
-            fg=FG,
-            selectcolor=CARD,
-            activebackground=BG,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left", padx=(0, 6))
-
-        tk.Label(sub_top, text="Loại rương:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 2))
-        self.bld_box_combo = ttk.Combobox(sub_top, state="readonly", width=30)
-        self.bld_box_combo["values"] = [
-            "24: 民生之鼎 - Dân Sinh Bảo Đỉnh",
-            "16: 民生之椟 - Dân Sinh Chi Độc",
-            "11: 民生之匣 - Dân Sinh Chi Hạp",
-            "1: 民生之囊 - Dân Sinh Chi Nang",
-            "35: 白金资源礼盒 - Bạch Kim Tài Nguyên Lễ Hộp",
-        ]
-        self.bld_box_combo.current(0)
-        self.bld_box_combo.pack(side="left", padx=(0, 8))
-
-        tk.Label(sub_top, text="Tối đa/đợt:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 2))
-        self.bld_box_max_var = tk.StringVar(value="5")
-        ttk.Entry(sub_top, textvariable=self.bld_box_max_var, width=4).pack(side="left", padx=(0, 8))
-
-        self.bld_box_fallback_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            sub_top,
-            text="🔄 Tự động hạ loại rương nếu hết (Đỉnh -> Độc -> Hạp -> Nang)",
-            variable=self.bld_box_fallback_var,
+            tech_sub,
+            text="Nâng đồng đều",
+            variable=self.res_even_var,
             bg=BG,
             fg=FG,
             selectcolor=CARD,
@@ -1697,99 +1878,652 @@ class Dashboard(tk.Tk):
             font=("Segoe UI", 9),
         ).pack(side="left", padx=4)
 
-        # Body: 3 cột
-        body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, pady=4)
-        body.columnconfigure(0, weight=2)
-        body.columnconfigure(1, weight=4)
-        body.columnconfigure(2, weight=3)
-        body.rowconfigure(0, weight=1)
-
-        # Cột 1: Căn Cứ Thi Công (Thành & Doanh trại)
-        f_bases = ttk.LabelFrame(body, text="Căn Cứ Thi Công (Tích chọn xây)", style="Card.TLabelframe")
-        f_bases.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-
-        base_btn_bar = tk.Frame(f_bases, bg=BG)
-        base_btn_bar.pack(fill="x", padx=4, pady=(2, 4))
-        ttk.Button(base_btn_bar, text="☑ Tất cả", style="Action.TButton", command=lambda: self._select_all_bld_bases(True)).pack(side="left", padx=2)
-        ttk.Button(base_btn_bar, text="☐ Bỏ chọn", style="Action.TButton", command=lambda: self._select_all_bld_bases(False)).pack(side="left", padx=2)
-
-        self.bld_bases_tree = ttk.Treeview(
-            f_bases,
-            columns=("select", "type", "id"),
+        self.res_tree = ttk.Treeview(
+            f_tech,
+            columns=("select", "id", "target_lvl", "current_lvl"),
+            displaycolumns=("current_lvl", "target_lvl", "select"),
             show="tree headings",
             selectmode="browse",
         )
-        self.bld_bases_tree.heading("#0", text="Tên căn cứ")
-        self.bld_bases_tree.heading("select", text="Chọn")
-        self.bld_bases_tree.heading("type", text="Loại")
-        self.bld_bases_tree.heading("id", text="ID")
+        self.res_tree.heading("#0", text="Kỹ Thuật")
+        self.res_tree.heading("current_lvl", text="Cấp HT")
+        self.res_tree.heading("target_lvl", text="Cấp MT")
+        self.res_tree.heading("select", text="Chạy")
 
-        self.bld_bases_tree.column("#0", width=105)
-        self.bld_bases_tree.column("select", width=42, anchor="center")
-        self.bld_bases_tree.column("type", width=55, anchor="center")
-        self.bld_bases_tree.column("id", width=55, anchor="e")
+        self.res_tree.column("#0", width=130)
+        self.res_tree.column("current_lvl", width=48, anchor="center")
+        self.res_tree.column("target_lvl", width=48, anchor="center")
+        self.res_tree.column("select", width=42, anchor="center")
 
-        self.bld_bases_tree.pack(fill="both", expand=True, padx=4, pady=4)
-        self.bld_bases_tree.bind("<ButtonRelease-1>", self._on_bld_bases_click)
-        self.bld_bases_tree.bind("<<TreeviewSelect>>", self._on_bld_base_selected)
+        self.res_tree.tag_configure("upgrade", background="#173322", foreground="#86efac")
+        self.res_tree.tag_configure("downgrade", background="#3a1d1d", foreground="#fca5a5")
+        self.res_tree.tag_configure("completed", background=CARD, foreground=MUTED)
 
-        # Cột 2: Hàng Đợi Quy Hoạch Công Trình của Căn Cứ đang chọn
-        self.bld_queue_frame = ttk.LabelFrame(body, text="Hàng Đợi Quy Hoạch Công Trình", style="Card.TLabelframe")
-        self.bld_queue_frame.grid(row=0, column=1, sticky="nsew", padx=4)
+        self.res_tree.pack(fill="both", expand=True, padx=4, pady=2)
+        self.res_tree.bind("<ButtonRelease-1>", self._on_res_tree_click)
+        self.res_tree.bind("<<TreeviewSelect>>", self._on_res_tree_selected)
+        self._populate_all_techs()
 
-        bld_btn_bar = tk.Frame(self.bld_queue_frame, bg=BG)
-        bld_btn_bar.pack(fill="x", padx=4, pady=(2, 4))
+        # ---------------------------------------------------------------------
+        # CỘT 3 (PHẢI): Ngưỡng tài nguyên/rương, Phụ trợ, Chuyển quân, Lưu/Load
+        # ---------------------------------------------------------------------
+        col3 = tk.Frame(body, bg=BG)
+        col3.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
 
-        ttk.Button(bld_btn_bar, text="⬆️ Lên", style="Action.TButton", command=self._move_bld_up).pack(side="left", padx=2)
-        ttk.Button(bld_btn_bar, text="⬇️ Xuống", style="Action.TButton", command=self._move_bld_down).pack(side="left", padx=2)
-        ttk.Button(bld_btn_bar, text="☑ Tất cả", style="Action.TButton", command=lambda: self._select_all_bld(True)).pack(side="left", padx=2)
-        ttk.Button(bld_btn_bar, text="☐ Bỏ chọn", style="Action.TButton", command=lambda: self._select_all_bld(False)).pack(side="left", padx=2)
+        # 1. Thiết lập ngưỡng tài nguyên và rương
+        f_res_thresh = ttk.LabelFrame(col3, text="Thiết lập ngưỡng tài nguyên và rương", style="Card.TLabelframe")
+        f_res_thresh.pack(fill="x", padx=2, pady=(0, 4))
 
-        tk.Label(bld_btn_bar, text="Cấp MT:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(4, 2))
-        self.bld_target_lvl_var = tk.StringVar(value="20")
-        ttk.Entry(bld_btn_bar, textvariable=self.bld_target_lvl_var, width=4).pack(side="left", padx=2)
-        ttk.Button(bld_btn_bar, text="✏️ Đặt", style="Action.TButton", command=self._set_bld_target_lvl).pack(side="left", padx=2)
-        ttk.Button(bld_btn_bar, text="🌟 Tất cả", style="Action.TButton", command=self._set_bld_target_lvl_all).pack(side="left", padx=2)
-        ttk.Button(bld_btn_bar, text="🔄 Tải thực tế", style="Action.TButton", command=self._fetch_city_buildings).pack(side="left", padx=2)
+        tk.Checkbutton(
+            f_res_thresh,
+            text="Mở khi thiếu lúc xây dựng",
+            variable=self.bld_open_box_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(anchor="w", padx=6, pady=(2, 2))
 
-        self.bld_tree = ttk.Treeview(
-            self.bld_queue_frame,
-            columns=("select", "pid", "gid", "current_lvl", "target_lvl"),
-            show="tree headings",
+        r_v = tk.Frame(f_res_thresh, bg=BG)
+        r_v.pack(fill="x", padx=6, pady=1)
+        tk.Label(r_v, text="Vàng:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        ttk.Entry(r_v, textvariable=self.res_gold_thresh_var, width=12).pack(side="left", padx=4)
+
+        r_tn1 = tk.Frame(f_res_thresh, bg=BG)
+        r_tn1.pack(fill="x", padx=6, pady=1)
+        tk.Label(r_tn1, text="Gỗ (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        ttk.Entry(r_tn1, textvariable=self.res_wood_pct_var, width=4).pack(side="left", padx=(2, 10))
+        tk.Label(r_tn1, text="Sắt (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        ttk.Entry(r_tn1, textvariable=self.res_iron_pct_var, width=4).pack(side="left", padx=2)
+
+        r_tn2 = tk.Frame(f_res_thresh, bg=BG)
+        r_tn2.pack(fill="x", padx=6, pady=1)
+        tk.Label(r_tn2, text="Đá (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        ttk.Entry(r_tn2, textvariable=self.res_stone_pct_var, width=4).pack(side="left", padx=(2, 10))
+        tk.Label(r_tn2, text="Thực (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        ttk.Entry(r_tn2, textvariable=self.res_food_pct_var, width=4).pack(side="left", padx=2)
+
+        box_options = [
+            "1: 民生之囊 - Dân Sinh Bảo Nang",
+            "11: 民生之匣 - Dân Sinh Chi Hạp",
+            "16: 民生之椟 - Dân Sinh Chi Độc",
+            "24: 民生之鼎 - Dân Sinh Bảo Đỉnh",
+            "35: 白金资源礼盒 - Bạch Kim Tài Nguyên Lễ Hộp",
+        ]
+
+        r_box1 = tk.Frame(f_res_thresh, bg=BG)
+        r_box1.pack(fill="x", padx=6, pady=2)
+        tk.Label(r_box1, text="Rương Vàng:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.res_gold_box_combo = ttk.Combobox(r_box1, state="readonly", width=32, values=box_options)
+        self.res_gold_box_combo.set(box_options[1])
+        self.res_gold_box_combo.pack(side="left", fill="x", expand=True, padx=4)
+
+        r_box2 = tk.Frame(f_res_thresh, bg=BG)
+        r_box2.pack(fill="x", padx=6, pady=2)
+        tk.Label(r_box2, text="Rương TN:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.res_tn_box_combo = ttk.Combobox(r_box2, state="readonly", width=32, values=box_options)
+        self.res_tn_box_combo.set(box_options[3])
+        self.res_tn_box_combo.pack(side="left", fill="x", expand=True, padx=4)
+        self.bld_box_combo = self.res_tn_box_combo
+
+        ttk.Button(f_res_thresh, text="Áp Dụng Thiết Lập", style="Success.TButton", command=self._apply_resource_settings).pack(pady=4)
+
+        # 2. Chức năng phụ trợ
+        f_aux = ttk.LabelFrame(col3, text="Chức năng phụ trợ", style="Card.TLabelframe")
+        f_aux.pack(fill="x", padx=2, pady=4)
+
+        r_aux1 = tk.Frame(f_aux, bg=BG)
+        r_aux1.pack(fill="x", padx=4, pady=2)
+        tk.Checkbutton(r_aux1, text="Thưởng hàng ngày", variable=self.aux_daily_reward_var, bg=BG, fg=FG, selectcolor=CARD, activebackground=BG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        tk.Checkbutton(r_aux1, text="Tự an ủi", variable=self.aux_comfort_var, bg=BG, fg=FG, selectcolor=CARD, activebackground=BG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+
+        r_aux2 = tk.Frame(f_aux, bg=BG)
+        r_aux2.pack(fill="x", padx=4, pady=2)
+        tk.Checkbutton(r_aux2, text="DS kiến trúc", variable=self.aux_boost_var, bg=BG, fg=FG, selectcolor=CARD, activebackground=BG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        self.aux_boost_time_lbl = tk.Label(r_aux2, text="(Còn: --)", bg=BG, fg="#4ade80", font=("Segoe UI", 8, "bold"))
+        self.aux_boost_time_lbl.pack(side="left", padx=2)
+
+        r_aux3 = tk.Frame(f_aux, bg=BG)
+        r_aux3.pack(fill="x", padx=4, pady=2)
+        tk.Checkbutton(r_aux3, text="Cống quận", variable=self.aux_tribute_var, bg=BG, fg=FG, selectcolor=CARD, activebackground=BG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        self.aux_tribute_bld_combo = ttk.Combobox(r_aux3, state="readonly", width=16, values=["官府 (Quan Phủ)", "城墙 (Tường Thành)"])
+        self.aux_tribute_bld_combo.set("官府 (Quan Phủ)")
+        self.aux_tribute_bld_combo.pack(side="left", padx=4)
+
+        # 3. Chuyển Quân Giới
+        f_logis = ttk.LabelFrame(col3, text="Chuyển Quân Giới", style="Card.TLabelframe")
+        f_logis.pack(fill="both", expand=True, padx=2, pady=4)
+
+        r_l1 = tk.Frame(f_logis, bg=BG)
+        r_l1.pack(fill="x", padx=4, pady=1)
+        tk.Label(r_l1, text="Từ", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.log_from_city_combo = ttk.Combobox(r_l1, state="readonly", width=11)
+        self.log_from_city_combo.pack(side="left", padx=2)
+        tk.Label(r_l1, text="Đến", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.log_to_city_combo = ttk.Combobox(r_l1, state="readonly", width=11)
+        self.log_to_city_combo.pack(side="left", padx=2)
+
+        r_l2 = tk.Frame(f_logis, bg=BG)
+        r_l2.pack(fill="x", padx=4, pady=1)
+        tk.Label(r_l2, text="Vận ch", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.log_army_combo = ttk.Combobox(r_l2, state="readonly", width=10, values=["1: Bộ binh", "2: Kỵ binh", "3: Cung binh"])
+        self.log_army_combo.set("1: Bộ binh")
+        self.log_army_combo.pack(side="left", padx=2)
+        tk.Label(r_l2, text="SL", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        ttk.Entry(r_l2, textvariable=self.log_amount_var, width=5).pack(side="left", padx=2)
+
+        r_l3 = tk.Frame(f_logis, bg=BG)
+        r_l3.pack(fill="x", padx=4, pady=1)
+        tk.Label(r_l3, text="Lặp lại", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        ttk.Entry(r_l3, textvariable=self.log_interval_var, width=4).pack(side="left", padx=2)
+        tk.Label(r_l3, text="giây", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+
+        r_l_btn = tk.Frame(f_logis, bg=BG)
+        r_l_btn.pack(fill="x", padx=4, pady=2)
+        ttk.Button(r_l_btn, text="Add", style="Success.TButton", command=self._add_army_transfer_order).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(r_l_btn, text="Xóa", style="Danger.TButton", command=self._delete_army_transfer_order).pack(side="left", expand=True, fill="x", padx=2)
+
+        self.log_transfers_tree = ttk.Treeview(
+            f_logis,
+            columns=("route", "amount", "army"),
+            show="headings",
             selectmode="browse",
+            height=3,
         )
-        self.bld_tree.heading("#0", text="Nhà")
-        self.bld_tree.heading("select", text="Chọn")
-        self.bld_tree.heading("pid", text="Ô đất")
-        self.bld_tree.heading("gid", text="Mã")
-        self.bld_tree.heading("current_lvl", text="Cấp HT")
-        self.bld_tree.heading("target_lvl", text="Cấp MT")
+        self.log_transfers_tree.heading("route", text="Từ – Đến")
+        self.log_transfers_tree.heading("amount", text="SL")
+        self.log_transfers_tree.heading("army", text="Quân giới")
+        self.log_transfers_tree.column("route", width=120)
+        self.log_transfers_tree.column("amount", width=40, anchor="center")
+        self.log_transfers_tree.column("army", width=70, anchor="center")
+        self.log_transfers_tree.pack(fill="both", expand=True, padx=4, pady=2)
 
-        self.bld_tree.column("#0", width=145)
-        self.bld_tree.column("select", width=42, anchor="center")
-        self.bld_tree.column("pid", width=42, anchor="center")
-        self.bld_tree.column("gid", width=42, anchor="center")
-        self.bld_tree.column("current_lvl", width=52, anchor="center")
-        self.bld_tree.column("target_lvl", width=55, anchor="center")
-
-        # Cấu hình màu nền phân biệt Nâng cấp (xanh trầm), Hạ cấp (đỏ trầm) và Hoàn thành
-        self.bld_tree.tag_configure("upgrade", background="#173322", foreground="#86efac")
-        self.bld_tree.tag_configure("downgrade", background="#3a1d1d", foreground="#fca5a5")
-        self.bld_tree.tag_configure("completed", background=CARD, foreground=MUTED)
-
-        self.bld_tree.pack(fill="both", expand=True, padx=4, pady=4)
-        self.bld_tree.bind("<ButtonRelease-1>", self._on_bld_tree_click)
-        self._populate_default_buildings()
-
-        # Cột 3: Nhật Ký Nâng Cấp Công Trình
-        f_log = ttk.LabelFrame(body, text="Nhật ký Nâng Cấp Công Trình", style="Card.TLabelframe")
-        f_log.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
-        self.bld_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
-        self.bld_log_text.pack(fill="both", expand=True, padx=4, pady=4)
+        # 4. Hàng nút chân trang Cột 3
+        footer = tk.Frame(col3, bg=BG)
+        footer.pack(fill="x", padx=2, pady=(4, 0))
+        ttk.Button(footer, text="Re-Login", style="Action.TButton", command=self._do_relogin).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(footer, text="💾 Lưu", style="Success.TButton", command=self._save_unified_profile_dialog).pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(footer, text="📂 Load", style="Action.TButton", command=self._load_unified_profile_dialog).pack(side="left", expand=True, fill="x", padx=2)
 
     def _append_bld_log(self, msg: str):
-        self._append_text_buffer(self.bld_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+        line = f"[{time.strftime('%H:%M:%S')}] {msg}\n"
+        for w in list(self._active_log_texts):
+            self._append_text_buffer(w, line)
+
+    def _append_logis_log(self, msg: str):
+        line = f"[{time.strftime('%H:%M:%S')}] {msg}\n"
+        for w in list(self._active_log_texts):
+            self._append_text_buffer(w, line)
+
+    def _open_log_window(self):
+        if hasattr(self, "_log_win") and self._log_win and self._log_win.winfo_exists():
+            self._log_win.lift()
+            self._log_win.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("📜 Nhật Ký Hoạt Động (Nội Chính & Nghiên Cứu)")
+        win.geometry("750x450")
+        win.configure(bg=BG)
+        self._log_win = win
+
+        top_bar = tk.Frame(win, bg=BG)
+        top_bar.pack(fill="x", padx=8, pady=(8, 4))
+        tk.Label(
+            top_bar,
+            text="Nhật ký chi tiết các tác vụ Nội Chính, Xây Dựng & Nghiên Cứu",
+            bg=BG,
+            fg=FG,
+            font=("Segoe UI", 10, "bold"),
+        ).pack(side="left")
+
+        f_txt = tk.Frame(win, bg=BG)
+        f_txt.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        sb = ttk.Scrollbar(f_txt, orient="vertical")
+        txt = tk.Text(
+            f_txt,
+            bg="#111420",
+            fg=FG,
+            insertbackground=FG,
+            font=("Consolas", 9),
+            yscrollcommand=sb.set,
+            wrap="word",
+        )
+        sb.config(command=txt.yview)
+        sb.pack(side="right", fill="y")
+        txt.pack(side="left", fill="both", expand=True)
+
+        if txt not in self._active_log_texts:
+            self._active_log_texts.append(txt)
+
+        def clear_log():
+            txt.delete("1.0", "end")
+            if hasattr(self, "bld_log_text") and self.bld_log_text:
+                self.bld_log_text.delete("1.0", "end")
+            if hasattr(self, "logis_log_text") and self.logis_log_text:
+                self.logis_log_text.delete("1.0", "end")
+
+        ttk.Button(top_bar, text="🗑️ Xóa nhật ký", style="Danger.TButton", command=clear_log).pack(side="right", padx=4)
+
+        # Sao chép các dòng hiện có từ bld_log_text
+        if hasattr(self, "bld_log_text") and self.bld_log_text:
+            try:
+                existing = self.bld_log_text.get("1.0", "end-1c")
+                if existing:
+                    txt.insert("end", existing + "\n")
+                    txt.see("end")
+            except Exception:
+                pass
+
+        def on_close():
+            if txt in self._active_log_texts:
+                self._active_log_texts.remove(txt)
+            win.destroy()
+            self._log_win = None
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+    def _lower_bld_target_lvl(self):
+        sel = self.bld_tree.selection()
+        if not sel:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 công trình trong bảng!")
+            return
+        lvl = 0
+        self.bld_target_lvl_var.set("0")
+        for item in sel:
+            if not self.bld_tree.exists(item):
+                continue
+            if item.startswith("group_"):
+                for child in self.bld_tree.get_children(item):
+                    c_vals = list(self.bld_tree.item(child, "values"))
+                    c_vals[4] = lvl
+                    self.bld_tree.item(child, values=c_vals)
+                    self._update_bld_tree_row_style(child)
+                self._update_group_summary(item)
+            else:
+                vals = list(self.bld_tree.item(item, "values"))
+                vals[4] = lvl
+                self.bld_tree.item(item, values=vals)
+                self._update_bld_tree_row_style(item)
+                parent = self.bld_tree.parent(item)
+                if parent and parent.startswith("group_"):
+                    self._update_group_summary(parent)
+
+        self._save_current_bld_tree_to_cache()
+
+    def _set_selected_base_state(self, state: bool):
+        sel = self.bld_bases_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        vals = list(self.bld_bases_tree.item(item, "values"))
+        sym = "☑" if state else "☐"
+        vals[0] = sym
+        self.bld_bases_tree.item(item, values=vals)
+        try:
+            base_id = int(item)
+        except ValueError:
+            base_id = int(vals[4]) if len(vals) > 4 else int(vals[2]) if len(vals) > 2 else 0
+        if state:
+            self._selected_building_cities.add(base_id)
+        else:
+            self._selected_building_cities.discard(base_id)
+
+    def _set_selected_base_as_nc(self):
+        sel = self.bld_bases_tree.selection()
+        if not sel:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 thành trong danh sách thành để làm Thành Nghiên Cứu!")
+            return
+        item = sel[0]
+        try:
+            base_id = int(item)
+        except ValueError:
+            vals = list(self.bld_bases_tree.item(item, "values"))
+            base_id = int(vals[4]) if len(vals) > 4 else int(vals[2]) if len(vals) > 2 else 0
+
+        self._research_city_id = base_id
+        for iid in self.bld_bases_tree.get_children(""):
+            vals = list(self.bld_bases_tree.item(iid, "values"))
+            if len(vals) > 2:
+                vals[2] = "★" if iid == item else "☐"
+                self.bld_bases_tree.item(iid, values=vals)
+
+        if hasattr(self, "res_city_combo") and self.roster:
+            cities = self.roster.cities if self.roster.cities else self.roster.bases
+            for idx, c in enumerate(cities):
+                if c.id == base_id:
+                    self.res_city_combo.current(idx)
+                    break
+        base_name = self.bld_bases_tree.item(item, "text")
+        self._append_bld_log(f"★ Đã chọn '{base_name}' làm Thành Nghiên Cứu trọng điểm.")
+
+    def _clear_all_nc_bases(self):
+        self._research_city_id = None
+        for iid in self.bld_bases_tree.get_children(""):
+            vals = list(self.bld_bases_tree.item(iid, "values"))
+            if len(vals) > 2:
+                vals[2] = "☐"
+                self.bld_bases_tree.item(iid, values=vals)
+        self._append_bld_log("✖ Đã bỏ chọn tất cả Thành Nghiên Cứu.")
+
+    def _apply_resource_settings(self):
+        gold_th = self.res_gold_thresh_var.get()
+        w_pct = self.res_wood_pct_var.get()
+        i_pct = self.res_iron_pct_var.get()
+        s_pct = self.res_stone_pct_var.get()
+        f_pct = self.res_food_pct_var.get()
+        g_box = self.res_gold_box_combo.get() if hasattr(self, "res_gold_box_combo") else ""
+        tn_box = self.res_tn_box_combo.get() if hasattr(self, "res_tn_box_combo") else ""
+        self._append_bld_log(
+            f"✅ Áp dụng thiết lập tài nguyên: Vàng<{gold_th}, TN G/S/Đ/T<{w_pct}%/{i_pct}%/{s_pct}%/{f_pct}%, Rương: {g_box.split(':')[0]} / {tn_box.split(':')[0]}"
+        )
+        messagebox.showinfo("Thành công", "Đã lưu và áp dụng thiết lập ngưỡng tài nguyên & rương!")
+
+    def _toggle_resource_monitor(self):
+        if not self._res_monitor_running:
+            target_cids = list(self._selected_resource_cities)
+            if not target_cids:
+                if self._current_bld_city_id:
+                    target_cids = [self._current_bld_city_id]
+                elif hasattr(self, "bld_bases_tree"):
+                    children = self.bld_bases_tree.get_children("")
+                    if children:
+                        try:
+                            target_cids = [int(children[0])]
+                        except ValueError:
+                            pass
+            if not target_cids:
+                messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn cột 'Tài nguyên' cho ít nhất 1 thành!")
+                return
+
+            self._res_monitor_running = True
+            self.res_monitor_btn.configure(text="Đang Giữ TN", style="Success.TButton")
+            self._append_bld_log(f"▶️ Bắt đầu giám sát ngưỡng tài nguyên cho {len(target_cids)} thành...")
+            self._res_monitor_thread = threading.Thread(target=self._run_resource_monitor_loop, daemon=True)
+            self._res_monitor_thread.start()
+        else:
+            self._res_monitor_running = False
+            self.res_monitor_btn.configure(text="Tài Nguyên", style="Danger.TButton")
+            self._append_bld_log("⏹️ Đã dừng giám sát tài nguyên.")
+
+    def _run_resource_monitor_loop(self):
+        while self._res_monitor_running:
+            target_cids = list(self._selected_resource_cities)
+            if not target_cids and self._current_bld_city_id:
+                target_cids = [self._current_bld_city_id]
+
+            for cid in target_cids:
+                if not self._res_monitor_running:
+                    break
+                try:
+                    cname = f"Thành {cid}"
+                    if self.roster:
+                        b = self.roster.base_by_id(cid)
+                        if b:
+                            cname = b.name
+
+                    # 1. Gọi City.ashx?id=20 lấy tài nguyên hiện tại
+                    resp = self.gateway.call("City.ashx", 20, {"tid": str(cid), "_": ""}) or {}
+                    money = int(resp.get("money", resp.get("gold", 0)))
+                    wood = int(resp.get("wood", 0))
+                    iron = int(resp.get("iron", 0))
+                    stone = int(resp.get("stone", 0))
+                    food = int(resp.get("food", 0))
+                    max_storage = int(resp.get("max_storage", resp.get("storage", 1000000)))
+                    if max_storage <= 0:
+                        max_storage = 1000000
+
+                    # 2. Kiểm tra ngưỡng vàng
+                    try:
+                        gold_th = int(self.res_gold_thresh_var.get().replace(",", "").replace(".", "").strip())
+                    except ValueError:
+                        gold_th = 100000000
+
+                    if money < gold_th:
+                        g_box_str = self.res_gold_box_combo.get() if hasattr(self, "res_gold_box_combo") else "11"
+                        try:
+                            g_box_id = int(g_box_str.split(":")[0].strip())
+                        except (ValueError, IndexError):
+                            g_box_id = 11
+                        r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(g_box_id), "_": ""}) or {}
+                        ret = r_box.get("ret", 0)
+                        if ret == 0:
+                            self.after(0, self._append_bld_log, f"💰 [{cname}] Vàng={money:,} < ngưỡng {gold_th:,}: Đã mở rương vàng #{g_box_id}.")
+                        else:
+                            self.after(0, self._append_bld_log, f"⚠️ [{cname}] Mở rương vàng #{g_box_id} thất bại (mã {ret}).")
+
+                    # 3. Kiểm tra ngưỡng khoáng sản %
+                    try:
+                        w_pct = float(self.res_wood_pct_var.get()) / 100.0
+                        i_pct = float(self.res_iron_pct_var.get()) / 100.0
+                        s_pct = float(self.res_stone_pct_var.get()) / 100.0
+                        f_pct = float(self.res_food_pct_var.get()) / 100.0
+                    except ValueError:
+                        w_pct = i_pct = s_pct = f_pct = 0.7
+
+                    need_tn = (
+                        wood < max_storage * w_pct
+                        or iron < max_storage * i_pct
+                        or stone < max_storage * s_pct
+                        or food < max_storage * f_pct
+                    )
+
+                    if need_tn:
+                        tn_box_str = self.res_tn_box_combo.get() if hasattr(self, "res_tn_box_combo") else "24"
+                        try:
+                            tn_box_id = int(tn_box_str.split(":")[0].strip())
+                        except (ValueError, IndexError):
+                            tn_box_id = 24
+                        r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(tn_box_id), "_": ""}) or {}
+                        ret = r_box.get("ret", 0)
+                        if ret == 0:
+                            self.after(
+                                0,
+                                self._append_bld_log,
+                                f"📦 [{cname}] Khoáng sản dưới ngưỡng: Đã mở rương TN #{tn_box_id} (Kho {max_storage:,}).",
+                            )
+                        else:
+                            self.after(0, self._append_bld_log, f"⚠️ [{cname}] Mở rương TN #{tn_box_id} thất bại (mã {ret}).")
+
+                except (RuntimeError, tk.TclError):
+                    break
+                except Exception as e:
+                    try:
+                        self.after(0, self._append_bld_log, f"❌ Lỗi kiểm tra tài nguyên thành {cid}: {e}")
+                    except Exception:
+                        pass
+
+            for _ in range(30):
+                if not self._res_monitor_running:
+                    break
+                time.sleep(1)
+
+    def _check_and_update_boost_status(self, async_check: bool = True):
+        """Kiểm tra thời gian còn lại của DS kiến trúc (xây 3 công trình) và tự kích hoạt nếu hết hạn."""
+        def run_check():
+            if not self.gateway:
+                return
+            try:
+                city_id = getattr(self, "_current_bld_city_id", 0) or 0
+                resp = self.gateway.call("Common.ashx", 77, {"cid": str(city_id), "_": ""}) or {}
+                plus_finish = 0
+
+                # 1. Kiểm tra trường plus_finish ở root (nếu có)
+                if "plus_finish" in resp:
+                    try:
+                        plus_finish = int(resp["plus_finish"])
+                    except (ValueError, TypeError):
+                        plus_finish = 0
+
+                # 2. Kiểm tra danh sách thành trong resp["list"]
+                if plus_finish <= 0:
+                    city_list = resp.get("list", [])
+                    target_city = None
+                    for c_info in city_list:
+                        if isinstance(c_info, dict):
+                            c_cid = c_info.get("cid") or c_info.get("id") or c_info.get("city_id")
+                            if not city_id or c_cid == city_id:
+                                target_city = c_info
+                                break
+                        elif isinstance(c_info, (list, tuple)) and len(c_info) >= 4:
+                            if not city_id or c_info[0] == city_id:
+                                target_city = c_info
+                                break
+
+                    if target_city is None and city_list:
+                        target_city = city_list[0]
+
+                    if isinstance(target_city, dict):
+                        plus_finish = target_city.get("plus_finish") or target_city.get("time_left") or 0
+                    elif isinstance(target_city, (list, tuple)) and len(target_city) >= 4:
+                        # [city_id, name, val2, val3, ...]
+                        # val3: thời hạn 建筑排程 (DS kiến trúc), val2: 20% speedup
+                        val2 = target_city[2]
+                        val3 = target_city[3]
+                        try:
+                            val3 = int(val3)
+                        except (ValueError, TypeError):
+                            val3 = 0
+                        try:
+                            val2 = int(val2)
+                        except (ValueError, TypeError):
+                            val2 = 0
+                        plus_finish = val3 if val3 > 0 else val2
+
+                now = time.time()
+                remaining = 0
+                if isinstance(plus_finish, str) and ":" in plus_finish:
+                    # Hỗ trợ định dạng chuỗi "2234:39:14"
+                    parts = plus_finish.split(":")
+                    if len(parts) == 3:
+                        try:
+                            remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                        except ValueError:
+                            remaining = 0
+                else:
+                    try:
+                        plus_finish = int(plus_finish)
+                    except (ValueError, TypeError):
+                        plus_finish = 0
+                    if plus_finish > 1_000_000_000:
+                        remaining = max(0, int(plus_finish - now))
+                    elif plus_finish > 0:
+                        remaining = plus_finish
+
+                def _update_ui(text, fg):
+                    if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
+                        self.aux_boost_time_lbl.configure(text=text, fg=fg)
+
+                if remaining > 0:
+                    h = remaining // 3600
+                    m = (remaining % 3600) // 60
+                    s = remaining % 60
+                    t_str = f"{h}:{m:02d}:{s:02d}"
+                    if threading.current_thread() is threading.main_thread():
+                        _update_ui(f"(Còn: {t_str})", "#4ade80")
+                    else:
+                        try:
+                            self.after(0, lambda: _update_ui(f"(Còn: {t_str})", "#4ade80"))
+                        except RuntimeError:
+                            pass
+                else:
+                    if threading.current_thread() is threading.main_thread():
+                        _update_ui("(Hết hạn)", "#f87171")
+                    else:
+                        try:
+                            self.after(0, lambda: _update_ui("(Hết hạn)", "#f87171"))
+                        except RuntimeError:
+                            pass
+                    if self.aux_boost_var.get():
+                        now_ts = time.time()
+                        last_act = getattr(self, "_last_boost_act_time", 0)
+                        if now_ts - last_act > 60:
+                            self._last_boost_act_time = now_ts
+                            msg = "⚡ DS kiến trúc đã hết hạn. Đang tự kích hoạt lại (xây 3 nhà)..."
+                            if threading.current_thread() is threading.main_thread():
+                                self._append_bld_log(msg)
+                            else:
+                                try:
+                                    self.after(0, self._append_bld_log, msg)
+                                except RuntimeError:
+                                    pass
+                            act_resp = self.gateway.call(
+                                "OPT.ashx",
+                                69,
+                                {"type": "3", "param1": "0", "param2": "0", "paytype": "2", "_": ""},
+                            ) or {}
+                            ret = act_resp.get("ret", 0)
+                            if ret == 0:
+                                ok_msg = "✅ Kích hoạt thành công DS kiến trúc (3 vị trí xây dựng)!"
+                                if threading.current_thread() is threading.main_thread():
+                                    self._append_bld_log(ok_msg)
+                                else:
+                                    try:
+                                        self.after(0, self._append_bld_log, ok_msg)
+                                    except RuntimeError:
+                                        pass
+                                time.sleep(1)
+                                self._check_and_update_boost_status(async_check=async_check)
+                            else:
+                                fail_msg = f"⚠️ Kích hoạt DS kiến trúc thất bại (mã {ret})."
+                                if threading.current_thread() is threading.main_thread():
+                                    self._append_bld_log(fail_msg)
+                                else:
+                                    try:
+                                        self.after(0, self._append_bld_log, fail_msg)
+                                    except RuntimeError:
+                                        pass
+            except Exception as e:
+                logger.debug(f"Lỗi kiểm tra DS kiến trúc: {e}")
+
+        if async_check:
+            t = threading.Thread(target=run_check, daemon=True)
+            t.start()
+            return t
+        else:
+            run_check()
+
+    def _do_relogin(self):
+        if not self.gateway:
+            messagebox.showwarning("Cảnh báo", "Chưa khởi tạo gateway!")
+            return
+        def run_relogin():
+            try:
+                self.after(0, self._append_bld_log, "🔑 Đang thực hiện đăng nhập lại tài khoản...")
+                ok = False
+                if self.gateway.relogin_callback:
+                    ok = bool(self.gateway.relogin_callback())
+                if ok:
+                    self.after(0, self._append_bld_log, "✅ Đăng nhập lại thành công! Đang tải lại dữ liệu...")
+                    self.after(0, self.reload)
+                else:
+                    self.after(0, self._append_bld_log, "❌ Đăng nhập lại không thành công hoặc không có relogin callback.")
+            except Exception as e:
+                self.after(0, self._append_bld_log, f"❌ Lỗi đăng nhập lại: {e}")
+        threading.Thread(target=run_relogin, daemon=True).start()
+
+    def _add_army_transfer_order(self):
+        f_city = self.log_from_city_combo.get()
+        t_city = self.log_to_city_combo.get()
+        if not f_city or not t_city or f_city == t_city:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành đi và thành đến khác nhau!")
+            return
+        army = self.log_army_combo.get()
+        amount = self.log_amount_var.get().strip() or "1"
+        route = f"{f_city} ➔ {t_city}"
+        self.log_transfers_tree.insert("", "end", values=(route, amount, army))
+        self._append_bld_log(f"➕ Thêm lệnh chuyển quân giới: {route} | SL: {amount} | {army}")
+
+    def _delete_army_transfer_order(self):
+        sel = self.log_transfers_tree.selection()
+        if not sel:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 lệnh chuyển quân trong bảng để xóa!")
+            return
+        for item in sel:
+            self.log_transfers_tree.delete(item)
+        self._append_bld_log("🗑️ Đã xóa lệnh chuyển quân giới đã chọn.")
 
     def _get_bld_row_tag(self, cur_lvl: int, target_lvl: int) -> str:
         if cur_lvl < target_lvl:
@@ -1854,22 +2588,22 @@ class Dashboard(tk.Tk):
 
     def _populate_default_buildings(self):
         default_plots = [
-            {"pid": 1, "gid": 1, "name": "官府 - Quan Phủ", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 2, "gid": 2, "name": "城墙 - Tường Thành", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 3, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 4, "gid": 4, "name": "仓库 - Kho", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 5, "gid": 5, "name": "鸿胪寺 - Hồng Lư Tự", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 6, "gid": 6, "name": "大学殿 - Đại Học Điện", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 7, "gid": 7, "name": "客栈 - Quán Trọ", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 8, "gid": 8, "name": "酒馆 - Tửu Quán", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 9, "gid": 9, "name": "聚贤楼 - Tụ Hiền Lâu", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 10, "gid": 10, "name": "点将台 - Điểm Tướng Đài", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 11, "gid": 11, "name": "市场 - Chợ", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 12, "gid": 12, "name": "驿站 - Dịch Trạm", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 13, "gid": 13, "name": "兵器铺 - Xưởng Binh Khí", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 14, "gid": 14, "name": "防具铺 - Xưởng Khôi Giáp", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 15, "gid": 15, "name": "车马间 - Xưởng Ngựa", "cur_lvl": 0, "target_level": 20, "enabled": True},
-            {"pid": 16, "gid": 16, "name": "校场 - Binh Trường", "cur_lvl": 0, "target_level": 20, "enabled": True},
+            {"pid": 1, "gid": 1, "name": "官府 - Quan Phủ", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 2, "gid": 2, "name": "城墙 - Tường Thành", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 3, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 4, "gid": 4, "name": "仓库 - Kho", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 5, "gid": 5, "name": "鸿胪寺 - Hồng Lư Tự", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 6, "gid": 6, "name": "大学殿 - Đại Học Điện", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 7, "gid": 7, "name": "客栈 - Quán Trọ", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 8, "gid": 8, "name": "酒馆 - Tửu Quán", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 9, "gid": 9, "name": "聚贤楼 - Tụ Hiền Lâu", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 10, "gid": 10, "name": "点将台 - Điểm Tướng Đài", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 11, "gid": 11, "name": "市场 - Chợ", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 12, "gid": 12, "name": "驿站 - Dịch Trạm", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 13, "gid": 13, "name": "兵器铺 - Xưởng Binh Khí", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 14, "gid": 14, "name": "防具铺 - Xưởng Khôi Giáp", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 15, "gid": 15, "name": "车马间 - Xưởng Ngựa", "cur_lvl": 0, "target_level": 20, "enabled": False},
+            {"pid": 16, "gid": 16, "name": "校场 - Binh Trường", "cur_lvl": 0, "target_level": 20, "enabled": False},
         ]
         self._render_bld_tree_from_plans(default_plots)
 
@@ -1925,10 +2659,10 @@ class Dashboard(tk.Tk):
             return
         try:
             lvl = int(self.bld_target_lvl_var.get())
-            if lvl < 0 or lvl > 33:
+            if lvl < 0 or lvl > 40:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 33 (0: dỡ bỏ)!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 40 (0: dỡ bỏ)!")
             return
 
         for item in sel:
@@ -1955,10 +2689,10 @@ class Dashboard(tk.Tk):
     def _set_bld_target_lvl_all(self):
         try:
             lvl = int(self.bld_target_lvl_var.get())
-            if lvl < 0 or lvl > 33:
+            if lvl < 0 or lvl > 40:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 33 (0: dỡ bỏ)!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 40 (0: dỡ bỏ)!")
             return
 
         count = 0
@@ -1981,15 +2715,36 @@ class Dashboard(tk.Tk):
         self._save_current_bld_tree_to_cache()
         self._append_bld_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} công trình.")
 
+    def _on_bld_tree_selected(self, _event=None):
+        sel = self.bld_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        if not self.bld_tree.exists(item):
+            return
+        vals = self.bld_tree.item(item, "values")
+        if len(vals) > 4:
+            try:
+                self.bld_target_lvl_var.set(str(vals[4]))
+            except Exception:
+                pass
+
     def _on_bld_tree_click(self, event):
         item = self.bld_tree.identify_row(event.y)
         col = self.bld_tree.identify_column(event.x)
         if not item or not self.bld_tree.exists(item):
             return
 
+        # displaycolumns=("current_lvl", "target_lvl", "select")
+        # identify_column: #0 (text), #1 (current_lvl - "Cấp HT"), #2 (target_lvl - "Cấp MT"), #3 (select - "Chạy")
+        is_select_col = (col == "#3")
+
+        if not is_select_col:
+            self.bld_tree.selection_set(item)
+
         if item.startswith("group_"):
             vals = list(self.bld_tree.item(item, "values"))
-            if col == "#1":
+            if is_select_col:
                 new_state = "☐" if vals[0] in ("☑", "▣") else "☑"
                 vals[0] = new_state
                 self.bld_tree.item(item, values=vals)
@@ -2006,7 +2761,7 @@ class Dashboard(tk.Tk):
 
         vals = list(self.bld_tree.item(item, "values"))
         parent = self.bld_tree.parent(item)
-        if col == "#1":
+        if is_select_col:
             vals[0] = "☑" if vals[0] == "☐" else "☐"
             self.bld_tree.item(item, values=vals)
             if parent and parent.startswith("group_"):
@@ -2019,14 +2774,15 @@ class Dashboard(tk.Tk):
     def _on_bld_bases_click(self, event):
         item = self.bld_bases_tree.identify_row(event.y)
         col = self.bld_bases_tree.identify_column(event.x)
-        if not item:
+        if not item or not self.bld_bases_tree.exists(item):
             return
         vals = list(self.bld_bases_tree.item(item, "values"))
+        try:
+            base_id = int(item)
+        except ValueError:
+            base_id = int(vals[4]) if len(vals) > 4 else int(vals[2]) if len(vals) > 2 else 0
+
         if col == "#1":
-            try:
-                base_id = int(item)
-            except ValueError:
-                base_id = int(vals[2]) if len(vals) > 2 else 0
             if vals[0] == "☑":
                 vals[0] = "☐"
                 self._selected_building_cities.discard(base_id)
@@ -2034,6 +2790,35 @@ class Dashboard(tk.Tk):
                 vals[0] = "☑"
                 self._selected_building_cities.add(base_id)
             self.bld_bases_tree.item(item, values=vals)
+        elif col == "#2":
+            is_res = vals[1] if len(vals) > 1 else "☐"
+            if is_res == "☑":
+                vals[1] = "☐"
+                self._selected_resource_cities.discard(base_id)
+            else:
+                vals[1] = "☑"
+                self._selected_resource_cities.add(base_id)
+            self.bld_bases_tree.item(item, values=vals)
+        elif col == "#3":
+            is_nc = vals[2] if len(vals) > 2 else "☐"
+            if is_nc == "★":
+                vals[2] = "☐"
+                self._research_city_id = None
+                self.bld_bases_tree.item(item, values=vals)
+            else:
+                self._research_city_id = base_id
+                for iid in self.bld_bases_tree.get_children(""):
+                    i_vals = list(self.bld_bases_tree.item(iid, "values"))
+                    if len(i_vals) > 2:
+                        i_vals[2] = "★" if iid == item else "☐"
+                        self.bld_bases_tree.item(iid, values=i_vals)
+                if hasattr(self, "res_city_combo") and self.roster:
+                    cities = self.roster.cities if self.roster.cities else self.roster.bases
+                    for idx, c in enumerate(cities):
+                        if c.id == base_id:
+                            if 0 <= idx < len(self.res_city_combo["values"]):
+                                self.res_city_combo.current(idx)
+                            break
 
     def _on_bld_base_selected(self, _event=None):
         sel = self.bld_bases_tree.selection()
@@ -2046,7 +2831,15 @@ class Dashboard(tk.Tk):
                 cities = self.roster.cities if self.roster.cities else self.roster.bases
                 for idx, c in enumerate(cities):
                     if c.id == base_id:
-                        self.bld_city_combo.current(idx)
+                        if 0 <= idx < len(self.bld_city_combo["values"]):
+                            self.bld_city_combo.current(idx)
+                        break
+            if hasattr(self, "dt_camp_combo") and self.roster and self.roster.camps:
+                for idx, c in enumerate(self.roster.camps):
+                    if c.id == base_id:
+                        if 0 <= idx < len(self.dt_camp_combo["values"]):
+                            self.dt_camp_combo.current(idx)
+                            self._on_dt_camp_selected()
                         break
         except ValueError:
             pass
@@ -2084,30 +2877,40 @@ class Dashboard(tk.Tk):
                 for child_iid in self.bld_tree.get_children(root_iid):
                     vals = self.bld_tree.item(child_iid, "values")
                     if len(vals) >= 5:
-                        gid = int(vals[2])
-                        bname = BUILDING_NAMES.get(gid, f"Công trình {gid}")
-                        plans.append({
-                            "pid": int(vals[1]),
-                            "gid": gid,
-                            "name": bname,
-                            "cur_lvl": int(vals[3]),
-                            "target_level": int(vals[4]),
-                            "enabled": vals[0] == "☑",
-                        })
+                        try:
+                            gid = int(vals[2])
+                            bname = BUILDING_NAMES.get(gid, f"Công trình {gid}")
+                            c_lvl = int(vals[3]) if str(vals[3]).isdigit() else 0
+                            t_lvl = int(vals[4]) if str(vals[4]).isdigit() else 20
+                            plans.append({
+                                "pid": int(vals[1]),
+                                "gid": gid,
+                                "name": bname,
+                                "cur_lvl": c_lvl,
+                                "target_level": t_lvl,
+                                "enabled": vals[0] == "☑",
+                            })
+                        except (ValueError, TypeError, IndexError):
+                            pass
             else:
                 # Ô đơn chiếc
                 vals = self.bld_tree.item(root_iid, "values")
                 name = self.bld_tree.item(root_iid, "text")
                 if len(vals) >= 5:
-                    gid = int(vals[2])
-                    plans.append({
-                        "pid": int(vals[1]),
-                        "gid": gid,
-                        "name": name,
-                        "cur_lvl": int(vals[3]),
-                        "target_level": int(vals[4]),
-                        "enabled": vals[0] == "☑",
-                    })
+                    try:
+                        gid = int(vals[2])
+                        c_lvl = int(vals[3]) if str(vals[3]).isdigit() else 0
+                        t_lvl = int(vals[4]) if str(vals[4]).isdigit() else 20
+                        plans.append({
+                            "pid": int(vals[1]),
+                            "gid": gid,
+                            "name": name,
+                            "cur_lvl": c_lvl,
+                            "target_level": t_lvl,
+                            "enabled": vals[0] == "☑",
+                        })
+                    except (ValueError, TypeError, IndexError):
+                        pass
         return plans
 
     def _save_current_bld_tree_to_cache(self):
@@ -2139,7 +2942,7 @@ class Dashboard(tk.Tk):
                 p = plots[0]
                 pid = int(p.get("pid", 1))
                 name = p.get("name") or BUILDING_NAMES.get(gid, f"Công trình {gid}")
-                en = "☑" if p.get("enabled", True) else "☐"
+                en = "☑" if p.get("enabled", False) else "☐"
                 cur_lvl = int(p.get("cur_lvl", 0))
                 target_lvl = int(p.get("target_level", 20))
                 tag = self._get_bld_row_tag(cur_lvl, target_lvl)
@@ -2154,8 +2957,8 @@ class Dashboard(tk.Tk):
             else:
                 count = len(plots)
                 name = plots[0].get("name") or BUILDING_NAMES.get(gid, f"Công trình {gid}")
-                all_en = all(p.get("enabled", True) for p in plots)
-                any_en = any(p.get("enabled", True) for p in plots)
+                all_en = all(p.get("enabled", False) for p in plots)
+                any_en = any(p.get("enabled", False) for p in plots)
                 sym = "☑" if all_en else ("▣" if any_en else "☐")
                 cur_lvls = [int(p.get("cur_lvl", 0)) for p in plots]
                 target_lvls = [int(p.get("target_level", 20)) for p in plots]
@@ -2176,7 +2979,7 @@ class Dashboard(tk.Tk):
                 )
                 for p in plots:
                     pid = int(p.get("pid", 1))
-                    en = "☑" if p.get("enabled", True) else "☐"
+                    en = "☑" if p.get("enabled", False) else "☐"
                     cur_lvl = int(p.get("cur_lvl", 0))
                     target_lvl = int(p.get("target_level", 20))
                     c_tag = self._get_bld_row_tag(cur_lvl, target_lvl)
@@ -2188,6 +2991,13 @@ class Dashboard(tk.Tk):
                         values=(en, pid, gid, cur_lvl, target_lvl),
                         tags=(c_tag,),
                     )
+
+        children = self.bld_tree.get_children("")
+        if children:
+            sel = self.bld_tree.selection()
+            if not sel or not self.bld_tree.exists(sel[0]):
+                self.bld_tree.selection_set(children[0])
+            self._on_bld_tree_selected()
 
     def _switch_bld_base(self, new_base_id: int):
         if self._current_bld_city_id == new_base_id:
@@ -2323,7 +3133,7 @@ class Dashboard(tk.Tk):
                     "name": name,
                     "cur_lvl": lvl,
                     "target_level": max(lvl + 1, 20),
-                    "enabled": True,
+                    "enabled": False,
                 })
         else:
             for p in cached_plans:
@@ -2423,17 +3233,7 @@ class Dashboard(tk.Tk):
         self._save_current_bld_tree_to_cache()
         plans = self._city_building_plans.get(self._current_bld_city_id, [])
         if not plans:
-            for iid in self.bld_tree.get_children(""):
-                name = self.bld_tree.item(iid, "text")
-                vals = self.bld_tree.item(iid, "values")
-                if len(vals) >= 5:
-                    plans.append({
-                        "pid": int(vals[1]),
-                        "gid": int(vals[2]),
-                        "target_level": int(vals[4]),
-                        "name": name,
-                        "enabled": vals[0] == "☑",
-                    })
+            plans = self._collect_bld_plans_from_tree()
         Path("build_plans.json").write_text(json.dumps({"plans": plans}, ensure_ascii=False, indent=2), encoding="utf-8")
         self._append_bld_log(f"💾 Đã lưu cấu hình {len(plans)} công trình ra build_plans.json")
         messagebox.showinfo("Thành công", "Đã lưu cấu hình ra build_plans.json!")
@@ -2465,18 +3265,7 @@ class Dashboard(tk.Tk):
             for cid in selected_cids:
                 plan_dicts = self._city_building_plans.get(cid)
                 if not plan_dicts and cid == self._current_bld_city_id:
-                    plan_dicts = []
-                    for iid in self.bld_tree.get_children(""):
-                        vals = self.bld_tree.item(iid, "values")
-                        name = self.bld_tree.item(iid, "text")
-                        if len(vals) >= 5:
-                            plan_dicts.append({
-                                "pid": int(vals[1]),
-                                "gid": int(vals[2]),
-                                "target_level": int(vals[4]),
-                                "name": name,
-                                "enabled": vals[0] == "☑",
-                            })
+                    plan_dicts = self._collect_bld_plans_from_tree()
 
                 if not plan_dicts:
                     continue
@@ -2552,10 +3341,10 @@ class Dashboard(tk.Tk):
                 sync_cb=lambda target_cid, rdata: self.after(0, self._sync_city_buildings_data, target_cid, rdata, True),
             )
             self._bld_runner.start()
-            self.bld_start_btn.configure(text="⏹️ Dừng Nâng Cấp", style="Danger.TButton")
+            self.bld_start_btn.configure(text="Đang Xây", style="Success.TButton")
         else:
             self._bld_runner.stop()
-            self.bld_start_btn.configure(text="▶️ Bắt đầu Nâng Cấp", style="Success.TButton")
+            self.bld_start_btn.configure(text="Xây", style="Danger.TButton")
             self._save_current_bld_tree_to_cache()
 
     # =========================================================================
@@ -2685,7 +3474,13 @@ class Dashboard(tk.Tk):
     def _populate_all_techs(self):
         self.res_tree.delete(*self.res_tree.get_children())
         for tid, tname in sorted(TECH_NAMES.items()):
-            self.res_tree.insert("", "end", iid=str(tid), text=tname, values=("☑", tid, 20, 0))
+            self.res_tree.insert("", "end", iid=str(tid), text=tname, values=("☐", tid, 20, "-"), tags=("upgrade",))
+        children = self.res_tree.get_children("")
+        if children:
+            sel = self.res_tree.selection()
+            if not sel or not self.res_tree.exists(sel[0]):
+                self.res_tree.selection_set(children[0])
+            self._on_res_tree_selected()
 
     def _fetch_city_techs(self):
         sel_idx = self.res_city_combo.current()
@@ -2799,14 +3594,16 @@ class Dashboard(tk.Tk):
                     vals = list(self.res_tree.item(iid, "values"))
                     tname = self.res_tree.item(iid, "text")
                     if len(vals) >= 3:
-                        old_lvl = int(vals[3]) if len(vals) > 3 else 0
+                        old_lvl = int(vals[3]) if len(vals) > 3 and str(vals[3]) != "-" else 0
                         if len(vals) == 3:
                             vals.append(cur_lvl)
                         else:
                             vals[3] = cur_lvl
                         if old_lvl != cur_lvl and old_lvl > 0:
                             level_changes.append((tid, tname, old_lvl, cur_lvl))
-                        self.res_tree.item(iid, values=vals)
+                        target_lvl = int(vals[2]) if len(vals) > 2 else 20
+                        tag = "completed" if cur_lvl >= target_lvl else "upgrade"
+                        self.res_tree.item(iid, values=vals, tags=(tag,))
             except (ValueError, IndexError):
                 pass
 
@@ -2872,7 +3669,12 @@ class Dashboard(tk.Tk):
         for iid in sel:
             vals = list(self.res_tree.item(iid, "values"))
             vals[2] = lvl
-            self.res_tree.item(iid, values=vals)
+            try:
+                cur = int(vals[3]) if len(vals) > 3 and str(vals[3]) != "-" else None
+                tag = ("completed" if cur >= lvl else "upgrade") if cur is not None else "upgrade"
+                self.res_tree.item(iid, values=vals, tags=(tag,))
+            except (ValueError, TypeError):
+                self.res_tree.item(iid, values=vals)
 
     def _set_res_target_lvl_all(self):
         try:
@@ -2887,19 +3689,42 @@ class Dashboard(tk.Tk):
             vals = list(self.res_tree.item(iid, "values"))
             if len(vals) > 2:
                 vals[2] = lvl
-                self.res_tree.item(iid, values=vals)
+                try:
+                    cur = int(vals[3]) if len(vals) > 3 and str(vals[3]) != "-" else None
+                    tag = ("completed" if cur >= lvl else "upgrade") if cur is not None else "upgrade"
+                    self.res_tree.item(iid, values=vals, tags=(tag,))
+                except (ValueError, TypeError):
+                    self.res_tree.item(iid, values=vals)
                 count += 1
         self._append_logis_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} kỹ thuật.")
+
+    def _on_res_tree_selected(self, _event=None):
+        sel = self.res_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        if not self.res_tree.exists(item):
+            return
+        vals = self.res_tree.item(item, "values")
+        if len(vals) > 2:
+            try:
+                self.res_target_lvl_var.set(str(vals[2]))
+            except Exception:
+                pass
 
     def _on_res_tree_click(self, event):
         item = self.res_tree.identify_row(event.y)
         col = self.res_tree.identify_column(event.x)
-        if not item:
+        if not item or not self.res_tree.exists(item):
             return
         vals = list(self.res_tree.item(item, "values"))
-        if col == "#1":
+        # displaycolumns=("current_lvl", "target_lvl", "select")
+        # identify_column: #0 (text), #1 (current_lvl - "Cấp HT"), #2 (target_lvl - "Cấp MT"), #3 (select - "Chạy")
+        if col == "#3":
             vals[0] = "☑" if vals[0] == "☐" else "☐"
             self.res_tree.item(item, values=vals)
+        else:
+            self.res_tree.selection_set(item)
         if len(vals) > 2:
             self.res_target_lvl_var.set(str(vals[2]))
 
@@ -2914,14 +3739,21 @@ class Dashboard(tk.Tk):
             plan_map = {int(p["tech_id"]): p for p in plans}
             for iid in self.res_tree.get_children(""):
                 tid = int(iid)
+                vals = list(self.res_tree.item(iid, "values"))
+                cur_lvl = vals[3] if len(vals) > 3 else "-"
                 if tid in plan_map:
                     p = plan_map[tid]
                     en = "☑" if p.get("enabled", True) else "☐"
-                    self.res_tree.item(iid, values=(en, tid, p.get("target_level", 20)))
+                    target_lvl = p.get("target_level", 20)
                 else:
-                    vals = list(self.res_tree.item(iid, "values"))
-                    vals[0] = "☐"
-                    self.res_tree.item(iid, values=vals)
+                    en = "☐"
+                    target_lvl = int(vals[2]) if len(vals) > 2 else 20
+                try:
+                    cur_int = int(cur_lvl) if str(cur_lvl) != "-" else None
+                    tag = ("completed" if cur_int >= target_lvl else "upgrade") if cur_int is not None else "upgrade"
+                except (ValueError, TypeError):
+                    tag = "upgrade"
+                self.res_tree.item(iid, values=(en, tid, target_lvl, cur_lvl), tags=(tag,))
         self._append_logis_log(f"📂 Đã nạp cấu hình {len(plans)} kỹ thuật.")
 
     def _save_tech_plans(self):
@@ -2980,10 +3812,10 @@ class Dashboard(tk.Tk):
                 sync_cb=lambda target_cid, levels, t_stat: self.after(0, self._sync_city_techs_data, target_cid, levels, t_stat, True),
             )
             self._res_runner.start()
-            self.res_start_btn.configure(text="⏹️ Dừng", style="Danger.TButton")
+            self.res_start_btn.configure(text="Đang NC", style="Success.TButton")
         else:
             self._res_runner.stop()
-            self.res_start_btn.configure(text="▶️ Bắt đầu", style="Success.TButton")
+            self.res_start_btn.configure(text="Nghiên Cứu", style="Danger.TButton")
 
     def _do_transfer_army(self):
         f_idx = self.log_from_city_combo.current()
@@ -3046,7 +3878,7 @@ class Dashboard(tk.Tk):
         if roster.bases:
             self.city_tree.selection_set(str(roster.bases[0].id))
 
-        # Tab 5: Căn cứ thi công (Thành & Doanh trại)
+        # Danh sách Căn cứ thi công (Thành & Doanh trại)
         if hasattr(self, "bld_bases_tree"):
             self.bld_bases_tree.delete(*self.bld_bases_tree.get_children())
             for base in roster.bases:
@@ -3054,12 +3886,14 @@ class Dashboard(tk.Tk):
                 is_sel = "☑" if (base.id in self._selected_building_cities or (not self._selected_building_cities and base == roster.bases[0])) else "☐"
                 if is_sel == "☑":
                     self._selected_building_cities.add(base.id)
+                is_res = "☑" if (base.id in self._selected_resource_cities) else "☐"
+                is_nc = "★" if (self._research_city_id == base.id) else "☐"
                 self.bld_bases_tree.insert(
                     "",
                     "end",
                     iid=iid,
                     text=base.name,
-                    values=(is_sel, base.type, base.id),
+                    values=(is_sel, is_res, is_nc, base.type, base.id),
                 )
             if roster.bases:
                 first_base = roster.bases[0]
@@ -3067,6 +3901,7 @@ class Dashboard(tk.Tk):
                 self._current_bld_city_id = first_base.id
                 if hasattr(self, "bld_queue_frame"):
                     self.bld_queue_frame.configure(text=f"Hàng Đợi Quy Hoạch: {first_base.name}")
+            self._check_and_update_boost_status()
 
         # Cập nhật Combobox
         all_base_items = [b.display_name for b in roster.bases]
