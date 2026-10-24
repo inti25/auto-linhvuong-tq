@@ -634,7 +634,19 @@ class Dashboard(tk.Tk):
                 "art_speedup": bool(self.res_art_var.get()) if hasattr(self, "res_art_var") else False,
                 "even_research": bool(self.res_even_var.get()) if hasattr(self, "res_even_var") else False,
                 "interval": self.res_interval_var.get() if hasattr(self, "res_interval_var") else "30",
+                "city_id": self._research_city_id,
                 "techs": [],
+            },
+            "resource": {
+                "gold_threshold": self.res_gold_thresh_var.get() if hasattr(self, "res_gold_thresh_var") else "100000000",
+                "wood_pct": self.res_wood_pct_var.get() if hasattr(self, "res_wood_pct_var") else "70",
+                "iron_pct": self.res_iron_pct_var.get() if hasattr(self, "res_iron_pct_var") else "70",
+                "stone_pct": self.res_stone_pct_var.get() if hasattr(self, "res_stone_pct_var") else "70",
+                "food_pct": self.res_food_pct_var.get() if hasattr(self, "res_food_pct_var") else "70",
+                "gold_box_idx": self.res_gold_box_combo.current() if hasattr(self, "res_gold_box_combo") else 1,
+                "tn_box_idx": self.res_tn_box_combo.current() if hasattr(self, "res_tn_box_combo") else 3,
+                "auto_open_box": bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False,
+                "resource_cities": sorted(list(self._selected_resource_cities)),
             },
             "thao_phat": {
                 "min_army": self.tp_target_inf_var.get() if hasattr(self, "tp_target_inf_var") else (self.tp_min_army_var.get() if hasattr(self, "tp_min_army_var") else "5000"),
@@ -685,7 +697,15 @@ class Dashboard(tk.Tk):
         # Thu thập Hàng đợi Xây dựng (đa căn cứ & tương thích ngược)
         self._save_current_bld_tree_to_cache()
         cities_cfg = {}
-        for cid, plans in self._city_building_plans.items():
+        all_cids = set(self._city_building_plans.keys()) | self._selected_building_cities | self._selected_resource_cities
+        if self._research_city_id:
+            all_cids.add(self._research_city_id)
+        if self.roster:
+            for b in self.roster.bases:
+                all_cids.add(b.id)
+
+        for cid in sorted(all_cids):
+            plans = self._city_building_plans.get(cid, [])
             base_name = ""
             if self.roster:
                 b = self.roster.base_by_id(cid)
@@ -694,9 +714,11 @@ class Dashboard(tk.Tk):
             if not base_name and hasattr(self, "bld_bases_tree") and self.bld_bases_tree.exists(str(cid)):
                 base_name = self.bld_bases_tree.item(str(cid), "text")
             is_enabled = cid in self._selected_building_cities
+            is_resource = cid in self._selected_resource_cities
             cities_cfg[str(cid)] = {
                 "name": base_name,
                 "enabled": is_enabled,
+                "resource": is_resource,
                 "plans": plans,
             }
         profile["building"]["cities"] = cities_cfg
@@ -769,11 +791,18 @@ class Dashboard(tk.Tk):
                     self._selected_building_cities.add(cid)
                 else:
                     self._selected_building_cities.discard(cid)
+                if cinfo.get("resource", False):
+                    self._selected_resource_cities.add(cid)
+                elif "resource" in cinfo:
+                    self._selected_resource_cities.discard(cid)
                 if hasattr(self, "bld_bases_tree") and self.bld_bases_tree.exists(str(cid)):
                     sym = "☑" if cid in self._selected_building_cities else "☐"
+                    sym_res = "☑" if cid in self._selected_resource_cities else "☐"
                     vals = list(self.bld_bases_tree.item(str(cid), "values"))
                     if vals:
                         vals[0] = sym
+                        if len(vals) > 1:
+                            vals[1] = sym_res
                         self.bld_bases_tree.item(str(cid), values=vals)
 
             cur_id = self._current_bld_city_id
@@ -808,6 +837,17 @@ class Dashboard(tk.Tk):
                 self.res_even_var.set(bool(res_data["even_research"]))
             if hasattr(self, "res_interval_var") and "interval" in res_data:
                 self.res_interval_var.set(str(res_data["interval"]))
+            if "city_id" in res_data and res_data["city_id"] is not None:
+                try:
+                    self._research_city_id = int(res_data["city_id"])
+                    if hasattr(self, "bld_bases_tree"):
+                        for iid in self.bld_bases_tree.get_children(""):
+                            vals = list(self.bld_bases_tree.item(iid, "values"))
+                            if len(vals) > 2:
+                                vals[2] = "★" if int(iid) == self._research_city_id else "☐"
+                                self.bld_bases_tree.item(iid, values=vals)
+                except (ValueError, TypeError):
+                    pass
             techs_list = res_data.get("techs") or res_data.get("plans")
 
         if techs_list and hasattr(self, "res_tree"):
@@ -834,6 +874,51 @@ class Dashboard(tk.Tk):
             loaded_sections.append(f"Đại Học ({len(techs_list)} kỹ thuật)")
             if hasattr(self, "_append_logis_log"):
                 self._append_logis_log(f"📂 Đã nạp cấu hình {len(techs_list)} kỹ thuật từ hồ sơ.")
+
+        # 2b. Tài Nguyên
+        if "resource" in data and isinstance(data["resource"], dict):
+            res_cfg = data["resource"]
+            if hasattr(self, "res_gold_thresh_var") and "gold_threshold" in res_cfg:
+                self.res_gold_thresh_var.set(str(res_cfg["gold_threshold"]))
+            if hasattr(self, "res_wood_pct_var") and "wood_pct" in res_cfg:
+                self.res_wood_pct_var.set(str(res_cfg["wood_pct"]))
+            if hasattr(self, "res_iron_pct_var") and "iron_pct" in res_cfg:
+                self.res_iron_pct_var.set(str(res_cfg["iron_pct"]))
+            if hasattr(self, "res_stone_pct_var") and "stone_pct" in res_cfg:
+                self.res_stone_pct_var.set(str(res_cfg["stone_pct"]))
+            if hasattr(self, "res_food_pct_var") and "food_pct" in res_cfg:
+                self.res_food_pct_var.set(str(res_cfg["food_pct"]))
+            if hasattr(self, "bld_open_box_var") and "auto_open_box" in res_cfg:
+                self.bld_open_box_var.set(bool(res_cfg["auto_open_box"]))
+            if hasattr(self, "res_gold_box_combo") and "gold_box_idx" in res_cfg:
+                try:
+                    g_idx = int(res_cfg["gold_box_idx"])
+                    if 0 <= g_idx < len(self.res_gold_box_combo["values"]):
+                        self.res_gold_box_combo.current(g_idx)
+                except (ValueError, IndexError):
+                    pass
+            if hasattr(self, "res_tn_box_combo") and "tn_box_idx" in res_cfg:
+                try:
+                    tn_idx = int(res_cfg["tn_box_idx"])
+                    if 0 <= tn_idx < len(self.res_tn_box_combo["values"]):
+                        self.res_tn_box_combo.current(tn_idx)
+                except (ValueError, IndexError):
+                    pass
+            if "resource_cities" in res_cfg and isinstance(res_cfg["resource_cities"], list):
+                self._selected_resource_cities = {int(x) for x in res_cfg["resource_cities"]}
+                if hasattr(self, "bld_bases_tree"):
+                    for iid in self.bld_bases_tree.get_children(""):
+                        try:
+                            cid = int(iid)
+                            vals = list(self.bld_bases_tree.item(iid, "values"))
+                            if len(vals) > 1:
+                                vals[1] = "☑" if cid in self._selected_resource_cities else "☐"
+                                self.bld_bases_tree.item(iid, values=vals)
+                        except ValueError:
+                            pass
+            loaded_sections.append("Tài Nguyên")
+            if hasattr(self, "_append_bld_log"):
+                self._append_bld_log(f"📂 Đã nạp cấu hình tài nguyên cho {len(self._selected_resource_cities)} thành từ hồ sơ.")
 
         # 3. Thảo Phạt
         if "thao_phat" in data and isinstance(data["thao_phat"], dict):
@@ -2277,6 +2362,10 @@ class Dashboard(tk.Tk):
         self._append_bld_log(
             f"✅ Áp dụng thiết lập tài nguyên: Vàng<{gold_th}, TN G/S/Đ/T<{w_pct}%/{i_pct}%/{s_pct}%/{f_pct}%, Rương: {g_box.split(':')[0]} / {tn_box.split(':')[0]}"
         )
+        try:
+            self._save_unified_profile()
+        except Exception:
+            pass
         messagebox.showinfo("Thành công", "Đã lưu và áp dụng thiết lập ngưỡng tài nguyên & rương!")
 
     def _toggle_resource_monitor(self):
@@ -3942,6 +4031,14 @@ class Dashboard(tk.Tk):
             combo["values"] = city_items
             if city_items and not combo.get():
                 combo.current(0)
+
+        if self._research_city_id and hasattr(self, "res_city_combo") and roster.cities:
+            for idx, c in enumerate(roster.cities):
+                if c.id == self._research_city_id:
+                    if 0 <= idx < len(self.res_city_combo["values"]):
+                        self.res_city_combo.current(idx)
+                    break
+
 
         for combo in (self.tp_city_combo, self.log_from_city_combo, self.log_to_city_combo):
             combo["values"] = all_base_items

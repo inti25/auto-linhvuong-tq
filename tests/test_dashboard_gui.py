@@ -826,10 +826,10 @@ def test_dashboard_fetch_city_techs_supports_thai_hoc_dien():
 
 
 def test_dashboard_ditrai_ui_controls(monkeypatch):
-    import tkinter.messagebox
-    monkeypatch.setattr(tkinter.messagebox, "showwarning", lambda *a, **k: None)
-    monkeypatch.setattr(tkinter.messagebox, "showerror", lambda *a, **k: None)
-    monkeypatch.setattr(tkinter.messagebox, "showinfo", lambda *a, **k: None)
+    import linhvuong.dashboard
+    monkeypatch.setattr(linhvuong.dashboard.messagebox, "showwarning", lambda *a, **k: None)
+    monkeypatch.setattr(linhvuong.dashboard.messagebox, "showerror", lambda *a, **k: None)
+    monkeypatch.setattr(linhvuong.dashboard.messagebox, "showinfo", lambda *a, **k: None)
 
     dash = safe_dashboard()
     try:
@@ -1602,4 +1602,75 @@ def test_dashboard_daily_reward_profile_and_auto_claim():
             assert mock_claim.call_count == 1
     finally:
         dash.destroy()
+
+
+def test_dashboard_resource_config_and_cities_profile_sync(tmp_path):
+    import json
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # 1. Thiết lập các thông số tài nguyên & thành sử dụng tài nguyên
+        dash.res_gold_thresh_var.set("50000000")
+        dash.res_wood_pct_var.set("60")
+        dash.res_iron_pct_var.set("65")
+        dash.res_stone_pct_var.set("55")
+        dash.res_food_pct_var.set("80")
+        if hasattr(dash, "res_gold_box_combo") and len(dash.res_gold_box_combo["values"]) > 2:
+            dash.res_gold_box_combo.current(2)
+        if hasattr(dash, "res_tn_box_combo") and len(dash.res_tn_box_combo["values"]) > 1:
+            dash.res_tn_box_combo.current(1)
+
+        # Chọn thành 15230 và 15237 sử dụng tài nguyên
+        dash._selected_resource_cities = {15230, 15237}
+        for cid in (15230, 15237):
+            if dash.bld_bases_tree.exists(str(cid)):
+                vals = list(dash.bld_bases_tree.item(str(cid), "values"))
+                vals[1] = "☑"
+                dash.bld_bases_tree.item(str(cid), values=vals)
+
+        # 2. Thu thập và lưu profile
+        prof_file = tmp_path / "resource_profile.json"
+        saved = dash._save_unified_profile(prof_file)
+        assert saved.exists()
+
+        # Đọc profile kiểm tra xem có lưu section resource và resource_cities không
+        profile = json.loads(saved.read_text(encoding="utf-8"))
+        assert "resource" in profile, "Profile thiếu section 'resource'"
+        assert profile["resource"]["gold_threshold"] == "50000000"
+        assert profile["resource"]["wood_pct"] == "60"
+        assert set(profile["resource"]["resource_cities"]) == {15230, 15237}
+
+        # 3. Reset giao diện về mặc định
+        dash.res_gold_thresh_var.set("100000000")
+        dash.res_wood_pct_var.set("70")
+        dash.res_iron_pct_var.set("70")
+        dash.res_stone_pct_var.set("70")
+        dash.res_food_pct_var.set("70")
+        dash._selected_resource_cities.clear()
+        for cid in (15230, 15237):
+            if dash.bld_bases_tree.exists(str(cid)):
+                vals = list(dash.bld_bases_tree.item(str(cid), "values"))
+                vals[1] = "☐"
+                dash.bld_bases_tree.item(str(cid), values=vals)
+
+        # 4. Nạp lại profile
+        ok, msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+        assert "Tài Nguyên" in msg
+
+        # Kiểm tra khôi phục giao diện và state
+        assert dash.res_gold_thresh_var.get() == "50000000"
+        assert dash.res_wood_pct_var.get() == "60"
+        assert dash.res_iron_pct_var.get() == "65"
+        assert dash.res_stone_pct_var.get() == "55"
+        assert dash.res_food_pct_var.get() == "80"
+        assert 15230 in dash._selected_resource_cities
+        assert 15237 in dash._selected_resource_cities
+        assert dash.bld_bases_tree.item("15230", "values")[1] == "☑"
+        assert dash.bld_bases_tree.item("15237", "values")[1] == "☑"
+    finally:
+        dash.destroy()
+
 
