@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?><?xml-stylesheet type='text/xsl' href='_UpgradeReport_Files/UpgradeReport.xslt'?><UpgradeLog>
+<Properties><Property Name="Solution" Value="LVClient">
+</Property><Property Name="Solution File" Value="D:\Work\LinhVuong\LVClientCode\LVClient.sln">
+</Property><Property Name="User Options File" Value="D:\Work\LinhVuong\LVClientCode\LVClient.suo">
+</Property><Property Name="Date" Value="Tuesday, July 28, 2009">
+</Property><Property Name="Time" Value="11:30 AM">
+</Property></Properties><Event ErrorLevel="0" Project="" Source="LVClient.sln" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClient.sln">
+</Event><Event ErrorLevel="0" Project="" Source="LVClient.suo" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClient.suo">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVClient.csproj" Description="Project file successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClient.csproj">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVClient.csproj.user" Description="Project user file successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClient.csproj.user">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\Build.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\Build.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\BuildObj\General.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\BuildObj\General.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\BuildObj\UpdateBuildingInfo.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\BuildObj\UpdateBuildingInfo.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\City.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\City.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CityObj\Building.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CityObj\Building.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CityObj\City.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CityObj\City.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CityObj\CityTask.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CityObj\CityTask.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CityObj\General.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CityObj\General.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\Common.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\Common.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\BanTaiNguyenObj.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\BanTaiNguyenObj.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\doitrai.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\doitrai.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\doitrai.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\doitrai.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\MuaTaiNguyenObj.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\MuaTaiNguyenObj.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\MyTabPage.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\MyTabPage.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\ThaoPhat.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\ThaoPhat.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPT.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPT.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\BattleField.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\BattleField.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\General.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\General.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\Item.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\Item.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\wepon.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\wepon.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\wepon.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\wepon.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\Vanchuyen.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\Vanchuyen.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\Vanchuyen.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\Vanchuyen.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\BienChe.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\BienChe.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Common\BienCheQuan.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Common\BienCheQuan.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Common\common.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Common\common.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Common\config.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Common\config.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\DieuPhaiTuong.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\DieuPhaiTuong.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Common\GeneralThaoPhat.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Common\GeneralThaoPhat.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Common\PhaiQuanVanDaoMo.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Common\PhaiQuanVanDaoMo.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Common\PlayMusicFile.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Common\PlayMusicFile.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Common\WarFunc.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Common\WarFunc.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\Attack.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\Attack.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\Attack.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\Attack.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\DatagridViewCheckBoxHeaderCell.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\DatagridViewCheckBoxHeaderCell.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\War.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\War.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\War.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\War.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmImageCheck.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmImageCheck.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmImageCheck.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmImageCheck.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmLoading.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmLoading.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmLoading.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmLoading.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmmain.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmmain.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmmain.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmmain.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="hook.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\hook.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="JSON\JSON.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\JSON\JSON.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Login.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Login.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Login.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Login.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\ANUI.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\ANUI.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\AUTOTASK.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\AUTOTASK.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\BIENCHE.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\BIENCHE.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\BUILD.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\BUILD.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\BUYRES.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\BUYRES.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\BUYWEPON.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\BUYWEPON.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\CITYTASK.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\CITYTASK.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\BANTHUONG.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\BANTHUONG.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\LOIDAI.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\LOIDAI.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\PHAIQUANVANDAOMO.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\PHAIQUANVANDAOMO.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\UPDATEPRICE.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\UPDATEPRICE.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\DEL.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\DEL.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\LOADING.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\LOADING.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\MOVEDOANHTRAI.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\MOVEDOANHTRAI.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\SELL.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\SELL.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\SIKHI.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\SIKHI.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\THAOPHAT.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\THAOPHAT.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\UPGRADE.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\UPGRADE.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVThread\VANCHUYEN.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVThread\VANCHUYEN.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Program.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Program.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Properties\AssemblyInfo.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Properties\AssemblyInfo.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Properties\Resources.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Properties\Resources.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Properties\Settings.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Properties\Settings.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\Attribute.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\Attribute.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\AttributeList.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\AttributeList.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\LoginInfo.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\LoginInfo.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\LVWeb.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\LVWeb.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\Mobifone.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\Mobifone.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\Parse.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\Parse.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\ParseHeader.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\ParseHeader.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\ParseHTML.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\ParseHTML.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\SaveNLoad.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\SaveNLoad.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\SMS.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\SMS.cs">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Properties\Settings.settings" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Properties\Settings.settings">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="ClassDiagram1.cd" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\ClassDiagram1.cd">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="ReleaseNotes.rtf" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\ReleaseNotes.rtf">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="waiting.gif" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\waiting.gif">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Resources\VerifyCodexxx.gif" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Resources\VerifyCodexxx.gif">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Resources\VerifyCodexxx1.gif" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Resources\VerifyCodexxx1.gif">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Resources\NoAttach.gif" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Resources\NoAttach.gif">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Resources\bitancong.gif" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Resources\bitancong.gif">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Resources\Dangbitancong.gif" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Resources\Dangbitancong.gif">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\readme.txt" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\readme.txt">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Connection\readme.txt" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Connection\readme.txt">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\readme.txt" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\readme.txt">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="JSON\readme.txt" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\JSON\readme.txt">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="MAIL18.ICO" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\MAIL18.ICO">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Resources\MAIL18.ICO" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Resources\MAIL18.ICO">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="ServerList.xml" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\ServerList.xml">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Web\readme.txt" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Web\readme.txt">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\CommonObj\doitrai.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\CommonObj\doitrai.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\Vanchuyen.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\Vanchuyen.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Command\OPTObj\wepon.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Command\OPTObj\wepon.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\Attack.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\Attack.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Control\War.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Control\War.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmImageCheck.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmImageCheck.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmLoading.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmLoading.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="frmmain.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\frmmain.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Login.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Login.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="Properties\Resources.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\Properties\Resources.resx">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVClient.csproj" Description="Project converted successfully">
+</Event><Event ErrorLevel="3" Project="LVClient" Source="LVClient.csproj" Description="Converted">
+</Event><Event ErrorLevel="1" Project="TestLV" Source="..\TestLV\TestLV.csproj" Description="Warning: The project file is being backed up to a relative path that differs from the original solution relative path.  The difference in folder hierarchy may create problems in opening or building the backed up solution and project.">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\TestLV.csproj" Description="Project file successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\TestLV.csproj">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Form1.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Form1.cs">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Form1.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Form1.Designer.cs">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\MyTabPage.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\MyTabPage.cs">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Program.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Program.cs">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Properties\AssemblyInfo.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Properties\AssemblyInfo.cs">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Properties\Resources.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Properties\Resources.Designer.cs">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Properties\Settings.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Properties\Settings.Designer.cs">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Properties\Settings.settings" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Properties\Settings.settings">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Resources\waiting.gif" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Resources\waiting.gif">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Form1.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Form1.resx">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\Properties\Resources.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\TestLV\Properties\Resources.resx">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\TestLV.csproj" Description="Project converted successfully">
+</Event><Event ErrorLevel="3" Project="TestLV" Source="..\TestLV\TestLV.csproj" Description="Converted">
+</Event><Event ErrorLevel="1" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\LVClientPrivate.csproj" Description="Warning: The project file is being backed up to a relative path that differs from the original solution relative path.  The difference in folder hierarchy may create problems in opening or building the backed up solution and project.">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\LVClientPrivate.csproj" Description="Project file successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\LVClientPrivate.csproj">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\MainFormPrivate.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\MainFormPrivate.cs">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\MainFormPrivate.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\MainFormPrivate.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\Program.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\Program.cs">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\Properties\AssemblyInfo.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\Properties\AssemblyInfo.cs">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\Properties\Resources.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\Properties\Resources.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\Properties\Settings.Designer.cs" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\Properties\Settings.Designer.cs">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\Properties\Settings.settings" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\Properties\Settings.settings">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\MainFormPrivate.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\MainFormPrivate.resx">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\Properties\Resources.resx" Description="File successfully backed up as D:\Work\LinhVuong\LVClientCode\Backup\LVClientPrivate\Properties\Resources.resx">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\LVClientPrivate.csproj" Description="Project converted successfully">
+</Event><Event ErrorLevel="3" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\LVClientPrivate.csproj" Description="Converted">
+</Event><Event ErrorLevel="0" Project="" Source="LVClient.sln" Description="Solution converted successfully">
+</Event><Event ErrorLevel="3" Project="" Source="LVClient.sln" Description="Converted">
+</Event><Event ErrorLevel="0" Project="LVClient" Source="LVClient.csproj" Description="Scan complete: Upgrade not required for project files.">
+</Event><Event ErrorLevel="0" Project="TestLV" Source="..\TestLV\TestLV.csproj" Description="Scan complete: Upgrade not required for project files.">
+</Event><Event ErrorLevel="0" Project="LVClientPrivate" Source="..\LVClientPrivate\LVClientPrivate\LVClientPrivate.csproj" Description="Scan complete: Upgrade not required for project files.">
+</Event></UpgradeLog>

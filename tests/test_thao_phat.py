@@ -942,5 +942,66 @@ def test_thao_phat_runner_start_thread_and_is_alive():
     assert not runner.is_alive()
 
 
+def test_thao_phat_battle_track_real_interval_regression_time_import():
+    """Kiểm tra hồi quy: Chạy Thảo Phạt với check_interval thực tế (>= 1.0) khi vào chiến trường không bị NameError 'time'."""
+    c29 = {"ret": 0, "city": [[15230, "NB"]]}
+    c76 = {"ret": 0, "list": [[15230, "NB", [[417506, "廉复卢", 0, "", 0, 95, 0, 95, 0, 100, 0, 501]]]]}
+    c32_idle = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 100, 240, 240]]]]}
+    c32_busy = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 24, 4, 100, 240, 240]]]]}
+
+    responses = {
+        "Common.ashx?id=29": c29,
+        "Common.ashx?id=76": c76,
+        "Common.ashx?id=32": [
+            {"ret": 0, "list": []}, c32_idle,
+            {"ret": 0, "list": []}, c32_idle,
+            {"ret": 0, "list": []}, c32_busy,
+            {"ret": 0, "list": []}, c32_idle,
+        ],
+        "Common.ashx?id=27": {"ret": 0, "list": [[15230, "Thành Chính", 500, 10, 20, 30]]},
+        "OPT.ashx?id=62": {"ret": 0},
+        "Common.ashx?id=3": {"ret": 0, "status": 2, "current": [0, 0]},
+        "OPT.ashx?id=24": {"ret": 13},
+    }
+
+    server = FakeServer(responses)
+    client = GatewayClient(57, server, sleep=lambda s: None)
+    stop_event = threading.Event()
+    logs = []
+
+    runner = ThaoPhatAutoRunner(
+        gateway=client,
+        city_id=15230,
+        task_id=0,
+        general_ids=[417506],
+        target_army=TargetArmy(infantry=100, cavalry=0, archers=100),
+        min_morale=95,
+        track_battle=True,
+        auto_counter=True,
+        leave_boss_last=True,
+        stop_event=stop_event,
+        log_fn=lambda m: logs.append(m),
+        check_interval=10.0,
+    )
+    # Chỉ dừng sau khi đã vào chiến trường và theo dõi xong
+    wait_calls = []
+    def mock_wait(s):
+        wait_calls.append(s)
+        if len(wait_calls) >= 2:
+            stop_event.set()
+            return True
+        return False
+
+    runner.wait = mock_wait
+    runner.wait_cycle = lambda s: True
+
+    runner.run()
+
+    # Kiểm tra log xem có dòng ngoại lệ NameError: name 'time' is not defined không
+    error_logs = [l for l in logs if "❌ Ngoại lệ trong vòng lặp Thảo Phạt" in l]
+    assert not any("name 'time' is not defined" in l for l in error_logs)
+
+
+
 
 

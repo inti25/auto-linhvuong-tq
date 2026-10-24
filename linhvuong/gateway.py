@@ -146,9 +146,12 @@ class GatewayClient:
             if isinstance(result, dict):
                 ret = result.get("ret")
                 if ret is not None and ret != 0:
-                    logger.warning(
-                        f"Máy chủ trả về mã lỗi ret={ret} cho {endpoint}?id={api_id} | Data: {data} | Response: {result}"
-                    )
+                    if endpoint == "OPT.ashx" and api_id == 63 and ret == 86:
+                        logger.info(f"Phần thưởng chuyên cần đã được nhận hôm nay (mã ret=86).")
+                    else:
+                        logger.warning(
+                            f"Máy chủ trả về mã lỗi ret={ret} cho {endpoint}?id={api_id} | Data: {data} | Response: {result}"
+                        )
                 elif logger.isEnabledFor(logging.DEBUG):
                     logger.debug(f"Response {endpoint}?id={api_id}: {result}")
             return result

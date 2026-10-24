@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ClassDiagram MajorVersion="1" MinorVersion="1">
+  <Font Name="Segoe UI" Size="9" />
+  <Class Name="LVClient.frmImageCheck" Collapsed="true">
+    <Position X="0.5" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <FileName>frmImageCheck.cs</FileName>
+      <HashCode>AAAAAAAAACAAQAAAgACAAAACIAAIAAAgHUAAAACAAGk=</HashCode>
+    </TypeIdentifier>
+  </Class>
+</ClassDiagram>

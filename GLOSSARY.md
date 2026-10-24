@@ -226,6 +226,40 @@ _Avoid_: Check all mặc định, auto run all, bật sẵn
 Chiến lược điều phối tài nguyên thông minh trong Hàng Đợi Xây Dựng: Khi một công trình báo thiếu tài nguyên (mã 32 hoặc 37), bot không mở rương ngay mà tạm thời chuyển sang công trình kế tiếp. Chỉ khi toàn bộ công trình hợp lệ trong lượt đều báo thiếu tài nguyên, bot mới mở đúng 1 rương tài nguyên và quay trở lại duyệt từ đầu hàng đợi theo đúng thứ tự ưu tiên.
 _Avoid_: Mở rương tức thì, cắn rương liên tục, greedy box opening
 
+**Động Cơ Tác Chiến**:
+Bộ máy điều khiển và giám sát diễn biến chiến trường tập trung, hỗ trợ mọi hình thức giao tranh (Thảo Phạt, Bình Man, Gọi Dân, hoặc giám sát độc lập qua `battle_id`), thay vì logic đơn lẻ phân tán theo từng nhiệm vụ.
+_Avoid_: Battle controller riêng lẻ, script đánh trận
+
+**Phương Thức Tấn Công Chi Tiết**:
+Hành động chiến thuật được gửi qua `OPT.ashx?id=54` áp dụng cho từng đạo quân trong hiệp đấu, bao gồm: Phổ thông (1), Đơn chiến (2), Phòng ngự (3), Rút lui (4), Đột kích (10 - Kỵ binh), Mãnh công (11 - Bộ binh), Thủy công (12), Hỏa tiễn (13 - Cung thủ), Phản kích (14).
+_Avoid_: Lệnh đánh, skill đánh thường
+
+**Mưu Kế Chiến Trường**:
+Các mưu lược đặc biệt được thi triển trong chiến trường thông qua `OPT.ashx?id=70`, gồm: Kim thiền thoát xác (92), Phản khách vi chủ (93), Quan môn tróc tặc (94), Cầm tặc cầm vương (95), Hủy bỏ trạng thái (96).
+_Avoid_: Bùa chiến đấu, phép chiến trường
+
+**Cửa Sổ Đổi Trận Cuối Hiệp**:
+Quy tắc chỉ thực hiện đổi trận hình (`OPT.ashx?id=57`) ở 10~15 giây cuối của hiệp đấu (`bout_left <= 15s`), nhằm triệt tiêu khả năng đối phương quan sát và đổi trận ngược lại để phản khắc quân ta.
+_Avoid_: Đổi trận đầu hiệp, đổi trận tức thì
+
+**Tự Động Hủy Bỏ Trạng Thái**:
+Cơ chế phản xạ tự động của bot: khi phát hiện đạo quân phe ta rơi vào trạng thái Hỗn loạn (`TrangThaiQuanDoi == 1`), bot lập tức kích hoạt mưu kế 96 ("Hủy bỏ trạng thái") để giải phóng hiệu ứng bất lợi và phục hồi năng lực chiến đấu bình thường.
+_Avoid_: Tự cắn giải, auto cleanse
+
+**Thích Ứng Binh Chủng**:
+Cơ chế tự động phân tích và gán Phương Thức Tấn Công tối ưu tương ứng theo loại quân chiếm đa số của từng đạo quân (Cung thủ → Hỏa tiễn 13, Kỵ binh → Đột kích 10, Bộ binh/Xe → Mãnh công 11).
+_Avoid_: Auto skill, ép chiêu chung
+
+**Cô Lập BOSS**:
+Chiến thuật tác chiến khi bật chế độ bắt sống danh tướng (`leave_boss_last`): Bot tập trung tiêu diệt toàn bộ các đạo lính bảo vệ phụ cận, và ngay khi chỉ còn lại duy nhất BOSS trên chiến trường, bot tự động chuyển toàn bộ quân ta sang thế Phòng ngự (3) và dừng tấn công để người chơi vào chiêu hàng.
+_Avoid_: Giữ boss thụ động, không đánh boss từ đầu
+
+**Rút Lui Khẩn Cấp**:
+Quy tắc tự động kích hoạt mưu kế Kim thiền thoát xác (`OPT.ashx?id=70`, `lPlusFunc=92`) khi quân số hoặc thể lực của tướng rơi xuống dưới Ngưỡng An Toàn, nhằm rút lui bảo toàn 100% sĩ khí và quân lực còn lại mà không chịu phạt bại trận.
+_Avoid_: Emergency retreat, chạy trốn
+
+
+
 
 ## Danh Mục Công Trình (Nhà)
 

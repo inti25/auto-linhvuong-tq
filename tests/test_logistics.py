@@ -105,3 +105,20 @@ def test_logistics_stops_on_captcha():
     task = LogisticsTask(gw, auto_daily_reward=True)
     with pytest.raises(CaptchaRequired):
         task.run_once()
+
+
+def test_claim_daily_reward_ret_86_and_notifications():
+    # Kiểm tra mã ret=86 (đã nhận thưởng trong ngày) được coi là thành công và có thông báo log
+    notifications = []
+    server = FakeServer(
+        handlers={
+            "OPT.ashx?id=63": {"ret": 86},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    task = LogisticsTask(gw, notify=lambda m: notifications.append(m))
+    
+    result = task.claim_daily_reward()
+    assert result is True, "Mã ret=86 (đã nhận trong ngày) phải trả về True"
+    assert any("đã nhận thưởng" in m.lower() for m in notifications), "Phải có thông báo đã nhận thưởng"
+

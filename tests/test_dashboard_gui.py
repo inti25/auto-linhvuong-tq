@@ -42,17 +42,18 @@ def dummy_roster():
     )
 
 
-def test_dashboard_initializes_five_tabs():
+def test_dashboard_initializes_six_tabs():
     dash = safe_dashboard()
     try:
         tabs = dash.notebook.tabs()
-        assert len(tabs) == 5
+        assert len(tabs) == 6
         tab_texts = [dash.notebook.tab(t, "text") for t in tabs]
         assert "🏛️ Nội Chính & Nghiên Cứu" in tab_texts[0]
         assert "⚔️ Thảo Phạt" in tab_texts[1]
         assert "🏕️ Bình Man" in tab_texts[2]
         assert "🧛 Vong Linh" in tab_texts[3]
         assert "🏰 Tổng quan" in tab_texts[4]
+        assert "⚔️ Chiến Trường" in tab_texts[5]
     finally:
         dash.destroy()
 
@@ -1433,16 +1434,172 @@ def test_two_way_target_level_binding():
         dash.destroy()
 
 
+def test_dashboard_battle_tab_controls_and_profile():
+    from linhvuong.battle import BattleState, BattleTroop
+
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra tồn tại các UI controls của Tab Chiến trường
+        assert hasattr(dash, "bt_auto_counter_var")
+        assert dash.bt_auto_counter_var.get() is True
+        assert hasattr(dash, "bt_window_var")
+        assert dash.bt_window_var.get() == "15"
+        assert hasattr(dash, "bt_skip_confused_var")
+        assert dash.bt_skip_confused_var.get() is True
+        assert hasattr(dash, "bt_leave_boss_var")
+        assert dash.bt_leave_boss_var.get() is True
+        assert hasattr(dash, "bt_cleanse_var")
+        assert dash.bt_cleanse_var.get() is True
+        assert hasattr(dash, "bt_retreat_var")
+        assert dash.bt_retreat_var.get() == "0"
+        assert hasattr(dash, "bt_our_tree")
+        assert hasattr(dash, "bt_enemy_tree")
+
+        # 2. Thu thập profile hợp nhất có mục "combat"
+        prof = dash._collect_unified_profile()
+        assert "combat" in prof
+        assert prof["combat"]["auto_counter_formation"] is True
+        assert prof["combat"]["formation_window_seconds"] == "15"
+        assert prof["combat"]["skip_confused_enemy"] is True
+        assert prof["combat"]["leave_boss_last"] is True
+        assert prof["combat"]["auto_cleanse_confusion"] is True
+        assert prof["combat"]["emergency_retreat_threshold"] == "0"
+
+        # 3. Nạp hồ sơ cấu hình tuỳ chỉnh và kiểm tra đồng bộ lên UI
+        custom_cfg = {
+            "combat": {
+                "auto_counter_formation": False,
+                "formation_window_seconds": "10",
+                "attack_action_mode": "fixed",
+                "action_combo_idx": 2,
+                "skip_confused_enemy": False,
+                "leave_boss_last": False,
+                "auto_cleanse_confusion": False,
+                "emergency_retreat_threshold": "25",
+                "stratagem_combo_idx": 1,
+            }
+        }
+        loaded = dash._apply_unified_profile(custom_cfg)
+        assert "Chiến Trường" in loaded
+        assert dash.bt_auto_counter_var.get() is False
+        assert dash.bt_window_var.get() == "10"
+        assert dash.bt_skip_confused_var.get() is False
+        assert dash.bt_leave_boss_var.get() is False
+        assert dash.bt_cleanse_var.get() is False
+        assert dash.bt_retreat_var.get() == "25"
+
+        # 4. Kiểm tra render thông tin chiến trường lên Treeview
+        our = BattleTroop(
+            position=1,
+            player_name="Người Chơi",
+            user_id=57,
+            general_name="Triệu Vân",
+            general_id=101,
+            city_id=1,
+            formation_id=1,
+            morale=100,
+            soldiers=9500,
+            initial_soldiers=10000,
+            flag=0,
+            status=0,
+            attack_action=13,
+            target_id=11,
+        )
+        enemy = BattleTroop(
+            position=11,
+            player_name="Quân Man",
+            user_id=999,
+            general_name="Man Vương",
+            general_id=202,
+            city_id=2,
+            formation_id=2,
+            morale=90,
+            soldiers=18000,
+            initial_soldiers=20000,
+            flag=0,
+            status=0,
+            attack_action=1,
+            target_id=1,
+            is_boss=True,
+        )
+        fake_state = BattleState(
+            ret=0,
+            site="Dã ngoại cấp 5",
+            map_id=1,
+            bout=2,
+            bout_left=30,
+            attack_total=1,
+            defend_total=1,
+            is_attacker=True,
+            our_troops=[our],
+            enemy_troops=[enemy],
+            boss_troops=[enemy],
+        )
+
+        dash._bt_render_state(fake_state)
+        assert dash.bt_bout_var.get() == "Hiệp: 2"
+        assert dash.bt_countdown_var.get() == "Đếm ngược: 30s"
+
+        our_items = dash.bt_our_tree.get_children()
+        assert len(our_items) == 1
+        assert dash.bt_our_tree.item(our_items[0], "text") == "Triệu Vân"
+
+        enemy_items = dash.bt_enemy_tree.get_children()
+        assert len(enemy_items) == 1
+        assert "Man Vương" in dash.bt_enemy_tree.item(enemy_items[0], "text")
+        assert "👑" in dash.bt_enemy_tree.item(enemy_items[0], "text")
+
+        # 5. Thao tác ghi log trực quan
+        dash._append_bt_log("🧪 Kiểm thử log chiến trường thành công")
+        dash.update()
+        log_content = dash.bt_log_text.get("1.0", "end")
+        assert "Kiểm thử log chiến trường thành công" in log_content
+    finally:
+        dash.destroy()
 
 
+def test_dashboard_daily_reward_profile_and_auto_claim():
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra default và collect profile
+        assert hasattr(dash, "aux_daily_reward_var")
+        dash.aux_daily_reward_var.set(False)
+        profile = dash._collect_unified_profile()
+        assert profile["logistics"]["auto_daily_reward"] is False
 
+        # 2. Kiểm tra apply profile
+        profile["logistics"]["auto_daily_reward"] = True
+        loaded = dash._apply_unified_profile(profile)
+        assert "Hậu Cần" in loaded
+        assert dash.aux_daily_reward_var.get() is True
 
+        # 3. Kiểm tra _do_claim_daily gọi LogisticsTask và ghi log
+        with patch("linhvuong.dashboard.LogisticsTask") as mock_logistics:
+            instance = mock_logistics.return_value
+            instance.claim_daily_reward.return_value = True
+            with patch("threading.Thread") as mock_thread:
+                # Capture thread target and run synchronously
+                def fake_thread_start():
+                    pass
+                dash._do_claim_daily()
+                assert mock_thread.called
+                kwargs = mock_thread.call_args[1]
+                assert kwargs.get("daemon") is True
+                # Chạy target lambda
+                kwargs["target"]()
+                assert instance.claim_daily_reward.called
 
+        # 4. Kiểm tra _loaded trigger _do_claim_daily khi aux_daily_reward_var=True
+        r = dummy_roster()
+        with patch.object(dash, "_do_claim_daily") as mock_claim:
+            dash._last_daily_claim_date = None
+            dash.aux_daily_reward_var.set(True)
+            dash._loaded(r)
+            assert mock_claim.call_count == 1
 
-
-
-
-
-
-
+            # Gọi lại lần nữa trong cùng ngày thì không gọi lại
+            dash._loaded(r)
+            assert mock_claim.call_count == 1
+    finally:
+        dash.destroy()
 

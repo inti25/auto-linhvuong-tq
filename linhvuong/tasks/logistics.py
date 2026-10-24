@@ -103,8 +103,17 @@ class LogisticsTask:
         resp = self.gateway.call("OPT.ashx", 63, {"_": ""}) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+            self.notify("⚠️ Nhận thưởng chuyên cần: Máy chủ yêu cầu mã Captcha!")
             raise CaptchaRequired()
-        return ret == RET_OK
+        if ret == RET_OK:
+            self.notify("🎁 Nhận phần thưởng chuyên cần hằng ngày thành công!")
+            return True
+        elif ret == 86:
+            self.notify("ℹ️ Hôm nay bạn đã nhận thưởng chuyên cần rồi (mã 86: đã nhận trong ngày).")
+            return True
+        else:
+            self.notify(f"❌ Nhận thưởng chuyên cần thất bại (mã phản hồi từ máy chủ: {ret})")
+            return False
 
     def run_once(self) -> str:
         # 1. Nhận điểm danh hằng ngày

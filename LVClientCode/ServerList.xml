@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright by NDTan.Net-->
+<!-- Server List cho Auto Linh Vuong-->
+<AutoLinhVuong>
+
+<tan>1. Quan Độ</tan>
+<tan>2. Trường Bản</tan>
+<tan>3. Phàn Thành</tan>
+<tan>4. Di Lăng</tan>
+<tan>5. Nhai Đình</tan>
+<tan>6. Tà Cốc</tan>
+<tan>7. Vị Thủy</tan>	
+<tan>8. Kỳ Sơn</tan>	
+<tan>9. Hợp phì </tan>
+<tan>10. Server tiếp theo</tan>
+<tan>11. Server tiếp theo nữa</tan>
+
+  <!-- Neu co them server moi ma Tan chua update kip thi ban co the sua file nay lai theo dang nhu tren.-->
+<!-- Vi du: <tan>8. Tên server</tan> -->
+
+</AutoLinhVuong>

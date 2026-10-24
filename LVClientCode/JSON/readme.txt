@@ -1,0 +1,1 @@
+﻿Class của JSON

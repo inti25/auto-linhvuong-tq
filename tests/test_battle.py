@@ -365,3 +365,168 @@ def test_track_battle_waits_for_march_via_common3():
     assert report.is_victory is True
 
 
+def test_user_id_identification_attacker_and_defender():
+    # Giả lập quân ta ở phe Thủ (position 11, UserID = 888)
+    # Quân địch ở phe Công (position 1, UserID = 999)
+    raw_data = {
+        "ret": 0,
+        "site": "Thành Trì",
+        "mapid": 123456,
+        "bout": 1,
+        "bout_left": 60,
+        "attack_total": 1,
+        "defend_total": 1,
+        "troops": [
+            [1, "Kẻ Địch", 999, "Tướng Địch", 10, "", 100, 0, 1, 100, 0, 200, 0, 0, 0, 0, 0, 0, "", 1],
+            [11, "Ta", 888, "Tướng Ta", 20, "", 200, 0, 4, 100, 0, 150, 0, 0, 0, 0, 0, 0, "", 1],
+        ],
+    }
+
+    state = BattleState.from_json(raw_data, current_user_id=888)
+    assert not state.is_attacker
+    assert len(state.our_troops) == 1
+    assert state.our_troops[0].position == 11
+    assert state.our_troops[0].general_name == "Tướng Ta"
+    assert len(state.enemy_troops) == 1
+    assert state.enemy_troops[0].position == 1
+
+
+def test_attack_action_adaptive_to_unit_type():
+    # Cung thủ
+    troop_archer = BattleTroop(
+        position=1, player_name="P", user_id=1, general_name="Cung Tướng",
+        general_id=1, city_id=1, formation_id=1, morale=100, soldiers=100,
+        initial_soldiers=100, flag=0, archers=80, infantry=20
+    )
+    assert troop_archer.dominant_soldier_type() == "archers"
+    assert troop_archer.optimal_action_for_unit() == 13  # Hỏa tiễn
+
+    # Kỵ binh
+    troop_cav = BattleTroop(
+        position=2, player_name="P", user_id=1, general_name="Kỵ Tướng",
+        general_id=2, city_id=1, formation_id=1, morale=100, soldiers=100,
+        initial_soldiers=100, flag=0, cavalry=90, archers=10
+    )
+    assert troop_cav.dominant_soldier_type() == "cavalry"
+    assert troop_cav.optimal_action_for_unit() == 10  # Đột kích
+
+    # Bộ binh
+    troop_inf = BattleTroop(
+        position=3, player_name="P", user_id=1, general_name="Bộ Tướng",
+        general_id=3, city_id=1, formation_id=1, morale=100, soldiers=100,
+        initial_soldiers=100, flag=0, infantry=100
+    )
+    assert troop_inf.dominant_soldier_type() == "infantry"
+    assert troop_inf.optimal_action_for_unit() == 11  # Mãnh công
+
+
+def test_change_target_attack_opt_54():
+    mock_gateway = MagicMock()
+    mock_gateway.base_url = "http://sg57.dipan.com"
+    mock_gateway._headers.return_value = {}
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ret": 0}
+    mock_gateway.session.post.return_value = mock_resp
+
+    engine = BattleController(mock_gateway)
+    ok = engine.change_target_attack(battle_id=1001, pos_id=1, dest_pos_id=11, action=13)
+    assert ok is True
+    mock_gateway.session.post.assert_called_once()
+    args, kwargs = mock_gateway.session.post.call_args
+    assert "OPT.ashx?id=54" in args[0]
+    assert kwargs["data"]["action"] == "13"
+    assert kwargs["data"]["destposid"] == "11"
+    assert kwargs["data"]["posid"] == "1"
+
+
+def test_cast_stratagem_opt_70():
+    mock_gateway = MagicMock()
+    mock_gateway.base_url = "http://sg57.dipan.com"
+    mock_gateway._headers.return_value = {}
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ret": 0}
+    mock_gateway.session.post.return_value = mock_resp
+
+    engine = BattleController(mock_gateway)
+    ok = engine.cast_stratagem(battle_id=1001, pos_id=1, stratagem_id=96)
+    assert ok is True
+    args, kwargs = mock_gateway.session.post.call_args
+    assert "OPT.ashx?id=70" in args[0]
+    assert kwargs["data"]["lPlusFunc"] == "96"
+    assert kwargs["data"]["lDestPosID"] == "1"
+
+
+def test_auto_cleanse_confusion_stratagem():
+    mock_gateway = MagicMock()
+    mock_gateway.base_url = "http://sg57.dipan.com"
+    mock_gateway._headers.return_value = {}
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ret": 0}
+    mock_gateway.session.post.return_value = mock_resp
+
+    our = BattleTroop(
+        position=1, player_name="P", user_id=1, general_name="Tướng Ta",
+        general_id=10, city_id=1, formation_id=1, morale=100, soldiers=100,
+        initial_soldiers=100, flag=0, status=1  # Đang bị Hỗn loạn
+    )
+    state = BattleState(
+        ret=0, site="Test", map_id=1, bout=2, bout_left=30, attack_total=1, defend_total=1,
+        our_troops=[our], enemy_troops=[]
+    )
+
+    engine = BattleController(mock_gateway)
+    logs = engine.execute_stratagems(state, battle_id=55)
+    assert any("Hủy bỏ trạng thái (96)" in l for l in logs)
+    assert our.status == 0  # Đã giải phóng
+
+
+def test_boss_isolation_switches_to_defend():
+    mock_gateway = MagicMock()
+    mock_gateway.base_url = "http://sg57.dipan.com"
+    mock_gateway._headers.return_value = {}
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ret": 0}
+    mock_gateway.session.post.return_value = mock_resp
+
+    our = BattleTroop(
+        position=1, player_name="P", user_id=1, general_name="Tướng Ta",
+        general_id=10, city_id=1, formation_id=1, morale=100, soldiers=100,
+        initial_soldiers=100, flag=0, attack_action=13
+    )
+    boss = BattleTroop(
+        position=19, player_name="", user_id=0, general_name="Trương Phi (BOSS)",
+        general_id=0, city_id=0, formation_id=1, morale=100, soldiers=500,
+        initial_soldiers=500, flag=0x20, is_boss=True
+    )
+    state = BattleState(
+        ret=0, site="Test", map_id=1, bout=3, bout_left=30, attack_total=1, defend_total=1,
+        our_troops=[our], enemy_troops=[boss], boss_troops=[boss]
+    )
+
+    engine = BattleController(mock_gateway)
+    logs = engine.assign_combat_orders(state, battle_id=55)
+    assert our.attack_action == 3  # Tự động về Phòng ngự
+    assert our.target_id == 19
+    assert any("Bắt sống BOSS" in l for l in logs)
+
+
+def test_troop_from_raw_common_monsters_not_identified_as_boss():
+    """Kiểm tra quái dã ngoại thông thường (Sơn Tặc, Cường Đạo, Ác Bá, flag=16) không bị nhận diện nhầm là BOSS."""
+    raw_bandit = [11, "", 0, "山贼", 0, "", 0, 0, 4, 100, 0, 47, 0, 47, 0, 0, 0, 0, "", 16]
+    raw_robber = [12, "", 0, "强盗", 0, "", 0, 0, 4, 100, 0, 59, 0, 59, 0, 0, 0, 0, "", 16]
+    raw_bully = [13, "", 0, "恶霸", 0, "", 0, 0, 4, 100, 0, 71, 0, 71, 0, 0, 0, 0, "", 16]
+
+    t1 = BattleTroop.from_raw(raw_bandit)
+    t2 = BattleTroop.from_raw(raw_robber)
+    t3 = BattleTroop.from_raw(raw_bully)
+
+    assert not t1.is_boss, f"Sơn tặc (pos {t1.position}, flag {t1.flag}) không được là BOSS"
+    assert not t2.is_boss, f"Cường đạo (pos {t2.position}, flag {t2.flag}) không được là BOSS"
+    assert not t3.is_boss, f"Ác bá (pos {t3.position}, flag {t3.flag}) không được là BOSS"
+
+
+

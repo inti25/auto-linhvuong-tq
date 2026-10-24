@@ -1,0 +1,9 @@
+SCC = This is a Source Code Control file
+
+[LVClient.sln]
+SCC_Aux_Path = "D:\Work\SourceSafe"
+SCC_Project_Name = "$/LVClient.root/LinhVuong/LVClientCode", DAAAAAAA
+
+[LVClient.csproj]
+SCC_Aux_Path = "D:\Work\SourceSafe"
+SCC_Project_Name = "$/LVClient.root/LinhVuong/LVClientCode", DAAAAAAA

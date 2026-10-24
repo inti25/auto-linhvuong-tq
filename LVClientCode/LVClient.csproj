@@ -1,0 +1,369 @@
+﻿<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="3.5">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProductVersion>9.0.21022</ProductVersion>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{8E9DE7D6-D2BA-4746-80B5-F53E33FB5AEE}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>LVClient</RootNamespace>
+    <AssemblyName>LVClient</AssemblyName>
+    <ApplicationIcon>Resources\LVIcon128.ico</ApplicationIcon>
+    <SccProjectName>SAK</SccProjectName>
+    <SccLocalPath>SAK</SccLocalPath>
+    <SccAuxPath>SAK</SccAuxPath>
+    <SccProvider>SAK</SccProvider>
+    <FileUpgradeFlags>
+    </FileUpgradeFlags>
+    <UpgradeBackupLocation>
+    </UpgradeBackupLocation>
+    <OldToolsVersion>2.0</OldToolsVersion>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
+    <StartupObject>LVClient.Program</StartupObject>
+    <RunPostBuildEvent>OnOutputUpdated</RunPostBuildEvent>
+    <PublishUrl>publish\</PublishUrl>
+    <Install>true</Install>
+    <InstallFrom>Disk</InstallFrom>
+    <UpdateEnabled>false</UpdateEnabled>
+    <UpdateMode>Foreground</UpdateMode>
+    <UpdateInterval>7</UpdateInterval>
+    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
+    <UpdatePeriodically>false</UpdatePeriodically>
+    <UpdateRequired>false</UpdateRequired>
+    <MapFileExtensions>true</MapFileExtensions>
+    <ApplicationRevision>0</ApplicationRevision>
+    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+    <UseApplicationTrust>false</UseApplicationTrust>
+    <BootstrapperEnabled>true</BootstrapperEnabled>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>..\..\..\LVClient\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>..\..\..\..\..\..\..\LVClient\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>0</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.mshtml, Version=7.0.3300.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a" />
+    <Reference Include="System" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Command\Build.cs" />
+    <Compile Include="Command\BuildObj\General.cs" />
+    <Compile Include="Command\BuildObj\UpdateBuildingInfo.cs" />
+    <Compile Include="Command\City.cs" />
+    <Compile Include="Command\CityObj\Building.cs" />
+    <Compile Include="Command\CityObj\City.cs" />
+    <Compile Include="Command\CityObj\CityTask.cs" />
+    <Compile Include="Command\CityObj\CivilGeneral.cs" />
+    <Compile Include="Command\CityObj\General.cs" />
+    <Compile Include="Command\CityObj\MilitaryGeneral.cs" />
+    <Compile Include="Command\Common.cs" />
+    <Compile Include="Command\CommonObj\BanTaiNguyenObj.cs" />
+    <Compile Include="Command\CommonObj\BinhManObj.cs" />
+    <Compile Include="Command\CommonObj\CallManObj.cs" />
+    <Compile Include="Command\CommonObj\doitrai.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Command\CommonObj\doitrai.Designer.cs">
+      <DependentUpon>doitrai.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Command\CommonObj\DoiTraiObj.cs" />
+    <Compile Include="Command\CommonObj\ManOBJ.cs" />
+    <Compile Include="Command\CommonObj\MuaTaiNguyenObj.cs" />
+    <Compile Include="Command\CommonObj\MyTabPage.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Command\CommonObj\Npc_tentObj.cs" />
+    <Compile Include="Command\CommonObj\ThaoPhat.cs" />
+    <Compile Include="Command\CommonObj\VanChuyenVK.cs" />
+    <Compile Include="Command\Map.cs" />
+    <Compile Include="Command\OPT.cs" />
+    <Compile Include="Command\OPTObj\BattleField.cs" />
+    <Compile Include="Command\OPTObj\General.cs" />
+    <Compile Include="Command\OPTObj\Item.cs" />
+    <Compile Include="Command\OPTObj\wepon.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Command\OPTObj\wepon.Designer.cs">
+      <DependentUpon>wepon.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Command\OPTObj\Vanchuyen.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Command\OPTObj\Vanchuyen.Designer.cs">
+      <DependentUpon>Vanchuyen.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Command\CommonObj\BienChe.cs" />
+    <Compile Include="Common\BienCheQuan.cs" />
+    <Compile Include="Common\Class1.cs" />
+    <Compile Include="Common\common.cs" />
+    <Compile Include="Common\config.cs" />
+    <Compile Include="Command\CommonObj\DieuPhaiTuong.cs" />
+    <Compile Include="Common\Constant.cs" />
+    <Compile Include="Common\DanhSachTuong.cs" />
+    <Compile Include="Common\GeneralThaoPhat.cs" />
+    <Compile Include="Common\Man.cs" />
+    <Compile Include="Common\PhaiQuanVanDaoMo.cs" />
+    <Compile Include="Common\PlayMusicFile.cs" />
+    <Compile Include="Common\Ruong.cs" />
+    <Compile Include="Common\ThreadManager.cs" />
+    <Compile Include="Common\WarFunc.cs" />
+    <Compile Include="Common\Wepons.cs" />
+    <Compile Include="Connection\ProxySocket\AuthMethod.cs" />
+    <Compile Include="Connection\ProxySocket\AuthNone.cs" />
+    <Compile Include="Connection\ProxySocket\AuthUserPass.cs" />
+    <Compile Include="Connection\ProxySocket\IAsyncProxyResult.cs" />
+    <Compile Include="Connection\ProxySocket\ProxyException.cs" />
+    <Compile Include="Connection\ProxySocket\ProxySocket.cs" />
+    <Compile Include="Connection\ProxySocket\Socks4Handler.cs" />
+    <Compile Include="Connection\ProxySocket\Socks5Handler.cs" />
+    <Compile Include="Connection\ProxySocket\SocksHandler.cs" />
+    <Compile Include="Connection\ProxySocket\TestApp.cs" />
+    <Compile Include="Connection\StarksoftProxy\CreateConnectionAsyncCompletedEventArgs.cs" />
+    <Compile Include="Connection\StarksoftProxy\HttpProxyClient.cs" />
+    <Compile Include="Connection\StarksoftProxy\IProxyClient.cs" />
+    <Compile Include="Connection\StarksoftProxy\ProxyClientFactory.cs" />
+    <Compile Include="Connection\StarksoftProxy\ProxyException.cs" />
+    <Compile Include="Connection\StarksoftProxy\ProxyProtocolType.cs" />
+    <Compile Include="Connection\StarksoftProxy\Socks4aProxyClient.cs" />
+    <Compile Include="Connection\StarksoftProxy\Socks4ProxyClient.cs" />
+    <Compile Include="Connection\StarksoftProxy\Socks5ProxyClient.cs" />
+    <Compile Include="Control\Attack.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Control\Attack.Designer.cs">
+      <DependentUpon>Attack.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Control\DatagridViewCheckBoxHeaderCell.cs" />
+    <Compile Include="Control\War.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Control\War.Designer.cs">
+      <DependentUpon>War.cs</DependentUpon>
+    </Compile>
+    <Compile Include="frmImageCheck.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="frmImageCheck.Designer.cs">
+      <DependentUpon>frmImageCheck.cs</DependentUpon>
+    </Compile>
+    <Compile Include="frmLoading.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="frmLoading.Designer.cs">
+      <DependentUpon>frmLoading.cs</DependentUpon>
+    </Compile>
+    <Compile Include="frmmain.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="frmmain.Designer.cs">
+      <DependentUpon>frmmain.cs</DependentUpon>
+    </Compile>
+    <Compile Include="frmThongBaoDanhTuongViengTham.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="frmThongBaoDanhTuongViengTham.Designer.cs">
+      <DependentUpon>frmThongBaoDanhTuongViengTham.cs</DependentUpon>
+    </Compile>
+    <Compile Include="hook.cs" />
+    <Compile Include="HTMLParse\Attribute.cs" />
+    <Compile Include="HTMLParse\AttributeList.cs" />
+    <Compile Include="HTMLParse\FindLinks.cs" />
+    <Compile Include="HTMLParse\Parse.cs" />
+    <Compile Include="HTMLParse\ParseHTML.cs" />
+    <Compile Include="JSON\JSON.cs" />
+    <Compile Include="Login.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Login.Designer.cs">
+      <DependentUpon>Login.cs</DependentUpon>
+    </Compile>
+    <Compile Include="LVThread\ANUI.cs" />
+    <Compile Include="LVThread\AUTOBINHMAN.cs" />
+    <Compile Include="LVThread\AUTOCALLMAN.cs" />
+    <Compile Include="LVThread\AUTOFIGHTING.cs" />
+    <Compile Include="LVThread\AUTOTASK.cs" />
+    <Compile Include="LVThread\AUTOVANCHUYENVK.cs" />
+    <Compile Include="LVThread\BIENCHE.cs" />
+    <Compile Include="LVThread\BUILD.cs" />
+    <Compile Include="LVThread\BUYRES.cs" />
+    <Compile Include="LVThread\BUYWEPON.cs" />
+    <Compile Include="LVThread\CITYTASK.cs" />
+    <Compile Include="LVThread\BANTHUONG.cs" />
+    <Compile Include="LVThread\LOIDAI.cs" />
+    <Compile Include="LVThread\PHAIQUANVANDAOMO.cs" />
+    <Compile Include="LVThread\ThreadSkeleton.cs" />
+    <Compile Include="LVThread\UPDATEPRICE.cs" />
+    <Compile Include="LVThread\DEL.cs" />
+    <Compile Include="LVThread\LOADING.cs" />
+    <Compile Include="LVThread\MOVEDOANHTRAI.cs" />
+    <Compile Include="LVThread\SELL.cs" />
+    <Compile Include="LVThread\SIKHI.cs" />
+    <Compile Include="LVThread\THAOPHAT.cs" />
+    <Compile Include="LVThread\UPGRADE.cs" />
+    <Compile Include="LVThread\VANCHUYEN.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <EmbeddedResource Include="Command\CommonObj\doitrai.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>doitrai.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Command\OPTObj\Vanchuyen.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>Vanchuyen.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Command\OPTObj\wepon.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>wepon.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Control\Attack.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>Attack.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Control\War.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>War.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="frmImageCheck.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>frmImageCheck.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="frmLoading.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>frmLoading.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="frmmain.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>frmmain.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="frmThongBaoDanhTuongViengTham.resx">
+      <DependentUpon>frmThongBaoDanhTuongViengTham.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Login.resx">
+      <SubType>Designer</SubType>
+      <DependentUpon>Login.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+      <SubType>Designer</SubType>
+    </EmbeddedResource>
+    <Compile Include="Properties\Resources.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Resources.resx</DependentUpon>
+      <DesignTime>True</DesignTime>
+    </Compile>
+    <None Include="Properties\Settings.settings">
+      <Generator>SettingsSingleFileGenerator</Generator>
+      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
+    </None>
+    <Compile Include="Properties\Settings.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Settings.settings</DependentUpon>
+      <DesignTimeSharedInput>True</DesignTimeSharedInput>
+    </Compile>
+    <Compile Include="Web\Attribute.cs" />
+    <Compile Include="Web\AttributeList.cs" />
+    <Compile Include="Web\LoginInfo.cs" />
+    <Compile Include="Web\LVWeb.cs" />
+    <Compile Include="Web\Mobifone.cs" />
+    <Compile Include="Web\Parse.cs" />
+    <Compile Include="Web\ParseHeader.cs" />
+    <Compile Include="Web\ParseHTML.cs" />
+    <Compile Include="Web\SaveNLoad.cs" />
+    <Compile Include="Web\SMS.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Command\readme.txt" />
+    <Content Include="Connection\readme.txt" />
+    <Content Include="Control\readme.txt" />
+    <Content Include="JSON\readme.txt" />
+    <Content Include="LV.ico" />
+    <Content Include="LVIcon128.ico" />
+    <Content Include="MAIL18.ICO" />
+    <None Include="ClassDiagram1.cd" />
+    <None Include="ReleaseNotes.rtf" />
+    <None Include="waiting.gif" />
+    <None Include="Resources\VerifyCodexxx.gif" />
+    <None Include="Resources\VerifyCodexxx1.gif" />
+    <None Include="Resources\NoAttach.gif" />
+    <None Include="Resources\bitancong.gif" />
+    <None Include="Resources\Dangbitancong.gif" />
+    <None Include="Resources\LVIcon128.ico" />
+    <None Include="Resources\ImageLoading.png" />
+    <None Include="Resources\BackGround.jpg" />
+    <Content Include="Resources\MAIL18.ICO" />
+    <Content Include="ServerList.xml" />
+    <Content Include="Web\readme.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <COMReference Include="SHDocVw">
+      <Guid>{EAB22AC0-30C1-11CF-A7EB-0000C05BAE0B}</Guid>
+      <VersionMajor>1</VersionMajor>
+      <VersionMinor>1</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>tlbimp</WrapperTool>
+      <Isolated>False</Isolated>
+    </COMReference>
+  </ItemGroup>
+  <ItemGroup>
+    <BootstrapperPackage Include="Microsoft.Net.Client.3.5">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework Client Profile</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.2.0">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 2.0 %28x86%29</ProductName>
+      <Install>true</Install>
+    </BootstrapperPackage>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.0">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.0 %28x86%29</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.5</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.5 SP1</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Form\" />
+  </ItemGroup>
+  <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+  <PropertyGroup>
+    <PostBuildEvent>if /I "$(ConfigurationName)" == "Release" Eazfuscator.NET.exe "$(TargetPath)" --msbuild-project-path "$(ProjectPath)" --msbuild-project-configuration "$(ConfigurationName)" -n --newline-flush</PostBuildEvent>
+  </PropertyGroup>
+</Project>
