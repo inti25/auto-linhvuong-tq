@@ -11,6 +11,7 @@ Reverse engineered chính xác từ ZBuild.exe:
   7. Tự động An Dân khôi phục sĩ khí/lòng dân: OPT.ashx?id=4 (lType=1, tid).
 """
 
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -69,6 +70,82 @@ RESOURCE_BOX_NAMES = {
 DEFAULT_FALLBACK_BOX_ORDER = [24, 16, 11, 1]
 
 
+def parse_boost_remaining_time(resp: dict, city_id: int = 0) -> int:
+    """Trích xuất thời gian còn lại (giây) của DS kiến trúc từ response Common.ashx?id=77."""
+    if not isinstance(resp, dict):
+        return 0
+
+    plus_finish = None
+
+    # 1. Kiểm tra trường plus_finish ở root (nếu có)
+    if "plus_finish" in resp and resp["plus_finish"] not in (None, "", 0, "0"):
+        plus_finish = resp["plus_finish"]
+
+    # 2. Kiểm tra danh sách thành trong resp["list"]
+    if plus_finish is None or plus_finish == 0:
+        city_list = resp.get("list", [])
+        target_city = None
+        for c_info in city_list:
+            if isinstance(c_info, dict):
+                c_cid = c_info.get("cid") or c_info.get("id") or c_info.get("city_id")
+                if not city_id or str(c_cid) == str(city_id):
+                    target_city = c_info
+                    break
+            elif isinstance(c_info, (list, tuple)) and len(c_info) >= 4:
+                if not city_id or str(c_info[0]) == str(city_id):
+                    target_city = c_info
+                    break
+
+        if target_city is None and city_list:
+            target_city = city_list[0]
+
+        if isinstance(target_city, dict):
+            plus_finish = (
+                target_city.get("plus_finish")
+                or target_city.get("val3")
+                or target_city.get("time_left")
+                or 0
+            )
+        elif isinstance(target_city, (list, tuple)) and len(target_city) >= 4:
+            # [city_id, name, val2, val3, ...]
+            # val3: thời hạn 建筑排程 (DS kiến trúc - 3 vị trí), val2: 20% speedup
+            val2 = target_city[2]
+            val3 = target_city[3]
+            if val3 not in (None, "", 0, "0"):
+                plus_finish = val3
+            elif val2 not in (None, "", 0, "0"):
+                plus_finish = val2
+            else:
+                plus_finish = 0
+
+    if plus_finish is None:
+        return 0
+
+    # 3. Chuyển đổi định dạng plus_finish sang số giây còn lại
+    if isinstance(plus_finish, str) and ":" in plus_finish:
+        parts = [p.strip() for p in plus_finish.split(":")]
+        if len(parts) == 3:
+            try:
+                return max(0, int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
+            except ValueError:
+                return 0
+        elif len(parts) == 2:
+            try:
+                return max(0, int(parts[0]) * 60 + int(parts[1]))
+            except ValueError:
+                return 0
+        return 0
+
+    try:
+        val = int(plus_finish)
+    except (ValueError, TypeError):
+        return 0
+
+    if val > 1_000_000_000:
+        return max(0, int(val - time.time()))
+    return max(0, val)
+
+
 @dataclass
 class BuildingPlan:
     pid: int  # Vị trí ô đất trong thành (1..32)
@@ -83,6 +160,8 @@ class BuildingPlan:
 
 
 class BuildingTask:
+    _last_boost_act_time: float = 0.0
+
     def __init__(
         self,
         gateway: GatewayClient,
@@ -136,21 +215,38 @@ class BuildingTask:
             self.notify(msg)
 
     def check_and_activate_boost(self) -> bool:
-        """Kiểm tra thời gian tăng tốc xây dựng 20% (plus_finish), kích hoạt nếu hết hạn."""
-        resp = self.gateway.call("Common.ashx", 77, {"cid": "0", "_": ""}) or {}
+        """Kiểm tra thời gian DS kiến trúc (xây 3 nhà), kích hoạt nếu hết hạn."""
+        if not self.auto_boost:
+            return True
+
+        resp = self.gateway.call("Common.ashx", 77, {"cid": str(self.city_id), "_": ""}) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
-        plus_finish = int(resp.get("plus_finish", 0))
-        if plus_finish <= 0 and self.auto_boost:
-            self._log("⚡ Kích hoạt hiệu ứng tăng tốc xây dựng 20%...")
+        remaining = parse_boost_remaining_time(resp, self.city_id)
+        if remaining <= 0:
+            now_ts = time.time()
+            if now_ts - BuildingTask._last_boost_act_time < 60:
+                # Đang trong thời gian chờ sau lần kích hoạt gần nhất (tránh kích hoạt lặp giữa các thành)
+                return True
+
+            BuildingTask._last_boost_act_time = now_ts
+            self._log("⚡ DS kiến trúc đã hết hạn. Đang tự kích hoạt lại (3 vị trí thi công)...")
             boost_resp = self.gateway.call(
                 "OPT.ashx",
                 69,
-                {"type": "3", "param1": "0", "param2": "0", "paytype": "2"},
+                {"type": "3", "param1": "0", "param2": "0", "paytype": "2", "_": ""},
             ) or {}
-            return boost_resp.get("ret", RET_OK) == RET_OK
+            ret = boost_resp.get("ret", RET_OK)
+            if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+                raise CaptchaRequired()
+            if ret == RET_OK:
+                self._log("✅ Kích hoạt thành công DS kiến trúc (3 vị trí thi công)!")
+                return True
+            else:
+                self._log(f"⚠️ Kích hoạt DS kiến trúc thất bại (mã {ret}).")
+                return False
         return True
 
     def check_and_comfort_city(self) -> bool:

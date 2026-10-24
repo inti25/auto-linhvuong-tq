@@ -1028,3 +1028,151 @@ def test_building_task_opens_one_box_when_all_starved_then_retries_from_top_in_p
     assert opt_calls[0]["pid"] == "1"
     assert opt_calls[1]["pid"] == "2"
     assert opt_calls[2]["pid"] == "1"
+
+
+def test_building_task_does_not_activate_boost_when_already_active():
+    BuildingTask._last_boost_act_time = 0.0
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                # Real Linh Vương server format: [city_id, name, val2, val3, [upgrades], [techs]]
+                # val3 is DS kiến trúc (remaining seconds > 0, e.g. "2234:39:14")
+                "list": [[101, "NB", 596952, "2234:39:14", [], []]],
+            },
+            "City.ashx?id=5": {
+                "ret": 0,
+                "buildings": [{"pid": 1, "gid": 1, "level": 10}],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=12, name="Quan Phủ")]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        auto_comfort=False,
+        auto_boost=True,  # Bật DS kiến trúc
+    )
+    res = task.run_once()
+    assert res == "upgrading"
+
+    # Khi DS kiến trúc còn hạn ("2234:39:14" > 0), tuyệt đối KHÔNG gọi kích hoạt OPT.ashx?id=69 (type=3)
+    boost_calls = [d for k, d in server.calls if k == "OPT.ashx?id=69" and d.get("type") == "3"]
+    assert len(boost_calls) == 0, f"DS kiến trúc đang còn hạn nhưng lại bị kích hoạt! Calls: {boost_calls}"
+
+
+def test_parse_boost_remaining_time_various_formats():
+    from linhvuong.tasks.building import parse_boost_remaining_time
+
+    # 1. String HH:MM:SS (e.g. user screenshot 2234:39:14)
+    resp = {"ret": 0, "list": [[101, "NB", 0, "2234:39:14", []]]}
+    assert parse_boost_remaining_time(resp, 101) == 2234 * 3600 + 39 * 60 + 14
+
+    # 2. String MM:SS
+    resp = {"ret": 0, "list": [[101, "NB", 0, "39:14", []]]}
+    assert parse_boost_remaining_time(resp, 101) == 39 * 60 + 14
+
+    # 3. Numeric integer seconds
+    resp = {"ret": 0, "list": [[101, "NB", 0, 3600, []]]}
+    assert parse_boost_remaining_time(resp, 101) == 3600
+
+    # 4. Fallback to val2 (20% speedup) if val3 is 0
+    resp = {"ret": 0, "list": [[101, "NB", 1800, 0, []]]}
+    assert parse_boost_remaining_time(resp, 101) == 1800
+
+    # 5. Dict list
+    resp = {"ret": 0, "list": [{"cid": 101, "val3": "10:20:30"}]}
+    assert parse_boost_remaining_time(resp, 101) == 10 * 3600 + 20 * 60 + 30
+
+    # 6. Target city not in list (e.g. camp ID), fallback to first city
+    resp = {"ret": 0, "list": [[101, "NB", 0, 7200, []]]}
+    assert parse_boost_remaining_time(resp, 999) == 7200
+
+    # 7. Expired cases
+    assert parse_boost_remaining_time({"ret": 0, "list": [[101, "NB", 0, 0, []]]}, 101) == 0
+    assert parse_boost_remaining_time({"ret": 0, "list": [[101, "NB", "0", "00:00:00", []]]}, 101) == 0
+    assert parse_boost_remaining_time({"ret": 0, "list": []}, 101) == 0
+    assert parse_boost_remaining_time({}, 101) == 0
+
+
+def test_building_task_activates_boost_when_expired():
+    BuildingTask._last_boost_act_time = 0.0
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                # Expired: val3 = 0, val2 = 0
+                "list": [[101, "NB", 0, 0, [], []]],
+            },
+            "City.ashx?id=5": {
+                "ret": 0,
+                "buildings": [{"pid": 1, "gid": 1, "level": 10}],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=12, name="Quan Phủ")]
+    task = BuildingTask(
+        gw,
+        city_id=101,
+        plans=plans,
+        auto_comfort=False,
+        auto_boost=True,
+    )
+    res = task.run_once()
+    assert res == "upgrading"
+
+    # Khi DS kiến trúc hết hạn, kích hoạt OPT.ashx?id=69 (type=3) đúng 1 lần
+    boost_calls = [d for k, d in server.calls if k == "OPT.ashx?id=69" and d.get("type") == "3"]
+    assert len(boost_calls) == 1
+    assert boost_calls[0]["paytype"] == "2"
+
+
+def test_building_task_cooldown_prevents_multiple_activations():
+    BuildingTask._last_boost_act_time = 0.0
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [
+                    [101, "City 1", 0, 0, [], []],
+                    [102, "City 2", 0, 0, [], []],
+                ],
+            },
+            "City.ashx?id=5": {
+                "ret": 0,
+                "buildings": [{"pid": 1, "gid": 1, "level": 10}],
+            },
+            "OPT.ashx?id=65": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    task1 = BuildingTask(
+        gw,
+        city_id=101,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=12, name="Quan Phủ")],
+        auto_comfort=False,
+        auto_boost=True,
+    )
+    task2 = BuildingTask(
+        gw,
+        city_id=102,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=12, name="Quan Phủ")],
+        auto_comfort=False,
+        auto_boost=True,
+    )
+
+    # Chạy lần 1 cho thành 1 -> kích hoạt
+    task1.run_once()
+    # Chạy lần 2 cho thành 2 ngay sau đó -> bị cooldown 60s chặn lại, KHÔNG được kích hoạt lần 2
+    task2.run_once()
+
+    boost_calls = [d for k, d in server.calls if k == "OPT.ashx?id=69" and d.get("type") == "3"]
+    assert len(boost_calls) == 1, f"DS kiến trúc bị kích hoạt nhiều lần: {len(boost_calls)} lần"

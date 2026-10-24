@@ -30,7 +30,7 @@ from .scan import Scanner
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import BinhMan
 from .tasks.di_trai import DiTrai
-from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask
+from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask, parse_boost_remaining_time
 from .tasks.goi_dan import GoiDan, VONG_LINH
 from .tasks.logistics import ArmyTransferOrder, LogisticsTask
 from .tasks.research import ResearchTask, TECH_NAMES, TechPlan
@@ -2348,69 +2348,7 @@ class Dashboard(tk.Tk):
             try:
                 city_id = getattr(self, "_current_bld_city_id", 0) or 0
                 resp = self.gateway.call("Common.ashx", 77, {"cid": str(city_id), "_": ""}) or {}
-                plus_finish = 0
-
-                # 1. Kiểm tra trường plus_finish ở root (nếu có)
-                if "plus_finish" in resp:
-                    try:
-                        plus_finish = int(resp["plus_finish"])
-                    except (ValueError, TypeError):
-                        plus_finish = 0
-
-                # 2. Kiểm tra danh sách thành trong resp["list"]
-                if plus_finish <= 0:
-                    city_list = resp.get("list", [])
-                    target_city = None
-                    for c_info in city_list:
-                        if isinstance(c_info, dict):
-                            c_cid = c_info.get("cid") or c_info.get("id") or c_info.get("city_id")
-                            if not city_id or c_cid == city_id:
-                                target_city = c_info
-                                break
-                        elif isinstance(c_info, (list, tuple)) and len(c_info) >= 4:
-                            if not city_id or c_info[0] == city_id:
-                                target_city = c_info
-                                break
-
-                    if target_city is None and city_list:
-                        target_city = city_list[0]
-
-                    if isinstance(target_city, dict):
-                        plus_finish = target_city.get("plus_finish") or target_city.get("time_left") or 0
-                    elif isinstance(target_city, (list, tuple)) and len(target_city) >= 4:
-                        # [city_id, name, val2, val3, ...]
-                        # val3: thời hạn 建筑排程 (DS kiến trúc), val2: 20% speedup
-                        val2 = target_city[2]
-                        val3 = target_city[3]
-                        try:
-                            val3 = int(val3)
-                        except (ValueError, TypeError):
-                            val3 = 0
-                        try:
-                            val2 = int(val2)
-                        except (ValueError, TypeError):
-                            val2 = 0
-                        plus_finish = val3 if val3 > 0 else val2
-
-                now = time.time()
-                remaining = 0
-                if isinstance(plus_finish, str) and ":" in plus_finish:
-                    # Hỗ trợ định dạng chuỗi "2234:39:14"
-                    parts = plus_finish.split(":")
-                    if len(parts) == 3:
-                        try:
-                            remaining = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-                        except ValueError:
-                            remaining = 0
-                else:
-                    try:
-                        plus_finish = int(plus_finish)
-                    except (ValueError, TypeError):
-                        plus_finish = 0
-                    if plus_finish > 1_000_000_000:
-                        remaining = max(0, int(plus_finish - now))
-                    elif plus_finish > 0:
-                        remaining = plus_finish
+                remaining = parse_boost_remaining_time(resp, city_id)
 
                 def _update_ui(text, fg):
                     if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
@@ -2438,10 +2376,14 @@ class Dashboard(tk.Tk):
                             pass
                     if self.aux_boost_var.get():
                         now_ts = time.time()
-                        last_act = getattr(self, "_last_boost_act_time", 0)
+                        last_act = max(
+                            getattr(self, "_last_boost_act_time", 0),
+                            getattr(BuildingTask, "_last_boost_act_time", 0),
+                        )
                         if now_ts - last_act > 60:
                             self._last_boost_act_time = now_ts
-                            msg = "⚡ DS kiến trúc đã hết hạn. Đang tự kích hoạt lại (xây 3 nhà)..."
+                            BuildingTask._last_boost_act_time = now_ts
+                            msg = "⚡ DS kiến trúc đã hết hạn. Đang tự kích hoạt lại (3 vị trí thi công)..."
                             if threading.current_thread() is threading.main_thread():
                                 self._append_bld_log(msg)
                             else:
@@ -2456,7 +2398,7 @@ class Dashboard(tk.Tk):
                             ) or {}
                             ret = act_resp.get("ret", 0)
                             if ret == 0:
-                                ok_msg = "✅ Kích hoạt thành công DS kiến trúc (3 vị trí xây dựng)!"
+                                ok_msg = "✅ Kích hoạt thành công DS kiến trúc (3 vị trí thi công)!"
                                 if threading.current_thread() is threading.main_thread():
                                     self._append_bld_log(ok_msg)
                                 else:
@@ -2484,6 +2426,14 @@ class Dashboard(tk.Tk):
             return t
         else:
             run_check()
+
+    def _schedule_periodic_boost_check(self):
+        try:
+            if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
+                self._check_and_update_boost_status(async_check=True)
+                self.after(60000, self._schedule_periodic_boost_check)
+        except (RuntimeError, tk.TclError):
+            pass
 
     def _do_relogin(self):
         if not self.gateway:
@@ -3004,6 +2954,7 @@ class Dashboard(tk.Tk):
             return
         self._save_current_bld_tree_to_cache()
         self._current_bld_city_id = new_base_id
+        self._check_and_update_boost_status(async_check=True)
 
         base_name = f"Căn cứ {new_base_id}"
         if hasattr(self, "bld_bases_tree") and self.bld_bases_tree.exists(str(new_base_id)):
@@ -3902,6 +3853,7 @@ class Dashboard(tk.Tk):
                 if hasattr(self, "bld_queue_frame"):
                     self.bld_queue_frame.configure(text=f"Hàng Đợi Quy Hoạch: {first_base.name}")
             self._check_and_update_boost_status()
+            self._schedule_periodic_boost_check()
 
         # Cập nhật Combobox
         all_base_items = [b.display_name for b in roster.bases]
