@@ -76,3 +76,38 @@ def test_cli_main_once_mode(tmp_path, monkeypatch):
         assert ret == 0
         mock_login.assert_called_once()
         mock_run.assert_called_once()
+
+
+def test_cli_main_with_profile(tmp_path, monkeypatch):
+    from linhvuong.profile import CityBuildingConfig, Profile, ProfileStore
+
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "server": 57,
+                "username": "user1",
+                "password": "pwd",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prof = Profile()
+    prof.building.slots = 4
+    prof.building.cities["2001"] = CityBuildingConfig(
+        name="Thành Phố Mới",
+        enabled=True,
+        plans=[{"pid": 3, "gid": 4, "target_level": 15, "name": "Kho"}],
+    )
+    prof_file = tmp_path / "auto_profile.json"
+    ProfileStore.save(prof, prof_file)
+
+    with patch("linhvuong.cli.login") as mock_login, patch(
+        "linhvuong.tasks.building.BuildingTask.run_once", return_value="boost_activated"
+    ) as mock_run:
+        ret = main(["build", "--config", str(cfg_file), "--profile", str(prof_file), "--once"])
+        assert ret == 0
+        mock_login.assert_called_once()
+        mock_run.assert_called_once()
+

@@ -31,8 +31,10 @@ from .battle import (
     CombatConfig,
 )
 from .gateway import GatewayClient
+from .engine import AutomationEngine, TaskStatus
 from .locks import TargetLocks
 from .logger import open_logs_directory, setup_logger
+from .profile import Profile, ProfileStore
 
 logger = logging.getLogger("linhvuong.dashboard")
 from .roster import Army, City, General, Roster, fetch_roster
@@ -338,7 +340,8 @@ class Dashboard(tk.Tk):
         self._results = queue.Queue()
         self._generals = {}
 
-        # Trạng thái các luồng Task
+        # Trạng thái các luồng Task & Động cơ điều phối tập trung (ADR-0021)
+        self.engine = AutomationEngine()
         self._tp_running = False
         self._tp_runner = None
         self._gd_runner = None
@@ -1039,8 +1042,9 @@ class Dashboard(tk.Tk):
     def _save_unified_profile(self, filepath: Optional[Path] = None) -> Path:
         def_name = getattr(self, "default_profile_name", "auto_profile.json")
         target = filepath or Path(self.profile_path_var.get() if hasattr(self, "profile_path_var") and self.profile_path_var.get() else def_name)
-        profile = self._collect_unified_profile()
-        target.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+        profile_dict = self._collect_unified_profile()
+        prof = Profile.from_dict(profile_dict)
+        target = ProfileStore.save(prof, target)
         if hasattr(self, "profile_path_var"):
             self.profile_path_var.set(target.name)
         return target
@@ -1051,8 +1055,8 @@ class Dashboard(tk.Tk):
         if not target.exists():
             return False, f"Không tìm thấy file: {target.name}"
         try:
-            data = json.loads(target.read_text(encoding="utf-8"))
-            sections = self._apply_unified_profile(data)
+            prof = ProfileStore.load(target)
+            sections = self._apply_unified_profile(prof.to_dict())
             if hasattr(self, "profile_path_var"):
                 self.profile_path_var.set(target.name)
             return True, f"Đã nạp thành công các phân hệ: {', '.join(sections)}"
@@ -4497,3 +4501,11 @@ class Dashboard(tk.Tk):
             engine.change_target_attack(battle_id, our.position, dest, action=3)
         self._append_bt_log("🛡️ Đã chuyển toàn bộ quân ta sang thế Phòng ngự (action 3)")
         self._bt_load_battle()
+
+    def destroy(self):
+        try:
+            if hasattr(self, "engine"):
+                self.engine.stop_all()
+        except Exception:
+            pass
+        super().destroy()

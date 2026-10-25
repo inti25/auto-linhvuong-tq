@@ -98,7 +98,7 @@ def test_apply_proxy_to_session():
 
 def test_login_raises_login_error_on_proxy_failure():
     session = requests.Session()
-    session.get = MagicMock(
+    session.post = MagicMock(
         side_effect=requests.exceptions.ProxyError("Cannot connect to proxy")
     )
     with pytest.raises(LoginError) as exc_info:
@@ -116,9 +116,45 @@ def test_login_raises_login_error_on_proxy_failure():
 
 def test_login_raises_login_error_on_proxy_timeout():
     session = requests.Session()
-    session.get = MagicMock(
+    session.post = MagicMock(
         side_effect=requests.exceptions.ConnectTimeout("Connection timed out")
     )
     with pytest.raises(LoginError) as exc_info:
         login(session, 53, "testuser", "testpass", proxy="socks5://127.0.0.1:1080")
     assert "Lỗi kết nối Proxy" in str(exc_info.value)
+
+
+def test_login_success():
+    session = requests.Session()
+    mock_post_resp = MagicMock()
+    mock_post_resp.text = "登录成功"
+    session.post = MagicMock(return_value=mock_post_resp)
+    mock_get_resp = MagicMock()
+    session.get = MagicMock(return_value=mock_get_resp)
+
+    login(session, 57, "validuser", "validpass")
+    session.post.assert_called_once()
+    session.get.assert_called_once_with("http://sg57.dipan.com/login", timeout=30)
+
+
+def test_login_invalid_credentials_error():
+    session = requests.Session()
+    mock_post_resp = MagicMock()
+    mock_post_resp.text = 'id="lbl_Error">登录失败：用户名或密码不正确。</span>'
+    session.post = MagicMock(return_value=mock_post_resp)
+
+    with pytest.raises(LoginError) as exc_info:
+        login(session, 57, "inti00", "wrongpass")
+    assert "Sai tên tài khoản hoặc mật khẩu" in str(exc_info.value)
+
+
+def test_login_captcha_required_error():
+    session = requests.Session()
+    mock_post_resp = MagicMock()
+    mock_post_resp.text = 'id="lbl_Error">登录失败：验证码不正确。</span>'
+    session.post = MagicMock(return_value=mock_post_resp)
+
+    with pytest.raises(LoginError) as exc_info:
+        login(session, 57, "inti00", "anypass")
+    assert "Captcha" in str(exc_info.value)
+

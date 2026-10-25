@@ -23,6 +23,7 @@ from .auth import LoginError, login
 from .gateway import GatewayClient
 from .locks import TargetLocks
 from .logger import setup_logger
+from .profile import Profile, ProfileStore
 from .scan import Scanner
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import BinhMan
@@ -34,7 +35,10 @@ from .tasks.thao_phat import ThaoPhat
 
 
 def load_build_task(
-    gateway: GatewayClient, cfg: dict, plan_path_arg: Optional[str] = None
+    gateway: GatewayClient,
+    cfg: dict,
+    plan_path_arg: Optional[str] = None,
+    profile: Optional[Profile] = None,
 ) -> BuildingTask:
     plan_path = plan_path_arg or cfg.get("build_plans_file")
     plans = []
@@ -42,21 +46,23 @@ def load_build_task(
     auto_boost = cfg.get("auto_boost", False)
     auto_speedup = cfg.get("auto_speedup", False)
     auto_comfort = cfg.get("auto_comfort", True)
+    auto_open_box = cfg.get("auto_open_box", False)
+    even_upgrade = cfg.get("even_upgrade", False)
+    max_slots = cfg.get("max_slots", 3)
 
-    if not plan_path:
-        for candidate in ("build_plans.json", "build_plans.example.json"):
-            if Path(candidate).exists():
-                plan_path = candidate
-                break
+    if profile and profile.building:
+        b_prof = profile.building
+        max_slots = b_prof.slots
+        auto_boost = b_prof.auto_boost
+        auto_speedup = b_prof.auto_speedup
+        auto_comfort = b_prof.auto_comfort
+        auto_open_box = b_prof.auto_open_box
+        even_upgrade = b_prof.even_upgrade
 
-    if plan_path and Path(plan_path).exists():
-        with open(plan_path, encoding="utf-8") as f:
-            data = json.load(f)
-        cities = data.get("cities", {})
         target_cid_str = str(city_id) if city_id else ""
-        if target_cid_str and target_cid_str in cities:
-            cdata = cities[target_cid_str]
-            for p in cdata.get("plans", []):
+        if target_cid_str and target_cid_str in b_prof.cities:
+            cdata = b_prof.cities[target_cid_str]
+            for p in cdata.plans:
                 plans.append(
                     BuildingPlan(
                         pid=int(p["pid"]),
@@ -65,10 +71,22 @@ def load_build_task(
                         name=p.get("name", ""),
                     )
                 )
-        elif cities:
-            first_cid, cdata = next(iter(cities.items()))
-            city_id = int(first_cid)
-            for p in cdata.get("plans", []):
+        elif b_prof.cities:
+            for cid_str, cdata in b_prof.cities.items():
+                if cdata.enabled and cdata.plans:
+                    city_id = int(cid_str)
+                    for p in cdata.plans:
+                        plans.append(
+                            BuildingPlan(
+                                pid=int(p["pid"]),
+                                gid=int(p["gid"]),
+                                target_level=int(p["target_level"]),
+                                name=p.get("name", ""),
+                            )
+                        )
+                    break
+        elif b_prof.plans:
+            for p in b_prof.plans:
                 plans.append(
                     BuildingPlan(
                         pid=int(p["pid"]),
@@ -77,54 +95,112 @@ def load_build_task(
                         name=p.get("name", ""),
                     )
                 )
+
+    if not plans:
+        if not plan_path:
+            for candidate in ("build_plans.json", "build_plans.example.json"):
+                if Path(candidate).exists():
+                    plan_path = candidate
+                    break
+
+        if plan_path and Path(plan_path).exists():
+            with open(plan_path, encoding="utf-8") as f:
+                data = json.load(f)
+            cities = data.get("cities", {})
+            target_cid_str = str(city_id) if city_id else ""
+            if target_cid_str and target_cid_str in cities:
+                cdata = cities[target_cid_str]
+                for p in cdata.get("plans", []):
+                    plans.append(
+                        BuildingPlan(
+                            pid=int(p["pid"]),
+                            gid=int(p["gid"]),
+                            target_level=int(p["target_level"]),
+                            name=p.get("name", ""),
+                        )
+                    )
+            elif cities:
+                first_cid, cdata = next(iter(cities.items()))
+                city_id = int(first_cid)
+                for p in cdata.get("plans", []):
+                    plans.append(
+                        BuildingPlan(
+                            pid=int(p["pid"]),
+                            gid=int(p["gid"]),
+                            target_level=int(p["target_level"]),
+                            name=p.get("name", ""),
+                        )
+                    )
 
     return BuildingTask(
         gateway=gateway,
         city_id=city_id,
         plans=plans,
-        max_slots=cfg.get("max_slots", 3),
+        max_slots=max_slots,
         auto_speedup=auto_speedup,
         paytype=cfg.get("paytype", 1),
         auto_comfort=auto_comfort,
         auto_boost=auto_boost,
-        even_upgrade=cfg.get("even_upgrade", False),
+        auto_open_box=auto_open_box,
+        even_upgrade=even_upgrade,
     )
 
 
 def load_research_task(
-    gateway: GatewayClient, cfg: dict, plan_path_arg: Optional[str] = None
+    gateway: GatewayClient,
+    cfg: dict,
+    plan_path_arg: Optional[str] = None,
+    profile: Optional[Profile] = None,
 ) -> ResearchTask:
     plan_path = plan_path_arg or cfg.get("tech_plans_file")
     plans = []
     city_id = cfg.get("research_city_id", cfg.get("city_id", 0))
     auto_art = cfg.get("auto_art_of_war", False)
+    even_research = cfg.get("even_research", False)
 
-    if not plan_path:
-        for candidate in ("tech_plans.json", "tech_plans.example.json"):
-            if Path(candidate).exists():
-                plan_path = candidate
-                break
-
-    if plan_path and Path(plan_path).exists():
-        with open(plan_path, encoding="utf-8") as f:
-            data = json.load(f)
-        city_id = data.get("research_city_id", city_id)
-        auto_art = data.get("auto_art_of_war", auto_art)
-        for p in data.get("plans", []):
-            plans.append(
-                TechPlan(
-                    tech_id=int(p["tech_id"]),
-                    target_level=int(p["target_level"]),
-                    name=p.get("name", ""),
+    if profile and profile.research:
+        r_prof = profile.research
+        auto_art = r_prof.art_speedup
+        even_research = r_prof.even_research
+        if r_prof.city_id:
+            city_id = r_prof.city_id
+        for p in r_prof.techs:
+            if p.get("enabled", True):
+                plans.append(
+                    TechPlan(
+                        tech_id=int(p.get("id") or p.get("tech_id", 1)),
+                        target_level=int(p.get("target_level", 20)),
+                        name=p.get("name", ""),
+                    )
                 )
-            )
+
+    if not plans:
+        if not plan_path:
+            for candidate in ("tech_plans.json", "tech_plans.example.json"):
+                if Path(candidate).exists():
+                    plan_path = candidate
+                    break
+
+        if plan_path and Path(plan_path).exists():
+            with open(plan_path, encoding="utf-8") as f:
+                data = json.load(f)
+            city_id = data.get("research_city_id", city_id)
+            auto_art = data.get("auto_art_of_war", auto_art)
+            for p in data.get("plans", []):
+                plans.append(
+                    TechPlan(
+                        tech_id=int(p["tech_id"]),
+                        target_level=int(p["target_level"]),
+                        name=p.get("name", ""),
+                    )
+                )
 
     return ResearchTask(
         gateway=gateway,
         city_id=city_id,
         plans=plans,
         auto_art_of_war=auto_art,
-        even_research=cfg.get("even_research", False),
+        even_research=even_research,
     )
 
 
@@ -154,12 +230,13 @@ def build_task(
     cfg: dict,
     build_plans_path: Optional[str] = None,
     tech_plans_path: Optional[str] = None,
+    profile: Optional[Profile] = None,
 ):
     if name in ("build", "xay-dung"):
-        return load_build_task(ctx.gateway, cfg, build_plans_path)
+        return load_build_task(ctx.gateway, cfg, build_plans_path, profile=profile)
 
     if name in ("research", "dai-hoc"):
-        return load_research_task(ctx.gateway, cfg, tech_plans_path)
+        return load_research_task(ctx.gateway, cfg, tech_plans_path, profile=profile)
 
     if name in ("logistics", "hau-can"):
         return load_logistics_task(ctx.gateway, cfg)
@@ -217,6 +294,7 @@ def main(argv=None) -> int:
         help="Nhiệm vụ cần thực hiện",
     )
     ap.add_argument("--config", default="config.json", help="File cấu hình chính")
+    ap.add_argument("--profile", default=None, help="Hồ Sơ Cấu Hình tổng hợp (auto_profile.json)")
     ap.add_argument("--build-plans", default=None, help="File cấu hình quy hoạch xây dựng (build_plans.json)")
     ap.add_argument("--tech-plans", default=None, help="File cấu hình quy hoạch đại học (tech_plans.json)")
     ap.add_argument("--once", action="store_true", help="Chỉ chạy 1 lượt rồi thoát")
@@ -233,6 +311,23 @@ def main(argv=None) -> int:
     server_id = cfg.get("server", 0)
     setup_logger(username=username, server_id=server_id, debug=args.debug, console=True)
     logger = logging.getLogger(f"linhvuong.cli.{args.task}")
+
+    # Nạp Hồ Sơ Cấu Hình tổng hợp nếu có (ADR-0006 & ADR-0021)
+    profile = None
+    prof_path = None
+    if args.profile:
+        prof_path = Path(args.profile)
+    else:
+        candidate_prof = ProfileStore.resolve_profile_path(username=username, server_id=server_id)
+        if candidate_prof.exists():
+            prof_path = candidate_prof
+
+    if prof_path and prof_path.exists():
+        try:
+            profile = ProfileStore.load(prof_path)
+            logger.info(f"📂 Đã nạp Hồ Sơ Cấu Hình: {prof_path.name}")
+        except Exception as e:
+            logger.warning(f"Không thể nạp hồ sơ cấu hình {prof_path}: {e}")
 
     password = os.environ.get("LINHVUONG_PASSWORD") or cfg.get("password")
     if not password:
@@ -281,7 +376,7 @@ def main(argv=None) -> int:
         gateway, locks, delay=cfg.get("scan_delay", 0.2), step=cfg.get("scan_step", 5)
     )
     ctx = TaskContext(gateway, scanner, locks)
-    task = build_task(args.task, ctx, cfg, args.build_plans, args.tech_plans)
+    task = build_task(args.task, ctx, cfg, args.build_plans, args.tech_plans, profile=profile)
 
     try:
         while True:

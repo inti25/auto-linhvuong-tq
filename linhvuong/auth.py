@@ -123,18 +123,26 @@ def login(
         apply_proxy_to_session(session, proxy, username=proxy_user, password=proxy_pass)
 
     try:
-        resp = session.get(
+        resp = session.post(
             LOGIN_URL,
-            params={
+            data={
                 "LoginType1": 0,
                 "UserName1": username,
                 "Password1": password,
                 "callback": f"http://sg{server_id}.dipan.com",
             },
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": LOGIN_URL,
+            },
             timeout=30,
         )
         if "登录成功" not in resp.text:
-            raise LoginError("Sai tài khoản hoặc mật khẩu.")
+            if "验证码不正确" in resp.text:
+                raise LoginError("Đăng nhập thất bại: Máy chủ yêu cầu mã xác nhận (Captcha) hoặc tài khoản bị tạm khóa kiểm tra.")
+            if "用户名或密码不正确" in resp.text:
+                raise LoginError("Đăng nhập thất bại: Sai tên tài khoản hoặc mật khẩu.")
+            raise LoginError("Đăng nhập thất bại: Sai tài khoản hoặc mật khẩu.")
         session.get(f"http://sg{server_id}.dipan.com/login", timeout=30)
     except LoginError:
         raise

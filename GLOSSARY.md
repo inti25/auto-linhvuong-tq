@@ -258,6 +258,18 @@ _Avoid_: Giữ boss thụ động, không đánh boss từ đầu
 Quy tắc tự động kích hoạt mưu kế Kim thiền thoát xác (`OPT.ashx?id=70`, `lPlusFunc=92`) khi quân số hoặc thể lực của tướng rơi xuống dưới Ngưỡng An Toàn, nhằm rút lui bảo toàn 100% sĩ khí và quân lực còn lại mà không chịu phạt bại trận.
 _Avoid_: Emergency retreat, chạy trốn
 
+**Kho Lưu Trữ Hồ Sơ** (`ProfileStore`):
+Module miền độc lập chịu trách nhiệm nạp, ghi nguyên tử (`atomic write-and-replace`), kiểm định lược đồ và chuyển đổi trạng thái của Hồ Sơ Cấu Hình tổng hợp (`auto_profile_{username}_{server_id}.json`) mà không phụ thuộc vào giao diện Tkinter, phục vụ dùng chung cho cả UI, CLI và bộ kiểm thử tự động.
+_Avoid_: Config parser, profile manager, json helper
+
+**Động Cơ Điều Phối Tác Vụ** (`AutomationEngine`):
+Module điều hành vòng đời thực thi nền tập trung cho tất cả các phân hệ tự động hóa (Thảo Phạt, Xây Dựng, Nghiên Cứu, Bình Man, Gọi Dân), quản lý luồng chạy ngầm, áp dụng Độ Trễ Ngẫu Nhiên, phát hiện và tạm dừng khi gặp Captcha qua một giao diện thống nhất duy nhất (`start`, `stop`, `status`, `resume`).
+_Avoid_: ThreadManager, RunnerPool, task daemon
+
+**Tác Vụ Tự Động Hóa** (`ExecutableTask`):
+Seam chuẩn hóa cho mọi nhiệm vụ có thể thực thi tuần tự trong bot, cung cấp phương thức `run_step() -> str` và `reset()` để Động Cơ Điều Phối Tác Vụ có thể vận hành đa hình mà không cần biết chi tiết logic nội tại của từng nghiệp vụ.
+_Avoid_: Runnable, TaskWrapper, WorkerJob
+
 
 
 

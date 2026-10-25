@@ -51,9 +51,15 @@ class LogisticsTask:
 
         troops_map = {}
         for item in resp.get("list", []):
-            gid = int(item.get("gid", 0))
-            count = int(item.get("count", 0))
-            troops_map[gid] = count
+            if isinstance(item, dict):
+                gid = int(item.get("gid", 0))
+                count = int(item.get("count", 0))
+                troops_map[gid] = count
+            elif isinstance(item, (list, tuple)) and len(item) >= 3:
+                try:
+                    troops_map[int(item[0])] = int(item[2])
+                except (ValueError, TypeError):
+                    pass
         return troops_map
 
     def transfer_army(self, order: ArmyTransferOrder) -> bool:
