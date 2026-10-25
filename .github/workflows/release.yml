@@ -1,0 +1,121 @@
+name: Build & Release Windows Exe
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tên Tag Release (ví dụ: v1.0.0; để trống nếu chỉ build artifact)'
+        required: false
+        default: ''
+      draft:
+        description: 'Tạo bản nháp (Draft Release)'
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Tạo bản thử nghiệm (Pre-release)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release Executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev] pyinstaller
+
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/test_tasks.py tests/test_battle.py tests/test_building.py tests/test_roster.py tests/test_logistics.py tests/test_thao_phat.py
+
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller LinhVuong.spec --clean --noconfirm
+
+      - name: Prepare Release Package & Checksums
+        id: package
+        shell: pwsh
+        run: |
+          $ver = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } elseif ($env:INPUT_RELEASE_TAG) { $env:INPUT_RELEASE_TAG } else { "latest" }
+          $zipName = "LinhVuong-$ver-win64.zip"
+
+          # Tạo thư mục đóng gói phân phối
+          New-Item -ItemType Directory -Path "dist/package" -Force | Out-Null
+          Copy-Item "dist/LinhVuong.exe" -Destination "dist/package/"
+          if (Test-Path "config.example.json") { Copy-Item "config.example.json" -Destination "dist/package/" }
+          if (Test-Path "build_plans.example.json") { Copy-Item "build_plans.example.json" -Destination "dist/package/" }
+          if (Test-Path "tech_plans.example.json") { Copy-Item "tech_plans.example.json" -Destination "dist/package/" }
+
+          # Nén file zip
+          Compress-Archive -Path "dist/package/*" -DestinationPath "dist/$zipName" -Force
+
+          # Tạo checksum SHA-256
+          $exeHash = (Get-FileHash -Algorithm SHA256 "dist/LinhVuong.exe").Hash
+          $zipHash = (Get-FileHash -Algorithm SHA256 "dist/$zipName").Hash
+
+          $checksums = @"
+$exeHash  LinhVuong.exe
+$zipHash  $zipName
+"@.Trim()
+          $checksums | Out-File -FilePath "dist/checksums.txt" -Encoding utf8
+
+          echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+          echo "tag_name=$ver" >> $env:GITHUB_OUTPUT
+        env:
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinhVuong-Executable
+          path: |
+            dist/LinhVuong.exe
+            dist/*.zip
+            dist/checksums.txt
+          if-no-files-found: error
+
+      - name: Check whether to publish Release
+        id: check_release
+        shell: pwsh
+        run: |
+          $shouldRelease = ($env:GITHUB_REF_TYPE -eq "tag") -or [bool]($env:INPUT_RELEASE_TAG)
+          echo "should_release=$shouldRelease" >> $env:GITHUB_OUTPUT
+        env:
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+
+      - name: Publish GitHub Release
+        if: steps.check_release.outputs.should_release == 'True'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.package.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: Release ${{ steps.package.outputs.tag_name }}
+          draft: ${{ github.event.inputs.draft || false }}
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          generate_release_notes: true
+          files: |
+            dist/LinhVuong.exe
+            dist/${{ steps.package.outputs.zip_name }}
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
