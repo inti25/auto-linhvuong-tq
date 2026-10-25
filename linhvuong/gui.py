@@ -14,10 +14,28 @@ SETTINGS = Path("gui_settings.json")  # chỉ lưu server, tài khoản, cấu h
 BG, CARD, FG, ACCENT = "#14161f", "#1e2130", "#e8eaf2", "#6c7bff"
 
 
+def set_app_icon(win: tk.Tk | tk.Toplevel):
+    """Đặt icon cho cửa sổ ứng dụng từ file linhvuong.ico."""
+    try:
+        import sys
+        candidates = [
+            Path(getattr(sys, "_MEIPASS", ".")) / "linhvuong.ico",
+            Path("linhvuong.ico"),
+            Path(__file__).resolve().parent.parent / "linhvuong.ico",
+        ]
+        for p in candidates:
+            if p.is_file():
+                win.iconbitmap(str(p))
+                break
+    except Exception:
+        pass
+
+
 class LoginWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("LinhVuong - Đăng nhập")
+        set_app_icon(self)
         self.configure(bg=BG)
         self.resizable(False, False)
         self.session = None

@@ -35,6 +35,7 @@ from .engine import AutomationEngine, TaskStatus
 from .locks import TargetLocks
 from .logger import open_logs_directory, setup_logger
 from .profile import Profile, ProfileStore
+from .gui import set_app_icon
 
 logger = logging.getLogger("linhvuong.dashboard")
 from .roster import Army, City, General, Roster, fetch_roster
@@ -308,6 +309,7 @@ class Dashboard(tk.Tk):
             self.title(f"LinhVuong - Server {server_id}")
             self.default_profile_name = "auto_profile.json"
         self.configure(bg=BG)
+        set_app_icon(self)
         self.geometry("1100x700")
         self.minsize(1060, 650)
 
