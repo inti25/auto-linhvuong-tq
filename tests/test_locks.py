@@ -52,3 +52,17 @@ def test_other_targets_are_independent():
     locks, _ = make()
     locks.try_lock(1, LockReason.CLAIMED)
     assert not locks.is_locked(2)
+
+
+def test_prune_expired_locks():
+    locks, clock = make()
+    locks._PRUNE_THRESHOLD = 5
+    for i in range(10):
+        locks.try_lock(i, LockReason.CLAIMED)
+    assert len(locks._expiry) == 10
+    # Fast-forward thời gian quá hạn 300s
+    clock.now += 301
+    # Thêm lock mới sẽ kích hoạt _prune_locked
+    locks.try_lock(100, LockReason.CLAIMED)
+    assert len(locks._expiry) == 1
+    assert 100 in locks._expiry

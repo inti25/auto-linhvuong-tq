@@ -1176,3 +1176,19 @@ def test_building_task_cooldown_prevents_multiple_activations():
 
     boost_calls = [d for k, d in server.calls if k == "OPT.ashx?id=69" and d.get("type") == "3"]
     assert len(boost_calls) == 1, f"DS kiến trúc bị kích hoạt nhiều lần: {len(boost_calls)} lần"
+
+
+def test_building_task_caches_c77_within_cycle():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {"ret": 0, "buildings": []},
+            "City.ashx?id=20": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=101, plans=[], auto_comfort=False, auto_boost=True)
+    task.run_once()
+    c77_calls = [c for c in server.calls if c[0] == "Common.ashx?id=77"]
+    # Cả check_and_activate_boost và get_active_upgrade_slots cùng chia sẻ 1 lần gọi
+    assert len(c77_calls) == 1

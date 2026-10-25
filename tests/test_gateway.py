@@ -58,3 +58,11 @@ def test_gateway_triggers_relogin_and_retries_on_198599():
     assert res.get("msg") == "success"
     # Tổng cộng gọi 2 lần post
     assert len(session.calls) == 2
+
+
+def test_gateway_mounts_connection_pool():
+    import requests
+    sess = requests.Session()
+    client = GatewayClient(53, sess)
+    adapter = sess.get_adapter("http://sg53.dipan.com")
+    assert adapter._pool_maxsize == 32

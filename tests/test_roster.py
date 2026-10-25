@@ -158,3 +158,14 @@ def test_martial_generals_in_camps_have_army_composition():
     assert camp.pos_x == 120
     assert camp.pos_y == 130
 
+
+def test_fetch_roster_only_queries_specified_base_ids():
+    session = FakeSession()
+    gw = GatewayClient(57, session, sleep=lambda s: None)
+    r = fetch_roster(gw, only_base_ids=[15230])
+    c76_calls = [c for c in session.calls if c[0] == "Common.ashx?id=76"]
+    assert len(c76_calls) == 1
+    assert c76_calls[0][1]["cid"] == "15230"
+    gens = r.generals_of(15230)
+    assert len(gens) > 0
+
