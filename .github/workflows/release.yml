@@ -73,11 +73,10 @@ jobs:
           $exeHash = (Get-FileHash -Algorithm SHA256 "dist/LinhVuong.exe").Hash
           $zipHash = (Get-FileHash -Algorithm SHA256 "dist/$zipName").Hash
 
-          $checksums = @"
-$exeHash  LinhVuong.exe
-$zipHash  $zipName
-"@.Trim()
-          $checksums | Out-File -FilePath "dist/checksums.txt" -Encoding utf8
+          @(
+              "$exeHash  LinhVuong.exe",
+              "$zipHash  $zipName"
+          ) | Set-Content -Path "dist/checksums.txt" -Encoding utf8
 
           echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
           echo "tag_name=$ver" >> $env:GITHUB_OUTPUT
