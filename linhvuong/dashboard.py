@@ -46,6 +46,7 @@ from .tasks.di_trai import DiTrai
 from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask, parse_boost_remaining_time
 from .tasks.goi_dan import GoiDan, VONG_LINH
 from .tasks.logistics import ArmyTransferOrder, LogisticsTask
+from .tasks.morale import MoraleTrainer
 from .tasks.research import ResearchTask, TECH_NAMES, TechPlan
 from .tasks.thao_phat import (
     ERROR_MESSAGES,
@@ -350,6 +351,11 @@ class Dashboard(tk.Tk):
         self._bm_runner = None
         self._ditrai_runner = None
         self._ditrai_stop_event = threading.Event()
+        self._morale_runner = None
+        self._morale_stop_event: Optional[threading.Event] = None
+        self._selected_morale_generals: set[int] = set()
+        self._morale_generals_data: dict[int, dict] = {}
+        self._morale_init_done: bool = False
         self._bld_runner = None
         self._res_runner = None
         self._city_building_plans: dict[int, list[dict]] = {}
@@ -565,12 +571,13 @@ class Dashboard(tk.Tk):
         ttk.Button(profile_frame, text="💾 Lưu Cấu Hình Tổng", style="Action.TButton", command=self._save_unified_profile_dialog).pack(side="left", padx=3)
         ttk.Button(profile_frame, text="📂 Nạp Cấu Hình Tổng", style="Action.TButton", command=self._load_unified_profile_dialog).pack(side="left", padx=3)
 
-        body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, pady=4)
-        body.columnconfigure((0, 1, 2), weight=1, uniform="c")
-        body.rowconfigure(0, weight=1)
+        # Tầng trên: Thành & Doanh trại, Tướng đồn trú, Chi tiết biên chế
+        top_body = tk.Frame(parent, bg=BG)
+        top_body.pack(fill="both", expand=True, pady=(4, 2))
+        top_body.columnconfigure((0, 1, 2), weight=1, uniform="c")
+        top_body.rowconfigure(0, weight=1)
 
-        f1 = ttk.LabelFrame(body, text="Thành & Doanh trại", style="Card.TLabelframe")
+        f1 = ttk.LabelFrame(top_body, text="Thành & Doanh trại", style="Card.TLabelframe")
         f1.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         self.city_tree = ttk.Treeview(f1, columns=("type", "id", "coords"), show="tree headings", selectmode="browse")
         self.city_tree.heading("#0", text="Tên")
@@ -584,7 +591,7 @@ class Dashboard(tk.Tk):
         self.city_tree.pack(fill="both", expand=True, padx=6, pady=6)
         self.city_tree.bind("<<TreeviewSelect>>", self._on_city)
 
-        f2 = ttk.LabelFrame(body, text="Tướng đồn trú", style="Card.TLabelframe")
+        f2 = ttk.LabelFrame(top_body, text="Tướng đồn trú", style="Card.TLabelframe")
         f2.grid(row=0, column=1, sticky="nsew", padx=6)
         self.gen_tree = ttk.Treeview(f2, columns=("role", "lv", "hp", "status"), show="tree headings", selectmode="browse")
         for col, text, w in (("#0", "Tên tướng", 100), ("role", "Chức vụ", 70), ("lv", "Cấp", 35), ("hp", "Thể lực", 70), ("status", "Trạng thái", 90)):
@@ -593,7 +600,7 @@ class Dashboard(tk.Tk):
         self.gen_tree.pack(fill="both", expand=True, padx=6, pady=6)
         self.gen_tree.bind("<<TreeviewSelect>>", self._on_general)
 
-        f3 = ttk.LabelFrame(body, text="Chi tiết biên chế", style="Card.TLabelframe")
+        f3 = ttk.LabelFrame(top_body, text="Chi tiết biên chế", style="Card.TLabelframe")
         f3.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
         details = tk.Frame(f3, bg=CARD, padx=12, pady=12)
         details.pack(fill="both", expand=True, padx=6, pady=6)
@@ -616,6 +623,66 @@ class Dashboard(tk.Tk):
             self.bars[key] = (bar, val)
 
         ttk.Label(details, textvariable=self.total_var, font=("Segoe UI", 11, "bold"), foreground=ACCENT).pack(anchor="w", pady=(16, 0))
+
+        # Tầng dưới: Luyện Sĩ Khí Quân Đội (Đa Thành)
+        f_morale = ttk.LabelFrame(parent, text="⚔️ Luyện Sĩ Khí Quân Đội (Đa Thành)", style="Card.TLabelframe")
+        f_morale.pack(fill="both", expand=True, pady=(2, 4))
+
+        ctrl_bar = tk.Frame(f_morale, bg=CARD)
+        ctrl_bar.pack(fill="x", padx=6, pady=4)
+
+        tk.Label(ctrl_bar, text="Thành:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 4))
+        self.mo_city_combo = ttk.Combobox(ctrl_bar, state="readonly", width=25)
+        self.mo_city_combo.pack(side="left", padx=(0, 6))
+        self.mo_city_combo.bind("<<ComboboxSelected>>", self._on_mo_city_selected)
+
+        ttk.Button(ctrl_bar, text="☑ Chọn tất cả", style="Action.TButton", command=self._select_all_morale_generals).pack(side="left", padx=3)
+        ttk.Button(ctrl_bar, text="☐ Bỏ chọn", style="Action.TButton", command=self._deselect_all_morale_generals).pack(side="left", padx=3)
+
+        tk.Label(ctrl_bar, text="Sĩ khí đích:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(10, 4))
+        self.mo_target_morale_combo = ttk.Combobox(ctrl_bar, state="readonly", width=5, values=["100", "95", "90", "85"])
+        self.mo_target_morale_combo.set("100")
+        self.mo_target_morale_combo.pack(side="left", padx=(0, 8))
+
+        self.mo_start_btn = ttk.Button(ctrl_bar, text="⚔️ Luyện Sĩ Khí", style="Action.TButton", command=self._start_morale_training)
+        self.mo_start_btn.pack(side="left", padx=3)
+
+        self.mo_stop_btn = ttk.Button(ctrl_bar, text="⏹️ Dừng", style="Danger.TButton", command=self._stop_morale_training, state="disabled")
+        self.mo_stop_btn.pack(side="left", padx=3)
+
+        self.mo_status_lbl = tk.Label(ctrl_bar, text="", bg=CARD, fg=MUTED, font=("Segoe UI", 9))
+        self.mo_status_lbl.pack(side="left", padx=(10, 4))
+
+        # Bảng tướng có quân đội
+        table_frame = tk.Frame(f_morale, bg=CARD)
+        table_frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+
+        columns = ("sel", "name", "city", "morale", "army", "troops", "status")
+        self.mo_tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+
+        self.mo_tree.heading("sel", text="Chọn")
+        self.mo_tree.heading("name", text="Tên tướng")
+        self.mo_tree.heading("city", text="Thành đồn trú")
+        self.mo_tree.heading("morale", text="Sĩ khí")
+        self.mo_tree.heading("army", text="Quân số")
+        self.mo_tree.heading("troops", text="Chi tiết (B / K / C)")
+        self.mo_tree.heading("status", text="Trạng thái luyện")
+
+        self.mo_tree.column("sel", width=50, anchor="center")
+        self.mo_tree.column("name", width=120, anchor="w")
+        self.mo_tree.column("city", width=140, anchor="w")
+        self.mo_tree.column("morale", width=70, anchor="center")
+        self.mo_tree.column("army", width=80, anchor="e")
+        self.mo_tree.column("troops", width=180, anchor="w")
+        self.mo_tree.column("status", width=220, anchor="w")
+
+        mo_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.mo_tree.yview)
+        self.mo_tree.configure(yscrollcommand=mo_scroll.set)
+        mo_scroll.pack(side="right", fill="y")
+        self.mo_tree.pack(side="left", fill="both", expand=True)
+
+        self.mo_tree.bind("<ButtonRelease-1>", self._on_mo_tree_click)
+        self.mo_tree.bind("<space>", self._on_mo_tree_space)
 
     # -------------------------------------------------------------------------
     # HỒ SƠ CẤU HÌNH TỔNG HỢP (UNIFIED PROFILE CONFIGURATION)
@@ -4062,6 +4129,13 @@ class Dashboard(tk.Tk):
                 self.dt_camp_combo.current(0)
                 self._on_dt_camp_selected()
 
+        if hasattr(self, "mo_city_combo"):
+            mo_items = ["🌟 Tất cả các thành"] + all_base_items
+            self.mo_city_combo["values"] = mo_items
+            if not self.mo_city_combo.get() or self.mo_city_combo.get() not in mo_items:
+                self.mo_city_combo.current(0)
+            self._refresh_morale_generals()
+
         if all_base_items:
             self._on_tp_city_selected()
         if city_items:
@@ -4123,6 +4197,228 @@ class Dashboard(tk.Tk):
             bar.configure(maximum=top, value=n)
             val.set(str(n))
         self.total_var.set(f"Tổng quân: {army.total}")
+
+    # -------------------------------------------------------------------------
+    # LUYỆN SĨ KHÍ QUÂN ĐỘI ĐA THÀNH (CONCURRENT MULTI-CITY MORALE TRAINING)
+    # -------------------------------------------------------------------------
+    def _on_mo_city_selected(self, _event=None):
+        self._refresh_morale_generals()
+
+    def _refresh_morale_generals(self):
+        if not hasattr(self, "mo_tree") or not self.roster:
+            return
+        self.mo_tree.delete(*self.mo_tree.get_children())
+        self._morale_generals_data = {}
+
+        sel_city_text = self.mo_city_combo.get() if hasattr(self, "mo_city_combo") else ""
+        target_base_id = None
+        if sel_city_text and not sel_city_text.startswith("🌟"):
+            for b in self.roster.bases:
+                if b.display_name == sel_city_text:
+                    target_base_id = b.id
+                    break
+
+        first_init = not getattr(self, "_morale_init_done", False)
+
+        for base in self.roster.bases:
+            if target_base_id is not None and base.id != target_base_id:
+                continue
+            for g in self.roster.generals_of(base.id):
+                army = self.roster.army_of(g.id)
+                if not army or army.total <= 0:
+                    continue
+                if first_init:
+                    self._selected_morale_generals.add(g.id)
+                is_sel = "☑" if g.id in self._selected_morale_generals else "☐"
+                troops_str = f"B:{army.infantry:,}  K:{army.cavalry:,}  C:{army.archers:,}"
+                self.mo_tree.insert(
+                    "",
+                    "end",
+                    iid=str(g.id),
+                    values=(
+                        is_sel,
+                        g.name,
+                        f"{base.name} ({base.id})",
+                        f"{g.morale}/100",
+                        f"{army.total:,}",
+                        troops_str,
+                        "Chờ lệnh",
+                    ),
+                )
+                self._morale_generals_data[g.id] = {
+                    "city_id": base.id,
+                    "general_id": g.id,
+                    "current_morale": g.morale,
+                    "name": g.name,
+                    "city_name": base.name,
+                    "army": army,
+                }
+        if first_init:
+            self._morale_init_done = True
+
+    def _select_all_morale_generals(self):
+        if not hasattr(self, "mo_tree"):
+            return
+        for iid in self.mo_tree.get_children(""):
+            gid = int(iid)
+            self._selected_morale_generals.add(gid)
+            vals = list(self.mo_tree.item(iid, "values"))
+            vals[0] = "☑"
+            self.mo_tree.item(iid, values=vals)
+
+    def _deselect_all_morale_generals(self):
+        if not hasattr(self, "mo_tree"):
+            return
+        for iid in self.mo_tree.get_children(""):
+            gid = int(iid)
+            self._selected_morale_generals.discard(gid)
+            vals = list(self.mo_tree.item(iid, "values"))
+            vals[0] = "☐"
+            self.mo_tree.item(iid, values=vals)
+
+    def _on_mo_tree_click(self, event):
+        item = self.mo_tree.identify_row(event.y)
+        col = self.mo_tree.identify_column(event.x)
+        if not item or not self.mo_tree.exists(item):
+            return
+        if col == "#1" or not col:
+            gid = int(item)
+            vals = list(self.mo_tree.item(item, "values"))
+            if vals[0] == "☑":
+                vals[0] = "☐"
+                self._selected_morale_generals.discard(gid)
+            else:
+                vals[0] = "☑"
+                self._selected_morale_generals.add(gid)
+            self.mo_tree.item(item, values=vals)
+
+    def _on_mo_tree_space(self, _event=None):
+        sel = self.mo_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        if not self.mo_tree.exists(item):
+            return
+        gid = int(item)
+        vals = list(self.mo_tree.item(item, "values"))
+        if vals[0] == "☑":
+            vals[0] = "☐"
+            self._selected_morale_generals.discard(gid)
+        else:
+            vals[0] = "☑"
+            self._selected_morale_generals.add(gid)
+        self.mo_tree.item(item, values=vals)
+
+    def _start_morale_training(self):
+        if not hasattr(self, "_morale_generals_data") or not self._morale_generals_data:
+            self.mo_status_lbl.configure(text="⚠️ Không có tướng có quân đội nào để luyện.")
+            return
+
+        targets = [
+            data for gid, data in self._morale_generals_data.items()
+            if gid in self._selected_morale_generals
+        ]
+
+        if not targets:
+            self.mo_status_lbl.configure(text="⚠️ Vui lòng chọn ít nhất một tướng.")
+            return
+
+        target_m_str = self.mo_target_morale_combo.get().strip() if hasattr(self, "mo_target_morale_combo") else "100"
+        try:
+            target_morale = int(target_m_str)
+        except ValueError:
+            target_morale = 100
+
+        self.mo_start_btn.configure(state="disabled")
+        self.mo_stop_btn.configure(state="normal")
+        self.mo_status_lbl.configure(text=f"Đang chuẩn bị luyện cho {len(targets)} tướng...")
+
+        for item in targets:
+            iid = str(item["general_id"])
+            if self.mo_tree.exists(iid):
+                vals = list(self.mo_tree.item(iid, "values"))
+                vals[6] = "Đang luyện..."
+                self.mo_tree.item(iid, values=vals)
+
+        self._morale_stop_event = threading.Event()
+        trainer = MoraleTrainer(self.gateway)
+
+        def _worker_thread():
+            try:
+                def _on_prog(completed, total, res):
+                    def _update_ui():
+                        gid = res["general_id"]
+                        succ = res["success"]
+                        final_m = res["final_morale"]
+                        msg = res["message"]
+                        status_icon = "✅" if succ else "❌"
+                        iid = str(gid)
+                        if self.mo_tree.exists(iid):
+                            vals = list(self.mo_tree.item(iid, "values"))
+                            vals[3] = f"{final_m}/100"
+                            vals[6] = f"{status_icon} {msg}"
+                            self.mo_tree.item(iid, values=vals)
+                        self.mo_status_lbl.configure(text=f"Tiến độ: {completed}/{total} tướng...")
+                    try:
+                        self.after(0, _update_ui)
+                    except (RuntimeError, tk.TclError):
+                        pass
+
+                def _on_step(gid, cur, tgt, step_msg):
+                    def _update_row():
+                        iid = str(gid)
+                        if self.mo_tree.exists(iid):
+                            vals = list(self.mo_tree.item(iid, "values"))
+                            vals[3] = f"{cur}/100"
+                            vals[6] = step_msg
+                            self.mo_tree.item(iid, values=vals)
+                    try:
+                        self.after(0, _update_row)
+                    except (RuntimeError, tk.TclError):
+                        pass
+
+                results = trainer.train_multiple_generals(
+                    targets=targets,
+                    target_morale=target_morale,
+                    max_workers=3,
+                    stop_event=self._morale_stop_event,
+                    on_progress=_on_prog,
+                    on_step=_on_step,
+                )
+
+                def _done_ui():
+                    self.mo_start_btn.configure(state="normal")
+                    self.mo_stop_btn.configure(state="disabled")
+                    succ_cnt = sum(1 for r in results.values() if r.get("success"))
+                    self.mo_status_lbl.configure(
+                        text=f"Hoàn thành: {succ_cnt}/{len(targets)} tướng đạt mục tiêu ({target_morale})."
+                    )
+                    threading.Thread(target=self._fetch_roster_thread, daemon=True).start()
+
+                try:
+                    self.after(0, _done_ui)
+                except (RuntimeError, tk.TclError):
+                    pass
+
+            except Exception as ex:
+                logger.error(f"Lỗi khi luyện sĩ khí: {ex}")
+                def _err_ui():
+                    self.mo_start_btn.configure(state="normal")
+                    self.mo_stop_btn.configure(state="disabled")
+                    self.mo_status_lbl.configure(text=f"❌ Lỗi: {ex}")
+                try:
+                    self.after(0, _err_ui)
+                except (RuntimeError, tk.TclError):
+                    pass
+
+        self._morale_runner = threading.Thread(target=_worker_thread, daemon=True)
+        self._morale_runner.start()
+
+    def _stop_morale_training(self):
+        if self._morale_stop_event:
+            self._morale_stop_event.set()
+            self.mo_status_lbl.configure(text="Đang dừng tiến trình luyện sĩ khí...")
+        self.mo_stop_btn.configure(state="disabled")
 
     # =========================================================================
     # TAB 6: CHIẾN TRƯỜNG & MƯU LƯỢC
@@ -4505,6 +4801,11 @@ class Dashboard(tk.Tk):
         self._bt_load_battle()
 
     def destroy(self):
+        try:
+            if hasattr(self, "_morale_stop_event") and self._morale_stop_event:
+                self._morale_stop_event.set()
+        except Exception:
+            pass
         try:
             if hasattr(self, "engine"):
                 self.engine.stop_all()

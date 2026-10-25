@@ -124,6 +124,10 @@ _Avoid_: Config lẻ, file lưu cấu hình riêng, profile_settings
 Hành động tăng điểm sĩ khí cho tướng tại Điểm Tướng Đài (`OPT.ashx?id=47`), mỗi lần tăng tối đa 10 điểm và có thời gian đếm ngược hoàn tất.
 _Avoid_: Nâng sĩ khí, tăng morale, buff sĩ khí
 
+**Luyện Sĩ Khí Đa Thành**:
+Tính năng điều phối luyện sĩ khí đồng thời cho nhiều tướng có quân đội đồn trú tại các Thành và Doanh trại khác nhau bằng đa luồng worker song song, tự động lặp các nhịp 10 điểm cho đến khi chạm Sĩ Khí Mục Tiêu.
+_Avoid_: Buff morale hàng loạt, train sĩ khí đa thành, nâng sĩ khí hàng loạt
+
 **Biên Chế Quân Tự Động**:
 Quy trình kiểm tra quân số tướng, tự động chiêu mộ tân binh và bổ sung binh lính theo loại quân chỉ định trước khi xuất kích.
 _Avoid_: Bổ sung lính, refill lính, auto recruit

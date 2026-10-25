@@ -1674,3 +1674,105 @@ def test_dashboard_resource_config_and_cities_profile_sync(tmp_path):
         dash.destroy()
 
 
+def test_dashboard_morale_training_ui_and_actions():
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra tồn tại các widget trên UI
+        assert hasattr(dash, "mo_city_combo")
+        assert hasattr(dash, "mo_target_morale_combo")
+        assert hasattr(dash, "mo_start_btn")
+        assert hasattr(dash, "mo_stop_btn")
+        assert hasattr(dash, "mo_status_lbl")
+        assert hasattr(dash, "mo_tree")
+
+        # 2. Nạp roster mẫu có 2 tướng có quân đội (TrieuVan: 417506, QuanVu: 417520) và 1 tướng không có quân (GiaCatLuong: 417513)
+        roster = dummy_roster()
+        dash._loaded(roster)
+
+        # Kiểm tra nạp combobox thành phố
+        city_vals = list(dash.mo_city_combo["values"])
+        assert "🌟 Tất cả các thành" in city_vals[0]
+        assert len(city_vals) == 4  # Tất cả + 2 thành + 1 trại
+
+        # Kiểm tra bảng tướng hiển thị đúng các tướng có quân đội
+        items = dash.mo_tree.get_children("")
+        assert set(items) == {"417506", "417520"}
+        assert "417513" not in items  # Tướng không quân không hiển thị
+
+        # Kiểm tra tự động chọn ban đầu (☑)
+        assert dash.mo_tree.item("417506", "values")[0] == "☑"
+        assert dash.mo_tree.item("417520", "values")[0] == "☑"
+        assert 417506 in dash._selected_morale_generals
+        assert 417520 in dash._selected_morale_generals
+
+        # 3. Kiểm tra chức năng Bỏ chọn và Chọn tất cả
+        dash._deselect_all_morale_generals()
+        assert dash.mo_tree.item("417506", "values")[0] == "☐"
+        assert dash.mo_tree.item("417520", "values")[0] == "☐"
+        assert len(dash._selected_morale_generals) == 0
+
+        dash._select_all_morale_generals()
+        assert dash.mo_tree.item("417506", "values")[0] == "☑"
+        assert dash.mo_tree.item("417520", "values")[0] == "☑"
+        assert 417506 in dash._selected_morale_generals
+
+        # 4. Kiểm tra toggle click trên dòng
+        click_evt = MagicMock()
+        dash.mo_tree.identify_row = MagicMock(return_value="417506")
+        dash.mo_tree.identify_column = MagicMock(return_value="#1")
+        dash._on_mo_tree_click(click_evt)
+        assert dash.mo_tree.item("417506", "values")[0] == "☐"
+        assert 417506 not in dash._selected_morale_generals
+
+        dash._on_mo_tree_click(click_evt)
+        assert dash.mo_tree.item("417506", "values")[0] == "☑"
+        assert 417506 in dash._selected_morale_generals
+
+        # 5. Kiểm tra bộ lọc theo thành phố
+        # Chọn thành 15237 (PhanThanh - không có tướng)
+        for idx, val in enumerate(city_vals):
+            if "PhanThanh" in val:
+                dash.mo_city_combo.current(idx)
+                break
+        dash._on_mo_city_selected()
+        assert len(dash.mo_tree.get_children("")) == 0
+
+        # Chọn thành 15230 (ThanhChinh - có TrieuVan)
+        for idx, val in enumerate(city_vals):
+            if "ThanhChinh" in val:
+                dash.mo_city_combo.current(idx)
+                break
+        dash._on_mo_city_selected()
+        items_c1 = dash.mo_tree.get_children("")
+        assert set(items_c1) == {"417506"}
+
+        # Quay lại tất cả các thành
+        dash.mo_city_combo.current(0)
+        dash._on_mo_city_selected()
+        assert set(dash.mo_tree.get_children("")) == {"417506", "417520"}
+
+        # 6. Kiểm tra kích hoạt Luyện Sĩ Khí
+        with patch("linhvuong.dashboard.MoraleTrainer") as MockTrainer:
+            mock_trainer_inst = MockTrainer.return_value
+            mock_trainer_inst.train_multiple_generals.return_value = {
+                417506: {"general_id": 417506, "success": True, "final_morale": 95, "message": "OK"},
+                417520: {"general_id": 417520, "success": True, "final_morale": 95, "message": "OK"},
+            }
+
+            dash.mo_target_morale_combo.set("95")
+            dash._start_morale_training()
+
+            assert dash._morale_runner is not None
+            assert dash._morale_stop_event is not None
+
+            # Dừng luyện sĩ khí
+            dash._stop_morale_training()
+            assert dash._morale_stop_event.is_set()
+
+            # Chờ luồng kết thúc
+            dash._morale_runner.join(timeout=2.0)
+    finally:
+        dash.destroy()
+
+
+
