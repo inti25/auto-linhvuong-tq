@@ -33,6 +33,25 @@ class GatewayClient:
         self.relogin_callback = relogin_callback
         self._relogin_lock = threading.Lock()
         self._last_relogin_time = 0.0
+        self._mount_pool()
+
+    @staticmethod
+    def _make_adapter():
+        from requests.adapters import HTTPAdapter
+
+        return HTTPAdapter(pool_connections=4, pool_maxsize=32)
+
+    def _mount_pool(self) -> None:
+        """Tăng kích thước connection pool để nhiều runner song song không phải tạo lại socket."""
+        mount = getattr(self.session, "mount", None)
+        if not callable(mount):
+            return
+        try:
+            adapter = self._make_adapter()
+            mount("http://", adapter)
+            mount("https://", adapter)
+        except Exception as e:
+            logger.debug(f"Không thể cấu hình connection pool: {e}")
 
     @property
     def base_url(self) -> str:

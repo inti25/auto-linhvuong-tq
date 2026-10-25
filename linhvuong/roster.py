@@ -8,7 +8,7 @@ Nguồn:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from .gateway import GatewayClient
 
@@ -144,7 +144,10 @@ class Roster:
 _ROLES = {1: "van", 2: "vo"}
 
 
-def fetch_roster(gateway: GatewayClient) -> Roster:
+def fetch_roster(
+    gateway: GatewayClient,
+    only_base_ids: Optional[Iterable[int]] = None,
+) -> Roster:
     roster = Roster()
     # 1. Lấy danh sách Thành chính từ Common.ashx?id=29
     resp = gateway.call("Common.ashx", 29, {}) or {}
@@ -215,7 +218,11 @@ def fetch_roster(gateway: GatewayClient) -> Roster:
     morale_map = {}
     upgrading_map = {}
     all_bases = list(cities_map.values()) + list(camps_map.values())
-    bases_to_query = [b for b in all_bases if not martial_cids or b.id in martial_cids or b.is_camp]
+    if only_base_ids is not None:
+        target_ids = {int(x) for x in only_base_ids}
+        bases_to_query = [b for b in all_bases if b.id in target_ids]
+    else:
+        bases_to_query = [b for b in all_bases if not martial_cids or b.id in martial_cids or b.is_camp]
 
     for base in bases_to_query:
         resp = gateway.call("Common.ashx", 76, {"cid": str(base.id)}) or {}

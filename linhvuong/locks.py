@@ -17,15 +17,24 @@ class TargetLocks:
         self._expiry: dict[int, float] = {}
         self._mutex = threading.Lock()
 
+    _PRUNE_THRESHOLD = 256
+
+    def _prune_locked(self, now: float) -> None:
+        """Dọn các khóa đã hết hạn (gọi khi đang giữ mutex) để tránh rò rỉ bộ nhớ khi chạy dài."""
+        if len(self._expiry) > self._PRUNE_THRESHOLD:
+            self._expiry = {k: v for k, v in self._expiry.items() if v > now}
+
     def is_locked(self, target_id: int) -> bool:
         with self._mutex:
             return self._expiry.get(target_id, 0.0) > self._clock()
 
     def try_lock(self, target_id: int, reason: LockReason) -> bool:
         with self._mutex:
-            if self._expiry.get(target_id, 0.0) > self._clock():
+            now = self._clock()
+            if self._expiry.get(target_id, 0.0) > now:
                 return False
-            self._expiry[target_id] = self._clock() + reason.value
+            self._prune_locked(now)
+            self._expiry[target_id] = now + reason.value
             return True
 
     def mark(self, target_id: int, reason: LockReason) -> None:

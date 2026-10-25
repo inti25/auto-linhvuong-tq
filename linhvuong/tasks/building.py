@@ -214,16 +214,29 @@ class BuildingTask:
         else:
             self.notify(msg)
 
-    def check_and_activate_boost(self) -> bool:
-        """Kiểm tra thời gian DS kiến trúc (xây 3 nhà), kích hoạt nếu hết hạn."""
-        if not self.auto_boost:
-            return True
+    def _fetch_c77(self, force: bool = False) -> dict:
+        """Đọc và cache kết quả Common.ashx?id=77 trong chu kỳ ngắn để tránh gọi trùng."""
+        now = time.time()
+        cached = getattr(self, "_c77_cache", None)
+        cached_time = getattr(self, "_c77_cache_time", 0.0)
+        if not force and cached is not None and (now - cached_time < 3.0):
+            return cached
 
         resp = self.gateway.call("Common.ashx", 77, {"cid": str(self.city_id), "_": ""}) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
+        self._c77_cache = resp
+        self._c77_cache_time = now
+        return resp
+
+    def check_and_activate_boost(self) -> bool:
+        """Kiểm tra thời gian DS kiến trúc (xây 3 nhà), kích hoạt nếu hết hạn."""
+        if not self.auto_boost:
+            return True
+
+        resp = self._fetch_c77()
         remaining = parse_boost_remaining_time(resp, self.city_id)
         if remaining <= 0:
             now_ts = time.time()
@@ -238,6 +251,7 @@ class BuildingTask:
                 69,
                 {"type": "3", "param1": "0", "param2": "0", "paytype": "2", "_": ""},
             ) or {}
+            self._c77_cache = None
             ret = boost_resp.get("ret", RET_OK)
             if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
                 raise CaptchaRequired()
@@ -280,10 +294,7 @@ class BuildingTask:
 
     def get_active_upgrade_slots(self) -> list:
         """Lấy danh sách các slot đang nâng cấp dở trong thành."""
-        resp = self.gateway.call("Common.ashx", 77, {"cid": str(self.city_id), "_": ""}) or {}
-        ret = resp.get("ret", RET_OK)
-        if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
-            raise CaptchaRequired()
+        resp = self._fetch_c77()
 
         city_list = resp.get("list", [])
         for city_info in city_list:
@@ -339,6 +350,7 @@ class BuildingTask:
                 "_": "",
             },
         ) or {}
+        self._c77_cache = None
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
@@ -423,6 +435,7 @@ class BuildingTask:
         return False
 
     def run_once(self) -> str:
+        self._c77_cache = None
         self._storage_full = False
         # 1. Kích hoạt Boost nếu được cấu hình
         if self.auto_boost:

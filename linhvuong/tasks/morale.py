@@ -27,9 +27,15 @@ def _dispatch_on_step(cb: Optional[Callable], cur: int, tgt: int, msg: str = "")
 class MoraleTrainer:
     """Điều phối và thực thi luyện sĩ khí cho tướng đơn lẻ và đồng thời nhiều tướng."""
 
-    def __init__(self, gateway: GatewayClient, poll_interval: float = 2.0):
+    def __init__(
+        self,
+        gateway: GatewayClient,
+        poll_interval: float = 2.0,
+        sleep_fn: Optional[Callable[[float], None]] = None,
+    ):
         self.gateway = gateway
         self.poll_interval = max(0.01, poll_interval)
+        self.sleep_fn = sleep_fn or getattr(gateway, "_sleep", time.sleep)
 
     def get_general_morale_info(self, city_id: int, general_id: int) -> tuple[Optional[int], int]:
         """Lấy sĩ khí hiện tại và thời gian nâng sĩ khí còn lại (upgrading_time) từ API 76.
@@ -92,11 +98,14 @@ class MoraleTrainer:
                 wait_msg = f"⏳ Chờ luyện dở (còn {up_t}s)..."
                 _dispatch_on_step(on_step, curr, target_morale, wait_msg)
                 wait_step = min(float(up_t), self.poll_interval)
+                if self.poll_interval >= 1.0:
+                    # Chờ thích ứng theo thời gian còn lại, giảm số request polling API 76
+                    wait_step = min(float(up_t), max(self.poll_interval, min(up_t / 2.0, 30.0)))
                 if stop_event:
                     if stop_event.wait(wait_step):
                         return False, curr, "Đã bị dừng bởi người dùng"
                 else:
-                    time.sleep(wait_step)
+                    self.sleep_fn(wait_step)
                 continue
 
             # 2. Khi upgrading_time == 0: gọi lệnh nâng sĩ khí tiếp theo (+10 điểm)
@@ -132,7 +141,7 @@ class MoraleTrainer:
                     if stop_event.wait(wait_step):
                         return False, curr, "Đã bị dừng bởi người dùng"
                 else:
-                    time.sleep(wait_step)
+                    self.sleep_fn(wait_step)
             else:
                 # Kiểm tra lại xem có phải do đang bận luyện dở chưa sync kịp hay không
                 cur_m, up_t = self.get_general_morale_info(city_id, general_id)

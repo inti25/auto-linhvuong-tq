@@ -400,7 +400,8 @@ class ThaoPhatAutoRunner:
                 last_logged_busy = None
                 last_logged_upgrading = None
                 while not self.stop_event.is_set() and not all_ready:
-                    roster = fetch_roster(self.gateway)
+                    _only_bases = [self.city_id] if self.city_id else None
+                    roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
                     city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
 
                     busy_list = []
@@ -459,7 +460,8 @@ class ThaoPhatAutoRunner:
                 # -------------------------------------------------------------
                 # BƯỚC 2: Bổ sung quân số cho từng tướng (nếu thiếu)
                 # -------------------------------------------------------------
-                roster = fetch_roster(self.gateway)
+                _only_bases = [self.city_id] if self.city_id else None
+                roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
                 city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
                 recruit_failed = False
                 troops_added = False
@@ -542,7 +544,8 @@ class ThaoPhatAutoRunner:
                 first_morale_check = True
                 last_logged_morale_wait = None
                 while not self.stop_event.is_set():
-                    fresh_roster = fetch_roster(self.gateway)
+                    _only_bases = [self.city_id] if self.city_id else None
+                    fresh_roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
                     city_gens = {g.id: g for g in fresh_roster.generals_of(self.city_id)}
 
                     if first_morale_check:
@@ -620,7 +623,8 @@ class ThaoPhatAutoRunner:
                 # -------------------------------------------------------------
                 # KIỂM TRA LẠI: Xác nhận sĩ khí đạt chuẩn trước khi xuất quân
                 # -------------------------------------------------------------
-                fresh_roster = fetch_roster(self.gateway)
+                _only_bases = [self.city_id] if self.city_id else None
+                fresh_roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
                 city_gens = {g.id: g for g in fresh_roster.generals_of(self.city_id)}
                 morale_ready = True
 
@@ -742,7 +746,8 @@ class ThaoPhatAutoRunner:
                         break
 
                 while not self.stop_event.is_set():
-                    roster = fetch_roster(self.gateway)
+                    _only_bases = [self.city_id] if self.city_id else None
+                    roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
                     city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
 
                     busy_count = 0

@@ -1565,7 +1565,7 @@ class Dashboard(tk.Tk):
         task = self._create_goidan_task()
         if not task:
             return
-        threading.Thread(target=lambda: self._append_gd_log(f"⚡ Kết quả chạy 1 lượt: {task.run_once()}"), daemon=True).start()
+        threading.Thread(target=lambda: self.after(0, self._append_gd_log, f"⚡ Kết quả chạy 1 lượt: {task.run_once()}"), daemon=True).start()
 
     def _toggle_goidan(self):
         if not self._gd_runner or not self._gd_runner.is_alive():
@@ -1820,7 +1820,7 @@ class Dashboard(tk.Tk):
         task = self._create_binhman_task()
         if not task:
             return
-        threading.Thread(target=lambda: self._append_bm_log(f"⚡ Kết quả chạy 1 lượt: {task.run_once()}"), daemon=True).start()
+        threading.Thread(target=lambda: self.after(0, self._append_bm_log, f"⚡ Kết quả chạy 1 lượt: {task.run_once()}"), daemon=True).start()
 
     def _toggle_binhman(self):
         if not self._bm_runner or not self._bm_runner.is_alive():
@@ -2268,6 +2268,7 @@ class Dashboard(tk.Tk):
             self._append_text_buffer(w, line)
 
     def _append_logis_log(self, msg: str):
+        logging.getLogger("linhvuong.tasks.HauCan").info(msg)
         line = f"[{time.strftime('%H:%M:%S')}] {msg}\n"
         for w in list(self._active_log_texts):
             self._append_text_buffer(w, line)
@@ -2648,6 +2649,14 @@ class Dashboard(tk.Tk):
             run_check()
 
     def _schedule_periodic_boost_check(self):
+        # Hủy timer cũ để tránh nhân bản chuỗi lặp mỗi lần reload roster
+        old_id = getattr(self, "_boost_after_id", None)
+        if old_id is not None:
+            try:
+                self.after_cancel(old_id)
+            except Exception:
+                pass
+            self._boost_after_id = None
         try:
             if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
                 self._check_and_update_boost_status(async_check=True)
@@ -2656,7 +2665,7 @@ class Dashboard(tk.Tk):
                     if getattr(self, "_last_daily_claim_date", None) != today_str:
                         self._last_daily_claim_date = today_str
                         self._do_claim_daily()
-                self.after(60000, self._schedule_periodic_boost_check)
+                self._boost_after_id = self.after(60000, self._schedule_periodic_boost_check)
         except (RuntimeError, tk.TclError):
             pass
 
@@ -3642,10 +3651,6 @@ class Dashboard(tk.Tk):
         f_log_tab6.pack(fill="both", expand=True, padx=6, pady=6)
         self.logis_log_text = tk.Text(f_log_tab6, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
         self.logis_log_text.pack(fill="both", expand=True)
-
-    def _append_logis_log(self, msg: str):
-        logging.getLogger("linhvuong.tasks.HauCan").info(msg)
-        self._append_text_buffer(self.logis_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
     def _populate_all_techs(self):
         self.res_tree.delete(*self.res_tree.get_children())
@@ -4804,6 +4809,26 @@ class Dashboard(tk.Tk):
         try:
             if hasattr(self, "_morale_stop_event") and self._morale_stop_event:
                 self._morale_stop_event.set()
+        except Exception:
+            pass
+        self._res_monitor_running = False
+        try:
+            if getattr(self, "_boost_after_id", None) is not None:
+                self.after_cancel(self._boost_after_id)
+        except Exception:
+            pass
+        for name in ("_tp_runner", "_gd_runner", "_bm_runner", "_bld_runner", "_res_runner"):
+            runner = getattr(self, name, None)
+            try:
+                if runner is not None and hasattr(runner, "stop"):
+                    runner.stop()
+            except Exception:
+                pass
+        try:
+            if getattr(self, "_ditrai_stop_event", None):
+                self._ditrai_stop_event.set()
+            if getattr(self, "_bt_stop_event", None):
+                self._bt_stop_event.set()
         except Exception:
             pass
         try:
