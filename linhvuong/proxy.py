@@ -29,7 +29,8 @@ class ProxyEndpoint:
     port: int
     username: Optional[str] = None
     password: Optional[str] = None
-    protocol: str = "http"
+    protocol: str = "socks5h"
+    explicit_protocol: bool = False
     is_alive: bool = True
     latency: float = 0.0
 
@@ -54,7 +55,7 @@ class ProxyEndpoint:
         return f"{scheme}://{auth}{self.host}:{self.port}"
 
     @classmethod
-    def from_line(cls, line: str, default_protocol: str = "http") -> Optional["ProxyEndpoint"]:
+    def from_line(cls, line: str, default_protocol: str = "socks5h") -> Optional["ProxyEndpoint"]:
         """Phân tích một dòng văn bản thành ProxyEndpoint.
 
         Hỗ trợ:
@@ -68,10 +69,12 @@ class ProxyEndpoint:
             return None
 
         protocol = default_protocol
+        explicit_protocol = False
         rest = raw
 
         # Tách giao thức nếu có
         if "://" in rest:
+            explicit_protocol = True
             scheme, rest = rest.split("://", 1)
             scheme_lower = scheme.lower()
             if scheme_lower in ("http", "https"):
@@ -125,6 +128,7 @@ class ProxyEndpoint:
             username=username or None,
             password=password or None,
             protocol=protocol,
+            explicit_protocol=explicit_protocol,
         )
 
 
@@ -136,21 +140,24 @@ class ProxyPool:
         url: Optional[str] = None,
         endpoints: Optional[List[ProxyEndpoint]] = None,
         check_timeout: float = 4.0,
+        default_protocol: str = "socks5h",
         on_failover: Optional[Callable[[Optional[ProxyEndpoint], Optional[ProxyEndpoint]], None]] = None,
     ):
         self.url = (url or "").strip() or None
         self.endpoints: List[ProxyEndpoint] = list(endpoints or [])
         self.active_index: int = 0
         self.check_timeout = check_timeout
+        self.default_protocol = default_protocol
         self.on_failover = on_failover
         self._lock = threading.Lock()
 
-    def load_from_text(self, text: str) -> int:
+    def load_from_text(self, text: str, default_protocol: Optional[str] = None) -> int:
         """Nạp danh sách proxy từ chuỗi văn bản (nhiều dòng). Trả về số proxy nạp được."""
+        proto = default_protocol or self.default_protocol
         with self._lock:
             new_endpoints: List[ProxyEndpoint] = []
             for line in text.splitlines():
-                ep = ProxyEndpoint.from_line(line)
+                ep = ProxyEndpoint.from_line(line, default_protocol=proto)
                 if ep:
                     new_endpoints.append(ep)
             if new_endpoints:
@@ -184,27 +191,41 @@ class ProxyPool:
         target_url: str = "http://pass.dipan.com/",
         timeout: Optional[float] = None,
     ) -> bool:
-        """Kiểm tra một endpoint có kết nối thông suốt tới đích hay không."""
+        """Kiểm tra một endpoint có kết nối thông suốt tới đích hay không.
+
+        Nếu endpoint không khai báo scheme cứng và giao thức hiện tại không truy cập được (hoặc bị 403 Forbidden do proxy),
+        tự động kiểm tra giao thức thay thế (SOCKS5H <-> HTTP).
+        """
         to = timeout or self.check_timeout
-        start = time.time()
-        proxies = {"http": endpoint.url, "https": endpoint.url}
-        try:
-            # Gửi HEAD request nhẹ để xác định kết nối proxy
-            resp = requests.head(
-                target_url,
-                proxies=proxies,
-                timeout=to,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            elapsed = time.time() - start
-            endpoint.latency = round(elapsed, 3)
-            # Mã < 500 chứng tỏ proxy chuyển tiếp và máy chủ phản hồi
-            endpoint.is_alive = bool(resp.status_code < 500)
-            return endpoint.is_alive
-        except Exception:
-            endpoint.is_alive = False
-            endpoint.latency = 999.0
-            return False
+        protocols_to_try = [endpoint.protocol]
+        if not endpoint.explicit_protocol:
+            alt = "http" if endpoint.protocol == "socks5h" else "socks5h"
+            protocols_to_try.append(alt)
+
+        for proto in protocols_to_try:
+            endpoint.protocol = proto
+            start = time.time()
+            proxies = {"http": endpoint.url, "https": endpoint.url}
+            try:
+                resp = requests.head(
+                    target_url,
+                    proxies=proxies,
+                    timeout=to,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                elapsed = time.time() - start
+                # Mã 200, 301, 302, 303, 307, 308 chứng tỏ kết nối thành công tới cổng game
+                # Loại trừ 403 (bị proxy chặn/invalid_ip), 407 (lỗi auth proxy), 5xx
+                if resp.status_code in (200, 301, 302, 303, 307, 308):
+                    endpoint.latency = round(elapsed, 3)
+                    endpoint.is_alive = True
+                    return True
+            except Exception:
+                pass
+
+        endpoint.is_alive = False
+        endpoint.latency = 999.0
+        return False
 
     def check_all(
         self,

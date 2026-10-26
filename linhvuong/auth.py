@@ -145,11 +145,15 @@ def login(
             timeout=30,
         )
         if "登录成功" not in resp.text:
+            text_lower = resp.text.lower()
+            if resp.status_code == 403 or "forbidden" in text_lower or "invalid_ip" in text_lower:
+                snippet = resp.text.strip().replace("\r", " ").replace("\n", " ")[:120]
+                raise LoginError(f"Proxy từ chối kết nối (HTTP {resp.status_code}): {snippet}")
             if "验证码不正确" in resp.text:
                 raise LoginError("Đăng nhập thất bại: Máy chủ yêu cầu mã xác nhận (Captcha) hoặc tài khoản bị tạm khóa kiểm tra.")
             if "用户名或密码不正确" in resp.text:
                 raise LoginError("Đăng nhập thất bại: Sai tên tài khoản hoặc mật khẩu.")
-            raise LoginError("Đăng nhập thất bại: Sai tài khoản hoặc mật khẩu.")
+            raise LoginError(f"Đăng nhập thất bại: Sai tài khoản hoặc mật khẩu (HTTP {resp.status_code}).")
         session.get(f"http://sg{server_id}.dipan.com/login", timeout=30)
     except LoginError:
         raise

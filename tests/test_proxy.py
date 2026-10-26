@@ -7,38 +7,44 @@ from linhvuong.proxy import ProxyEndpoint, ProxyPool
 
 
 def test_proxy_endpoint_from_line_lenient_parsing():
-    # 1. ip:port:username:password
+    # 1. ip:port:username:password (mặc định socks5h)
     ep1 = ProxyEndpoint.from_line("103.151.123.45:8080:myuser:mypass")
     assert ep1 is not None
     assert ep1.host == "103.151.123.45"
     assert ep1.port == 8080
     assert ep1.username == "myuser"
     assert ep1.password == "mypass"
-    assert ep1.protocol == "http"
-    assert ep1.url == "http://myuser:mypass@103.151.123.45:8080"
-    assert ep1.display_name == "http://myuser@103.151.123.45:8080"
+    assert ep1.protocol == "socks5h"
+    assert ep1.explicit_protocol is False
+    assert ep1.url == "socks5h://myuser:mypass@103.151.123.45:8080"
+    assert ep1.display_name == "socks5h://myuser@103.151.123.45:8080"
 
-    # 2. ip:port (không có auth)
-    ep2 = ProxyEndpoint.from_line("1.2.3.4:3128")
+    # 2. ip:port với default_protocol="http"
+    ep2 = ProxyEndpoint.from_line("1.2.3.4:3128", default_protocol="http")
     assert ep2 is not None
     assert ep2.host == "1.2.3.4"
     assert ep2.port == 3128
     assert ep2.username is None
+    assert ep2.protocol == "http"
+    assert ep2.explicit_protocol is False
     assert ep2.url == "http://1.2.3.4:3128"
 
-    # 3. socks5://ip:port:user:pass -> socks5h://
+    # 3. socks5://ip:port:user:pass -> socks5h:// (explicit_protocol=True)
     ep3 = ProxyEndpoint.from_line("socks5://192.168.1.1:1080:usr:pwd")
     assert ep3 is not None
     assert ep3.protocol == "socks5h"
+    assert ep3.explicit_protocol is True
     assert ep3.url == "socks5h://usr:pwd@192.168.1.1:1080"
 
-    # 4. user:pass@host:port
+    # 4. user:pass@host:port (explicit_protocol=True)
     ep4 = ProxyEndpoint.from_line("http://admin:secret@45.1.2.3:8000")
     assert ep4 is not None
     assert ep4.username == "admin"
     assert ep4.password == "secret"
     assert ep4.host == "45.1.2.3"
     assert ep4.port == 8000
+    assert ep4.protocol == "http"
+    assert ep4.explicit_protocol is True
 
     # 5. Dòng trống, comment, dữ liệu rác
     assert ProxyEndpoint.from_line("") is None
@@ -190,3 +196,47 @@ def test_gateway_triggers_proxy_failover_on_proxy_error():
     assert sess.call_count == 2
     assert ep1.is_alive is False
     assert sess.proxies["http"] == ep2.url
+
+
+def test_proxy_pool_check_endpoint_rejects_403_and_auto_falls_back():
+    pool = ProxyPool()
+    # Endpoint không có scheme cứng, ban đầu protocol="http"
+    ep = ProxyEndpoint.from_line("45.38.107.97:6014:user:pass", default_protocol="http")
+    assert ep.protocol == "http"
+    assert ep.explicit_protocol is False
+
+    # Giả lập: khi requests.head gọi với http:// thì trả về 403 (bị proxy chặn)
+    # khi gọi với socks5h:// thì trả về 302 (thành công)
+    def mock_head(url, proxies=None, **kwargs):
+        resp = MagicMock()
+        if proxies and "http" in proxies and proxies["http"].startswith("http://"):
+            resp.status_code = 403
+            return resp
+        elif proxies and "http" in proxies and proxies["http"].startswith("socks5h://"):
+            resp.status_code = 302
+            return resp
+        resp.status_code = 500
+        return resp
+
+    with patch("requests.head", side_effect=mock_head):
+        ok = pool.check_endpoint(ep)
+        assert ok is True
+        assert ep.is_alive is True
+        # Tự động chuyển giao thức sang socks5h!
+        assert ep.protocol == "socks5h"
+        assert ep.url.startswith("socks5h://")
+
+
+def test_auth_login_handles_proxy_403_forbidden():
+    from linhvuong.auth import LoginError, login
+
+    sess = requests.Session()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 403
+    mock_resp.text = "You are forbidden to connect to client_connect_invalid_ip"
+
+    with patch.object(sess, "post", return_value=mock_resp):
+        with pytest.raises(LoginError) as exc_info:
+            login(sess, 57, "testuser", "testpass", proxy="http://proxy:8080")
+        assert "Proxy từ chối kết nối (HTTP 403)" in str(exc_info.value)
+        assert "client_connect_invalid_ip" in str(exc_info.value)
