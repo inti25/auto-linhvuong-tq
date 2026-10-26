@@ -3,8 +3,13 @@ import pytest
 from linhvuong.coords import mid_from_coords
 from linhvuong.gateway import GatewayClient
 from linhvuong.locks import LockReason, TargetLocks
-from linhvuong.scan import Scanner
-from linhvuong.tasks.base import CaptchaRequired, TaskContext
+from linhvuong.scan import Scanner, Target
+from linhvuong.tasks.base import (
+    RET_SESSION_EXPIRED,
+    CaptchaRequired,
+    TaskContext,
+    attack,
+)
 from linhvuong.tasks.binh_man import BinhMan
 from linhvuong.tasks.goi_dan import GoiDan
 from linhvuong.tasks.thao_phat import ThaoPhat
@@ -144,3 +149,55 @@ def test_thao_phat_starts_campaign_and_attacks():
     out = ThaoPhat(ctx, generals=[8], origin=(0, 0), radius=5, man_types=[9]).run_once()
     assert out == "attacked"
     assert server.keys() == ["OPT.ashx?id=62", "OPT.ashx?id=53"]
+
+
+def test_attack_network_error_returns_failure():
+    gw = GatewayClient(53, session=None)
+    gw.call = lambda *args, **kwargs: None
+    locks = TargetLocks()
+    scanner = Scanner(gw, locks, delay=0.0)
+    ctx = TaskContext(gw, scanner, locks)
+    target = Target(x=5, y=5, target_id=10, man_type=7)
+    res = attack(ctx, target, [1])
+    assert res == "attack_failed:network_error"
+
+
+def test_attack_session_expired_alerts_and_returns_failure():
+    gw = GatewayClient(53, session=None)
+    gw.call = lambda *args, **kwargs: {"ret": RET_SESSION_EXPIRED}
+    locks = TargetLocks()
+    scanner = Scanner(gw, locks, delay=0.0)
+    alerts = []
+    ctx = TaskContext(gw, scanner, locks, notify=alerts.append)
+    target = Target(x=5, y=5, target_id=10, man_type=7)
+    res = attack(ctx, target, [1])
+    assert res == f"attack_failed:{RET_SESSION_EXPIRED}"
+    assert any("198599" in a for a in alerts)
+
+
+def test_attack_auto_relogins_and_succeeds_on_session_expired():
+    class MockSess:
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return Resp({"ret": RET_SESSION_EXPIRED})
+            return Resp({"ret": 0})
+
+    relogin_called = []
+    sess = MockSess()
+    gw = GatewayClient(
+        53, sess, sleep=lambda s: None, relogin_callback=lambda: relogin_called.append(True) or True
+    )
+    locks = TargetLocks()
+    scanner = Scanner(gw, locks, delay=0.0)
+    ctx = TaskContext(gw, scanner, locks)
+    target = Target(x=5, y=5, target_id=10, man_type=7)
+
+    res = attack(ctx, target, [1])
+    assert res == "attacked"
+    assert len(relogin_called) == 1
+    assert sess.calls == 2
+

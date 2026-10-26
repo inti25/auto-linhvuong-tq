@@ -74,24 +74,27 @@ class GatewayClient:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Request: POST {endpoint}?id={api_id} | Data: {data}")
 
-        for attempt in range(self.max_retries):
+        relogin_attempted = False
+        attempt = 0
+        while attempt < self.max_retries:
+            attempt += 1
             try:
                 resp = self.session.post(
                     url, data=data, headers=self._headers(), timeout=self.timeout
                 )
             except Exception as e:
                 logger.warning(
-                    f"Lỗi mạng khi gọi {endpoint}?id={api_id} (lần {attempt + 1}/{self.max_retries}): {e}"
+                    f"Lỗi mạng khi gọi {endpoint}?id={api_id} (lần {attempt}/{self.max_retries}): {e}"
                 )
                 self._sleep(0.5)
                 continue
 
             if resp.status_code == 503:
                 logger.warning(
-                    f"Máy chủ trả về HTTP 503 cho {endpoint}?id={api_id} (lần {attempt + 1}/{self.max_retries})"
+                    f"Máy chủ trả về HTTP 503 cho {endpoint}?id={api_id} (lần {attempt}/{self.max_retries})"
                 )
-                if attempt < self.max_retries - 1:
-                    self._sleep(0.5 * (attempt + 1))
+                if attempt < self.max_retries:
+                    self._sleep(0.5 * attempt)
                 continue
 
             if resp.status_code != 200:
@@ -126,10 +129,11 @@ class GatewayClient:
                 logger.warning(
                     f"Phiên đăng nhập đã hết hạn (mã ret={RET_SESSION_EXPIRED}) khi gọi {endpoint}?id={api_id}."
                 )
-                if self.relogin_callback:
+                if self.relogin_callback and not relogin_attempted:
+                    relogin_attempted = True
+                    relogin_ok = False
                     with self._relogin_lock:
                         now = time.time()
-                        relogin_ok = True
                         if now - self._last_relogin_time > 3.0:
                             logger.info("Đang thử đăng nhập lại tài khoản...")
                             try:
@@ -142,23 +146,15 @@ class GatewayClient:
                             except Exception as ex:
                                 logger.error(f"Lỗi khi thực hiện đăng nhập lại: {ex}")
                                 relogin_ok = False
+                        else:
+                            logger.info("Phiên vừa được làm mới bởi luồng khác. Đang gửi lại yêu cầu...")
+                            relogin_ok = True
 
-                        if relogin_ok:
-                            try:
-                                retry_resp = self.session.post(
-                                    url, data=data, headers=self._headers(), timeout=self.timeout
-                                )
-                                if retry_resp.status_code == 200:
-                                    try:
-                                        retry_res = retry_resp.json()
-                                    except ValueError:
-                                        raw_retry = getattr(retry_resp, "text", "") or ""
-                                        m_retry = re.search(r"ret:\s*(\d+)", raw_retry)
-                                        retry_res = {"ret": int(m_retry.group(1))} if m_retry else None
-                                    if retry_res is not None:
-                                        return retry_res
-                            except Exception as ex:
-                                logger.warning(f"Lỗi khi gửi lại yêu cầu sau relogin: {ex}")
+                    if relogin_ok:
+                        # Thử lại yêu cầu với phiên mới đã được làm mới
+                        attempt -= 1
+                        self._sleep(0.5)
+                        continue
                 return result
 
             # Kiểm tra mã ret từ game server

@@ -457,6 +457,7 @@ class Dashboard(tk.Tk):
                     logger.info(
                         f"Đang tự động đăng nhập lại tài khoản {self.username} (Server {self.server_id})..."
                     )
+                    self._log_global("🔑 Phiên hết hạn (198599). Đang tự động đăng nhập lại tài khoản...")
                     login(
                         self.session,
                         self.server_id,
@@ -466,9 +467,14 @@ class Dashboard(tk.Tk):
                         proxy_user=self._proxy_user or None,
                         proxy_pass=self._proxy_pass or None,
                     )
+                    logger.info(
+                        f"Tự động đăng nhập lại thành công tài khoản {self.username} (Server {self.server_id})!"
+                    )
+                    self._log_global("✅ Tự động đăng nhập lại thành công! Đã khôi phục phiên kết nối.")
                     return True
                 except Exception as ex:
                     logger.error(f"Tự động đăng nhập lại thất bại: {ex}")
+                    self._log_global(f"❌ Tự động đăng nhập lại thất bại: {ex}")
                     return False
 
             relogin_cb = auto_relogin
@@ -1673,7 +1679,29 @@ class Dashboard(tk.Tk):
                 widget.delete("1.0", f"{diff + 1}.0")
         except Exception:
             pass
-        widget.see("end")
+    def _log_global(self, msg: str):
+        """Ghi thông báo hệ thống tới tất cả các tab log đang hiển thị."""
+        def _do_append():
+            line = f"[{time.strftime('%H:%M:%S')}] {msg}\n"
+            for attr in (
+                "tp_log_text",
+                "gd_log_text",
+                "bm_log_text",
+                "dt_log_text",
+                "bld_log_text",
+                "logis_log_text",
+                "bt_log_text",
+            ):
+                widget = getattr(self, attr, None)
+                if widget and hasattr(widget, "winfo_exists"):
+                    try:
+                        self._append_text_buffer(widget, line)
+                    except Exception:
+                        pass
+        try:
+            self.after(0, _do_append)
+        except Exception:
+            pass
 
     def _append_tp_log(self, msg: str):
         self._append_text_buffer(self.tp_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
@@ -3199,17 +3227,17 @@ class Dashboard(tk.Tk):
             return
         def run_relogin():
             try:
-                self.after(0, self._append_bld_log, "🔑 Đang thực hiện đăng nhập lại tài khoản...")
+                self._log_global("🔑 Đang thực hiện đăng nhập lại tài khoản...")
                 ok = False
                 if self.gateway.relogin_callback:
                     ok = bool(self.gateway.relogin_callback())
                 if ok:
-                    self.after(0, self._append_bld_log, "✅ Đăng nhập lại thành công! Đang tải lại dữ liệu...")
+                    self._log_global("✅ Đăng nhập lại thành công! Đang tải lại dữ liệu...")
                     self.after(0, self.reload)
                 else:
-                    self.after(0, self._append_bld_log, "❌ Đăng nhập lại không thành công hoặc không có relogin callback.")
+                    self._log_global("❌ Đăng nhập lại không thành công hoặc không có relogin callback.")
             except Exception as e:
-                self.after(0, self._append_bld_log, f"❌ Lỗi đăng nhập lại: {e}")
+                self._log_global(f"❌ Lỗi đăng nhập lại: {e}")
         threading.Thread(target=run_relogin, daemon=True).start()
 
     def _add_army_transfer_order(self):

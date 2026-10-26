@@ -122,6 +122,13 @@ def login(
     if proxy is not None:
         apply_proxy_to_session(session, proxy, username=proxy_user, password=proxy_pass)
 
+    cookies = getattr(session, "cookies", None)
+    if cookies is not None and hasattr(cookies, "clear"):
+        try:
+            cookies.clear()
+        except Exception:
+            pass
+
     try:
         resp = session.post(
             LOGIN_URL,

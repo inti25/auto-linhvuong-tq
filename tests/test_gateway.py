@@ -66,3 +66,61 @@ def test_gateway_mounts_connection_pool():
     client = GatewayClient(53, sess)
     adapter = sess.get_adapter("http://sg53.dipan.com")
     assert adapter._pool_maxsize == 32
+
+
+def test_gateway_relogin_failed_returns_expired_result():
+    session = MockSession([MockRawResponse("{ret:198599}")])
+    client = GatewayClient(
+        53, session, sleep=lambda s: None, relogin_callback=lambda: False
+    )
+    res = client.call("OPT.ashx", 65, {"pid": "1"})
+    assert res is not None
+    assert res.get("ret") == 198599
+    assert len(session.calls) == 1
+
+
+def test_gateway_relogin_only_once_per_call_prevents_infinite_loop():
+    # Cả lần 1 và lần retry đều trả về 198599
+    session = MockSession([
+        MockRawResponse("{ret:198599}"),
+        MockRawResponse("{ret:198599}"),
+    ])
+    relogin_count = 0
+
+    def relogin():
+        nonlocal relogin_count
+        relogin_count += 1
+        return True
+
+    client = GatewayClient(
+        53, session, sleep=lambda s: None, relogin_callback=relogin
+    )
+    res = client.call("OPT.ashx", 65, {"pid": "1"})
+    # Chỉ gọi relogin đúng 1 lần trong 1 lệnh gọi API
+    assert relogin_count == 1
+    assert res is not None
+    assert res.get("ret") == 198599
+    assert len(session.calls) == 2
+
+
+def test_gateway_relogin_recent_skips_duplicate_relogin():
+    import time
+    session = MockSession([
+        MockRawResponse("{ret:198599}"),
+        MockRawResponse('{"ret": 0, "msg": "ok"}'),
+    ])
+    relogin_called = []
+
+    client = GatewayClient(
+        53, session, sleep=lambda s: None, relogin_callback=lambda: relogin_called.append(True) or True
+    )
+    # Giả lập luồng khác vừa relogin xong 0.5s trước
+    client._last_relogin_time = time.time() - 0.5
+
+    res = client.call("OPT.ashx", 65, {"pid": "1"})
+    # Không gọi lại relogin callback vì vừa mới làm mới
+    assert len(relogin_called) == 0
+    assert res is not None
+    assert res.get("ret") == 0
+    assert len(session.calls) == 2
+
