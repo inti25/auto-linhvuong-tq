@@ -158,3 +158,139 @@ def test_binh_man_retreats_to_parent_city_below_threshold():
     # Kiểm tra trị thương và bổ sung lính
     heal_calls = [d for k, d in server.calls if k == "OPT.ashx?id=31"]
     assert len(heal_calls) == 2
+
+
+def test_binh_man_mode_city_direct_attack():
+    # Chế độ 2: Xuất quân thẳng từ Thành đến mục tiêu, hoàn toàn không gọi Common.ashx?id=55 (di trại)
+    target_mid = mid_from_coords(12, 12)
+    server = FakeServer(
+        map_views={
+            mid_from_coords(10, 10): {"npc_tent": [man(12, 12, 303, 7)]},
+            target_mid: {"npc_tent": [man(12, 12, 303, 7)]},
+        },
+        handlers={
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,  # MODE_CITY
+        city_id=1001,
+    )
+    out = task.run_once()
+    assert out == "attacked"
+
+    # Hoàn toàn không phát sinh request di dời Doanh trại
+    move_calls = [d for k, d in server.calls if k == "Common.ashx?id=55"]
+    assert len(move_calls) == 0
+
+    # Lệnh tấn công xuất phát thẳng từ thành
+    attack_calls = [d for k, d in server.calls if k == "OPT.ashx?id=53"]
+    assert len(attack_calls) == 1
+    assert attack_calls[0]["target_id"] == "303"
+
+
+def test_binh_man_mode_city_idle_check_blocks_when_generals_busy():
+    # Chế độ 2: Khi tướng đang bận (status != 0), bot tạm dừng và trả về generals_busy
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [
+                        1001,
+                        "Thành Chủ",
+                        10,
+                        10,
+                        [
+                            [10, "Triệu Vân", "vo", 100, 100, 1, 10, 100, 100],  # status = 1 (đang hành quân)
+                        ],
+                    ]
+                ],
+            }
+        }
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        check_idle=True,
+    )
+    out = task.run_once()
+    assert out == "generals_busy"
+    assert any("hành quân" in a or "bận" in a for a in alerts)
+
+
+def test_binh_man_mode_city_recovers_locally_in_city_without_transit():
+    # Chế độ 2: Dưới ngưỡng an toàn, trị thương & mua lính tại chỗ, KHÔNG gọi OPT.ashx?id=50
+    server = FakeServer(
+        handlers={
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+        }
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        return_threshold=30,
+    )
+    out = task.run_once(remaining_percent=20.0)
+    assert out == "recovered_in_city"
+
+    # Đảm bảo KHÔNG có lệnh chuyển quân (id=50) giữa thành và trại
+    transit_calls = [d for k, d in server.calls if k == "OPT.ashx?id=50"]
+    assert len(transit_calls) == 0
+
+    # Trị thương và bù lính tại chỗ cho city_id=1001
+    heal_calls = [d for k, d in server.calls if k == "OPT.ashx?id=31"]
+    assert len(heal_calls) == 1
+    assert heal_calls[0]["lCityTentID"] == "1001"
+    assert heal_calls[0]["lGeneralID"] == "15"
+
+
+def test_binh_man_mode_camp_stays_at_current_origin_when_target_lost():
+    # Chế độ 1: Doanh trại dời 1 bước tới (2, 2). Mục tiêu bị người khác đánh mất (ret=230).
+    # Doanh trại giữ nguyên tại (2, 2) chứ không lùi về (0, 0).
+    server = FakeServer(
+        map_views={
+            mid_from_coords(0, 0): {"npc_tent": [man(3, 3, 202, 7)]},
+        },
+        handlers={
+            "Common.ashx?id=55": {"ret": 0, "frozen": 5},
+            "OPT.ashx?id=53": {"ret": 230},  # ret=230: mục tiêu bị cướp
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[1],
+        origin=(0, 0),
+        radius=10,
+        man_types=[7],
+        camp_id=9999,
+        mode=1,
+        max_step=2,
+        sleep_fn=lambda s: None,
+    )
+    out = task.run_once()
+    assert out == "taken"
+    # Doanh trại dừng tại tọa độ mới đã tiến tới
+    assert task.origin == (2, 2)
+

@@ -97,3 +97,78 @@ def test_profile_store_save_and_load(tmp_path: Path):
 def test_profile_store_load_missing_file_raises():
     with pytest.raises(FileNotFoundError):
         ProfileStore.load(Path("non_existent_profile_file_12345.json"))
+
+
+def test_profile_binh_man_and_goi_man_fields():
+    data = {
+        "binh_man": {
+            "mode": 2,
+            "radius": "12",
+            "threshold": "40",
+            "mantypes": "5,6,7",
+        },
+        "goi_man": {
+            "target_type": 8,  # Đột Quyết
+            "radius": "7",
+            "interval": "15",
+        },
+    }
+    prof = Profile.from_dict(data)
+    assert prof.binh_man.mode == 2
+    assert prof.binh_man.radius == "12"
+    assert prof.binh_man.threshold == "40"
+    assert prof.binh_man.mantypes == "5,6,7"
+
+    assert prof.goi_dan.target_type == 8
+    assert prof.goi_dan.radius == "7"
+    assert prof.goi_dan.interval == "15"
+
+    d = prof.to_dict()
+    assert d["binh_man"]["mode"] == 2
+    assert d["goi_dan"]["target_type"] == 8
+
+
+def test_profile_target_types_multiselect_roundtrip():
+    data = {
+        "binh_man": {
+            "mode": 1,
+            "mantypes": "7,8,9,10,301",
+            "target_types": [7, 8, 9, 10, 301],
+        },
+        "goi_man": {
+            "target_types": [7, 8, 301],
+            "radius": "6",
+        },
+    }
+    prof = Profile.from_dict(data)
+    assert prof.binh_man.target_types == [7, 8, 9, 10, 301]
+    assert prof.binh_man.mantypes == "7,8,9,10,301"
+
+    assert prof.goi_dan.target_types == [7, 8, 301]
+    assert prof.goi_dan.target_type == 7  # first type
+
+    d = prof.to_dict()
+    assert d["binh_man"]["target_types"] == [7, 8, 9, 10, 301]
+    assert d["goi_dan"]["target_types"] == [7, 8, 301]
+    assert d["goi_dan"]["target_type"] == 7
+
+
+def test_profile_binh_man_and_goi_man_generals_roundtrip():
+    data = {
+        "binh_man": {
+            "mode": 1,
+            "generals": [417506, 417520, 99999],
+        },
+        "goi_dan": {
+            "generals": [417506, "invalid", 417513],
+        },
+    }
+    prof = Profile.from_dict(data)
+    assert prof.binh_man.generals == [417506, 417520, 99999]
+    assert prof.goi_dan.generals == [417506, 417513]
+
+    d = prof.to_dict()
+    assert d["binh_man"]["generals"] == [417506, 417520, 99999]
+    assert d["goi_dan"]["generals"] == [417506, 417513]
+
+

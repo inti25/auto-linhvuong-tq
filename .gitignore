@@ -11,7 +11,7 @@ gui_settings.json
 venv/
 env/
 ENV/
-
+LVClientCode
 # Environment variables and secrets
 .env
 .env.*

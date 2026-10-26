@@ -248,11 +248,13 @@ def build_task(
     )
     skip = cfg.get("skip_capital_radius", 0)
 
-    if name == "goi-dan":
+    if name in ("goi-dan", "goi-man"):
         return GoiDan(
             ctx,
             skip_capital_radius=skip,
-            mode=cfg.get("mode", "dan"),
+            mode=cfg.get("mode"),
+            target_type=cfg.get("target_type", 301),
+            target_types=cfg.get("target_types"),
             city_id=cfg.get("city_id", 0),
             auto_recover=cfg.get("auto_recover", False),
             refill_amount=cfg.get("refill_amount", 500),
@@ -264,6 +266,7 @@ def build_task(
         return BinhMan(
             ctx,
             man_types=types,
+            mode=cfg.get("mode"),
             return_threshold=cfg.get("return_threshold", 0),
             skip_capital_radius=skip,
             parent_city_id=cfg.get("parent_city_id") or cfg.get("base_city_id"),
@@ -282,6 +285,7 @@ def main(argv=None) -> int:
         "task",
         choices=[
             "goi-dan",
+            "goi-man",
             "binh-man",
             "thao-phat",
             "build",

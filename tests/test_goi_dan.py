@@ -142,3 +142,103 @@ def test_goi_dan_stops_on_captcha_at_call():
     task = GoiDan(ctx, generals=[10], origin=(0, 0), radius=5, city_id=123)
     with pytest.raises(CaptchaRequired):
         task.run_once()
+
+
+def test_goi_man_level_selection_uses_correct_target_type():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    mid = mid_from_coords(3, 3)
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(3, 3, 777, 7)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    # Chọn Cấp 7 - Hung Nô
+    task = GoiMan(ctx, generals=[10], origin=(3, 3), radius=5, target_type=7, city_id=123)
+    out = task.run_once()
+    assert out == "called_and_attacked"
+
+    call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
+    assert call_69["type"] == "63"
+    assert call_69["param1"] == "7"
+
+
+def test_goi_man_vong_linh_special_type_301():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    mid = mid_from_coords(3, 3)
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(3, 3, 3010, 301)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    # Chọn Vong Linh (ID 301)
+    task = GoiMan(ctx, generals=[10], origin=(3, 3), radius=5, target_type=301, city_id=123)
+    out = task.run_once()
+    assert out == "called_and_attacked"
+
+    call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
+    assert call_69["type"] == "33"
+    assert call_69["param1"] == "268"
+
+
+def test_goi_man_multiple_target_types_round_robin():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    mid = mid_from_coords(4, 4)
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": [
+                {"ret": 0, "new_target_id": 7001, "new_target_mid": mid, "new_target_type": 7},
+                {"ret": 0, "new_target_id": 8001, "new_target_mid": mid, "new_target_type": 8},
+            ],
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiMan(ctx, generals=[10], origin=(4, 4), radius=5, target_types=[7, 8], city_id=123)
+
+    # Lượt 1: Triệu hồi loại 7
+    res1 = task.run_once()
+    assert res1 == "called_and_attacked"
+    calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert calls_69[0]["param1"] == "7"
+
+    # Lượt 2: Triệu hồi xoay vòng sang loại 8
+    res2 = task.run_once()
+    assert res2 == "called_and_attacked"
+    calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert calls_69[1]["param1"] == "8"
+
+
+def test_goi_man_multiple_target_types_fallback_on_failure():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    mid = mid_from_coords(4, 4)
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": [
+                {"ret": 201},  # Lượt đầu gọi loại 7 thất bại (hết lệnh bài)
+                {"ret": 0, "new_target_id": 8002, "new_target_mid": mid, "new_target_type": 8},  # Fallback sang loại 8 thành công
+            ],
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiMan(ctx, generals=[10], origin=(4, 4), radius=5, target_types=[7, 8], city_id=123)
+
+    out = task.run_once()
+    assert out == "called_and_attacked"
+    calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert len(calls_69) == 2
+    assert calls_69[0]["param1"] == "7"
+    assert calls_69[1]["param1"] == "8"
+

@@ -25,6 +25,24 @@ from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired, TaskContext, at
 from .di_trai import DiTrai, chebyshev_distance
 
 
+MODE_CAMP = 1  # Chế độ 1: Sử dụng Doanh trại di chuyển đến cạnh Man
+MODE_CITY = 2  # Chế độ 2: Xuất quân thẳng từ Thành
+
+MAN_TARGET_OPTIONS: list[tuple[int, str]] = [
+    (301, "Vong Linh (ID 301)"),
+    (1, "Cấp 1 - Uy Quốc"),
+    (2, "Cấp 2 - Tiên Ti"),
+    (3, "Cấp 3 - Ô Hoàn"),
+    (4, "Cấp 4 - Sơn Việt"),
+    (5, "Cấp 5 - Khương Để"),
+    (6, "Cấp 6 - Mạnh Hoạch"),
+    (7, "Cấp 7 - Hung Nô"),
+    (8, "Cấp 8 - Đột Quyết"),
+    (9, "Cấp 9 - Long Phi"),
+    (10, "Cấp 10 - Hổ Báo Kỵ"),
+]
+
+
 class BinhMan:
     def __init__(
         self,
@@ -40,6 +58,9 @@ class BinhMan:
         skip_capital_radius: int = 0,
         auto_recover: bool = False,
         sleep_fn: Callable[[float], None] = time.sleep,
+        mode: Optional[int] = None,
+        city_id: Optional[int] = None,
+        check_idle: bool = True,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -53,10 +74,39 @@ class BinhMan:
         self.skip_capital_radius = skip_capital_radius
         self.auto_recover = auto_recover
         self.sleep_fn = sleep_fn
+        self.city_id = city_id or parent_city_id
+        self.check_idle = check_idle
+
+        # Tự động suy ra mode nếu không chỉ định: có camp_id là Chế độ 1, không có là Chế độ 2
+        if mode is not None:
+            self.mode = mode
+        else:
+            self.mode = MODE_CAMP if self.camp_id else MODE_CITY
 
     def needs_return(self, remaining_percent: float) -> bool:
         """Binh lực hoặc thể lực còn lại (%) dưới ngưỡng thì cần rút về thành."""
         return remaining_percent < self.return_threshold
+
+    def check_generals_idle(self) -> bool:
+        """Kiểm tra toàn bộ võ tướng có đang rảnh rỗi (status == 0) hay không."""
+        if not self.generals:
+            return True
+        resp = self.ctx.gateway.call("Common.ashx", 32, {"type": "2", "_": ""}) or {}
+        if not resp or "list" not in resp:
+            return True
+
+        for entry in resp.get("list", []):
+            g_entries = entry[4] if len(entry) > 4 else []
+            for g in g_entries:
+                try:
+                    gid = int(g[0])
+                except (ValueError, IndexError, TypeError):
+                    continue
+                if gid in self.generals:
+                    status = int(g[5]) if len(g) > 5 else 0
+                    if status != 0:
+                        return False
+        return True
 
     def step_towards(self, target_x: int, target_y: int, step_limit: Optional[int] = None) -> tuple[int, int]:
         """Tính tọa độ bước dời kế tiếp hướng về mục tiêu, giới hạn bởi step_limit."""
@@ -107,9 +157,8 @@ class BinhMan:
         self.origin = mover.origin
         return res in ("arrived", "stopped")
 
-
     def retreat_to_safety(self) -> None:
-        """Hồi binh về thành mẹ để trị thương và bổ sung quân lực."""
+        """Hồi binh về thành mẹ để trị thương và bổ sung quân lực (Chế độ 1 - Doanh trại)."""
         if not self.parent_city_id or not self.camp_id:
             return
 
@@ -160,12 +209,53 @@ class BinhMan:
                 },
             )
 
-    def run_once(self, remaining_percent: float = 100.0) -> str:
-        # Kiểm tra ngưỡng an toàn trước tiên
-        if self.needs_return(remaining_percent):
-            self.retreat_to_safety()
-            return "retreated_below_threshold"
+    def recover_in_city(self) -> None:
+        """Trị thương và bổ sung quân tại chỗ trong Thành (Chế độ 2 - Xuất quân từ Thành)."""
+        cid = self.city_id or self.parent_city_id or 0
+        for gid in self.generals:
+            # 1. Trị thương (OPT.ashx?id=31)
+            self.ctx.gateway.call(
+                "OPT.ashx",
+                31,
+                {"lCityTentID": str(cid), "lGeneralID": str(gid), "_": ""},
+            )
+            # 2. Chiêu mộ tân binh nếu cần (OPT.ashx?id=41)
+            self.ctx.gateway.call(
+                "OPT.ashx",
+                41,
+                {"lAmount": "1000", "tid": str(cid), "_": ""},
+            )
+            # 3. Biên chế quân vào đạo (OPT.ashx?id=6)
+            self.ctx.gateway.call(
+                "OPT.ashx",
+                6,
+                {
+                    "lGeneralID": str(gid),
+                    "lSoldierType": "1",
+                    "lAmount": "1000",
+                    "tid": str(cid),
+                    "_": "",
+                },
+            )
 
+    def run_once(self, remaining_percent: float = 100.0) -> str:
+        # 1. Kiểm tra ngưỡng an toàn trước tiên
+        if self.needs_return(remaining_percent):
+            if self.mode == MODE_CAMP:
+                self.retreat_to_safety()
+                return "retreated_below_threshold"
+            else:
+                self.recover_in_city()
+                return "recovered_in_city"
+
+        # 2. Ở Chế độ 2 (Xuất quân từ Thành): Kiểm tra tướng rảnh rỗi (Idle Check) nếu có city_id
+        if self.mode == MODE_CITY and self.check_idle and self.city_id:
+            if not self.check_generals_idle():
+                if self.ctx.notify:
+                    self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
+                return "generals_busy"
+
+        # 3. Quét tìm Man mục tiêu
         target = self.ctx.scanner.find_nearest(
             *self.origin,
             self.radius,
@@ -175,11 +265,13 @@ class BinhMan:
         if target is None:
             return "no_target"
 
-        # Nếu đang ở Trại Di Chuyển và mục tiêu xa hơn 2 ô -> Dời trại từng bước
-        if self.camp_id and chebyshev_distance(self.origin[0], self.origin[1], target.x, target.y) > 2:
+        # 4. Nếu ở Chế độ 1 (Doanh trại) và mục tiêu xa hơn 2 ô -> Dời trại từng bước
+        if self.mode == MODE_CAMP and self.camp_id and chebyshev_distance(self.origin[0], self.origin[1], target.x, target.y) > 2:
             reached = self.advance_camp_to_target(target)
             if not reached:
                 return "relocate_failed"
 
+        # 5. Xuất quân tấn công
         result = attack(self.ctx, target, self.generals)
         return result
+

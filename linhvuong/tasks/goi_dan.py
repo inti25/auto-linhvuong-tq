@@ -35,9 +35,10 @@ class GoiDan:
         origin: tuple[int, int],
         radius: int = 5,
         skip_capital_radius: int = 0,
-        mode: str = "vong_linh",  # "vong_linh" hoặc "dan"
+        mode: Optional[str] = None,  # "vong_linh" hoặc "dan"
         city_id: Optional[int] = None,
         target_type: int = VONG_LINH,
+        target_types: Optional[list[int]] = None,
         soldier_type: int = 1,
         refill_amount: int = 0,
         auto_recover: bool = False,
@@ -47,15 +48,46 @@ class GoiDan:
         self.origin = origin
         self.radius = radius
         self.skip_capital_radius = skip_capital_radius
-        self.mode = mode
         self.city_id = city_id or 0
-        self.target_type = target_type
+        if target_types:
+            self.target_types = list(target_types)
+        else:
+            self.target_types = [target_type]
+        self._current_type_idx = 0
+        self.target_type = self.target_types[0]
         self.soldier_type = soldier_type
         self.refill_amount = refill_amount
         self.auto_recover = auto_recover
 
+        # Tự động suy ra mode từ target_type nếu mode chưa được chỉ định
+        if mode:
+            self.mode = mode
+        elif self.target_type == VONG_LINH:
+            self.mode = "vong_linh"
+        else:
+            self.mode = "dan"
+
+    def _get_call_payload(self, t_type: int) -> dict:
+        if t_type == VONG_LINH or (self.mode == "vong_linh" and len(self.target_types) == 1):
+            return {
+                "type": "33",
+                "param1": str(VONG_LINH_TALISMAN_ID),
+                "param2": "0",
+                "paytype": "1",
+                "_": "",
+            }
+        else:
+            mid = mid_from_coords(*self.origin)
+            return {
+                "type": "63",
+                "param1": str(t_type),
+                "param2": str(mid),
+                "paytype": "1",
+                "_": "",
+            }
+
     def call_target(self) -> tuple[Optional[Target], Optional[str]]:
-        """Kích hoạt API gọi quái theo đúng chế độ đã cấu hình."""
+        """Kích hoạt API gọi quái theo đúng chế độ đã cấu hình, xoay vòng qua target_types."""
         # Chuyển focus thành nếu có city_id
         if self.city_id:
             resp_move = self.ctx.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""}) or {}
@@ -74,50 +106,56 @@ class GoiDan:
             if ret_move != RET_OK:
                 return None, f"call_failed:{ret_move}"
 
-        # Gửi lệnh gọi qua OPT.ashx?id=69
-        if self.mode == "dan":
-            mid = mid_from_coords(*self.origin)
-            call_payload = {
-                "type": "63",
-                "param1": str(self.target_type),
-                "param2": str(mid),
-                "paytype": "1",
-                "_": "",
-            }
-        else:
-            # mode == "vong_linh"
-            call_payload = {
-                "type": "33",
-                "param1": str(VONG_LINH_TALISMAN_ID),
-                "param2": "0",
-                "paytype": "1",
-                "_": "",
-            }
+        total_types = len(self.target_types)
+        last_ret = RET_OK
+        for attempt in range(total_types):
+            idx = (self._current_type_idx + attempt) % total_types
+            curr_type = self.target_types[idx]
+            call_payload = self._get_call_payload(curr_type)
 
-        resp_call = self.ctx.gateway.call("OPT.ashx", 69, call_payload) or {}
-        ret_call = resp_call.get("ret", RET_OK)
-        if ret_call == 110 or ret_call == RET_CAPTCHA_REQUIRED:
-            raise CaptchaRequired()
-        if ret_call == 209:
-            self.ctx.notify("⚠️ Vong Linh đang bận hoặc đã tồn tại, tiến hành quét tìm...")
-        elif ret_call != RET_OK:
-            return None, f"call_failed:{ret_call}"
+            resp_call = self.ctx.gateway.call("OPT.ashx", 69, call_payload) or {}
+            ret_call = resp_call.get("ret", RET_OK)
+            if ret_call == 110 or ret_call == RET_CAPTCHA_REQUIRED:
+                raise CaptchaRequired()
+            if ret_call == 209:
+                if self.ctx.notify:
+                    self.ctx.notify(f"⚠️ Mục tiêu {curr_type} đang bận hoặc đã tồn tại, tiến hành quét tìm...")
+                self._current_type_idx = (idx + 1) % total_types
+                self.target_type = curr_type
+                target = self.ctx.scanner.find_nearest(
+                    *self.origin,
+                    self.radius,
+                    [curr_type],
+                    skip_capital_radius=self.skip_capital_radius,
+                )
+                if target is None:
+                    return None, "target_not_found_after_call"
+                return target, None
+            elif ret_call != RET_OK:
+                last_ret = ret_call
+                continue
 
-        # Nếu server trả về trực tiếp thông tin mục tiêu
-        if "new_target_id" in resp_call:
-            x, y = coords_from_mid(int(resp_call["new_target_mid"]))
-            return Target(x, y, int(resp_call["new_target_id"]), int(resp_call.get("new_target_type", self.target_type))), None
+            # Thành công gọi
+            self._current_type_idx = (idx + 1) % total_types
+            self.target_type = curr_type
 
-        # Quét tìm mục tiêu vừa xuất hiện quanh thành
-        target = self.ctx.scanner.find_nearest(
-            *self.origin,
-            self.radius,
-            [self.target_type],
-            skip_capital_radius=self.skip_capital_radius,
-        )
-        if target is None:
-            return None, "target_not_found_after_call"
-        return target, None
+            # Nếu server trả về trực tiếp thông tin mục tiêu
+            if "new_target_id" in resp_call:
+                x, y = coords_from_mid(int(resp_call["new_target_mid"]))
+                return Target(x, y, int(resp_call["new_target_id"]), int(resp_call.get("new_target_type", curr_type))), None
+
+            # Quét tìm mục tiêu vừa xuất hiện quanh thành
+            target = self.ctx.scanner.find_nearest(
+                *self.origin,
+                self.radius,
+                [curr_type],
+                skip_capital_radius=self.skip_capital_radius,
+            )
+            if target is None:
+                return None, "target_not_found_after_call"
+            return target, None
+
+        return None, f"call_failed:{last_ret}"
 
     def recover_generals(self) -> None:
         """Thực hiện chu trình hồi phục sau chiến đấu: trị thương và bổ sung tân binh."""
@@ -147,7 +185,7 @@ class GoiDan:
         target = self.ctx.scanner.find_nearest(
             *self.origin,
             self.radius,
-            [self.target_type],
+            self.target_types,
             skip_capital_radius=self.skip_capital_radius,
         )
         if target is not None:
@@ -168,3 +206,8 @@ class GoiDan:
         if self.auto_recover:
             self.recover_generals()
         return "called_and_attacked" if result == "attacked" else result
+
+
+# Định danh chuẩn theo mô hình miền GLOSSARY
+GoiMan = GoiDan
+

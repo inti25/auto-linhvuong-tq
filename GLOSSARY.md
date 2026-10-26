@@ -1,7 +1,7 @@
 # LinhVuong
 
 Công cụ tự động hóa (bot) cho game web Linh Vương, xây dựng và chuẩn hóa từ phân tích dịch ngược ZMan.exe và ZBuild.exe.
-Phạm vi v1: Gọi Dân, Thảo Phạt, Bình Man, Xây Dựng, Nghiên Cứu Kỹ Thuật, Chuyển Quân Giới, An Dân.
+Phạm vi v1: Gọi Man, Thảo Phạt, Bình Man, Xây Dựng, Nghiên Cứu Kỹ Thuật, Chuyển Quân Giới, An Dân.
 
 ## Language
 
@@ -14,7 +14,7 @@ Căn cứ dã ngoại hoặc đồn trú lưu động của người chơi trên
 _Avoid_: Trại tạm, Trại Di Chuyển, camp, tent
 
 **Võ tướng**:
-Tướng chuyên về quân sự (loại 2), có chỉ số dũng võ, thể lực, sĩ khí; trực tiếp thống lĩnh binh mã xuất chinh dã ngoại, tham gia Thảo Phạt, Bình Man, Gọi Dân.
+Tướng chuyên về quân sự (loại 2), có chỉ số dũng võ, thể lực, sĩ khí; trực tiếp thống lĩnh binh mã xuất chinh dã ngoại, tham gia Thảo Phạt, Bình Man, Gọi Man.
 _Avoid_: Tướng võ, martial
 
 **Văn quan**:
@@ -53,9 +53,13 @@ _Avoid_: Quái, monster
 Một Man cụ thể đang tồn tại trên bản đồ, định danh bằng `target_id`.
 _Avoid_: Target (khi nói tiếng Việt), địch
 
-**Gọi Dân**:
+**Gọi Man**:
 Hành động triệu hồi Man (gồm Dân thường `type=63` và Vong Linh `type=33`) về vị trí lân cận để đánh luyện tướng.
-_Avoid_: Gọi man, summon
+_Avoid_: Gọi dân, summon
+
+**Võ tướng xuất kích**:
+Các Võ tướng có vai trò võ quan (`role == "vo"`) được người chơi tích chọn tham gia đạo quân viễn chinh đánh Man, Gọi Man hoặc Thảo Phạt.
+_Avoid_: Tướng đánh, active general, selected general
 
 **Thảo Phạt**:
 Chiến dịch tấn công các cứ điểm dã ngoại theo 8 cấp độ chiến dịch, chỉ sử dụng tối đa 5 Võ tướng.
@@ -117,7 +121,7 @@ Khoảng thời gian Doanh trại phải tạm dừng sau mỗi bước dời v�
 _Avoid_: Cooldown dời trại, frozen time
 
 **Hồ Sơ Cấu Hình**:
-File dữ liệu JSON duy nhất lưu trữ toàn bộ trạng thái thiết lập và quy hoạch tự động hóa của tất cả các phân hệ (Xây Dựng, Nghiên Cứu, Thảo Phạt, Bình Man, Gọi Dân, Hậu Cần).
+File dữ liệu JSON duy nhất lưu trữ toàn bộ trạng thái thiết lập và quy hoạch tự động hóa của tất cả các phân hệ (Xây Dựng, Nghiên Cứu, Thảo Phạt, Bình Man, Gọi Man, Hậu Cần).
 _Avoid_: Config lẻ, file lưu cấu hình riêng, profile_settings
 
 **Luyện Sĩ Khí**:
@@ -231,7 +235,7 @@ Chiến lược điều phối tài nguyên thông minh trong Hàng Đợi Xây 
 _Avoid_: Mở rương tức thì, cắn rương liên tục, greedy box opening
 
 **Động Cơ Tác Chiến**:
-Bộ máy điều khiển và giám sát diễn biến chiến trường tập trung, hỗ trợ mọi hình thức giao tranh (Thảo Phạt, Bình Man, Gọi Dân, hoặc giám sát độc lập qua `battle_id`), thay vì logic đơn lẻ phân tán theo từng nhiệm vụ.
+Bộ máy điều khiển và giám sát diễn biến chiến trường tập trung, hỗ trợ mọi hình thức giao tranh (Thảo Phạt, Bình Man, Gọi Man, hoặc giám sát độc lập qua `battle_id`), thay vì logic đơn lẻ phân tán theo từng nhiệm vụ.
 _Avoid_: Battle controller riêng lẻ, script đánh trận
 
 **Phương Thức Tấn Công Chi Tiết**:
@@ -267,7 +271,7 @@ Module miền độc lập chịu trách nhiệm nạp, ghi nguyên tử (`atomi
 _Avoid_: Config parser, profile manager, json helper
 
 **Động Cơ Điều Phối Tác Vụ** (`AutomationEngine`):
-Module điều hành vòng đời thực thi nền tập trung cho tất cả các phân hệ tự động hóa (Thảo Phạt, Xây Dựng, Nghiên Cứu, Bình Man, Gọi Dân), quản lý luồng chạy ngầm, áp dụng Độ Trễ Ngẫu Nhiên, phát hiện và tạm dừng khi gặp Captcha qua một giao diện thống nhất duy nhất (`start`, `stop`, `status`, `resume`).
+Module điều hành vòng đời thực thi nền tập trung cho tất cả các phân hệ tự động hóa (Thảo Phạt, Xây Dựng, Nghiên Cứu, Bình Man, Gọi Man), quản lý luồng chạy ngầm, áp dụng Độ Trễ Ngẫu Nhiên, phát hiện và tạm dừng khi gặp Captcha qua một giao diện thống nhất duy nhất (`start`, `stop`, `status`, `resume`).
 _Avoid_: ThreadManager, RunnerPool, task daemon
 
 **Tác Vụ Tự Động Hóa** (`ExecutableTask`):
@@ -320,3 +324,23 @@ Hệ thống tên kiến trúc song ngữ Trung - Việt chuẩn hóa theo ZBuil
 | 67 | `防具司 - Phòng Cụ Ty` | Xưởng khôi giáp cấp cao (cấp cao của Xưởng Khôi Giáp) |
 | 68 | `车马司 - Xa Mã Ty` | Trại ngựa chiến cấp cao (cấp cao của Xưởng Ngựa) |
 | 69 | `督军场 - Đốc Quân Trường` | Doanh trại huấn luyện cao cấp (cấp cao của Binh Trường) |
+
+
+## Danh Mục Man Tộc (Cấp Độ & Tên Tương Ứng)
+
+Phân loại cấp độ Man và cứ điểm dã ngoại chuẩn hóa theo game Linh Vương và ZMan:
+
+| Cấp Độ (`man_type`) | Tên Man Tộc Chuẩn | Đặc Điểm / Binh Chủng |
+|:---:|:---|:---|
+| 1 | `Uy Quốc` | Man cấp 1, binh lực cơ bản |
+| 2 | `Tiên Ti` | Man cấp 2, kỵ xạ phương Bắc |
+| 3 | `Ô Hoàn` | Man cấp 3, kỵ binh du mục |
+| 4 | `Sơn Việt` | Man cấp 4, bộ binh sơn địa |
+| 5 | `Khương Để` | Man cấp 5, quân Tây Lương thiện chiến |
+| 6 | `Mạnh Hoạch` | Man cấp 6, bộ binh & tượng binh Nam Man |
+| 7 | `Hung Nô` | Man cấp 7, thiết kỵ thảo nguyên |
+| 8 | `Đột Quyết` | Man cấp 8, kỵ binh tinh nhuệ |
+| 9 | `Long Phi` | Man cấp 9, tinh anh dã ngoại |
+| 10 | `Hổ Báo Kỵ` | Man cấp 10, kỵ binh tối thượng |
+| 301 | `Vong Linh` | Mục tiêu triệu hồi đặc biệt bằng Bùa Vong Linh (ID 268) |
+

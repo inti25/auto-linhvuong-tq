@@ -170,38 +170,90 @@ class GoiDanProfile:
     radius: str = "5"
     auto_recover: bool = True
     interval: str = "10"
+    target_type: int = 301  # 301: Vong Linh, 1..10: Uy Quốc..Hổ Báo Kỵ
+    target_types: list[int] = field(default_factory=lambda: [301])
+    generals: list[int] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> "GoiDanProfile":
         if not isinstance(data, dict):
             return cls()
+        raw_types = data.get("target_types")
+        if isinstance(raw_types, list) and raw_types:
+            t_types = [int(x) for x in raw_types]
+        elif isinstance(raw_types, str) and raw_types.strip():
+            t_types = [int(x.strip()) for x in raw_types.split(",") if x.strip()]
+        elif "target_type" in data:
+            t_types = [int(data["target_type"])]
+        else:
+            t_types = [301]
+
+        raw_gens = data.get("generals", [])
+        gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
+
+        first_type = t_types[0] if t_types else 301
         return cls(
             mode_idx=int(data.get("mode_idx", 0)),
             radius=str(data.get("radius", "5")),
             auto_recover=bool(data.get("auto_recover", True)),
             interval=str(data.get("interval", "10")),
+            target_type=int(data.get("target_type", first_type)),
+            target_types=t_types,
+            generals=gens,
         )
+
+
+GoiManProfile = GoiDanProfile
 
 
 @dataclass
 class BinhManProfile:
+    mode: int = 1  # 1: Di Doanh trại đến cạnh Man, 2: Xuất quân thẳng từ Thành
     radius: str = "5"
     min_army: str = "3000"
     min_hp: str = "50"
     auto_comfort: bool = True
     interval: str = "15"
+    camp_id: str = ""
+    parent_city_id: str = ""
+    threshold: str = "30"
+    mantypes: str = "7,8,9,10"
+    target_types: list[int] = field(default_factory=lambda: [7, 8, 9, 10])
+    generals: list[int] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> "BinhManProfile":
         if not isinstance(data, dict):
             return cls()
+        raw_types = data.get("target_types")
+        if isinstance(raw_types, list) and raw_types:
+            t_types = [int(x) for x in raw_types]
+            mantypes = ",".join(str(x) for x in t_types)
+        elif "mantypes" in data:
+            mantypes = str(data["mantypes"])
+            t_types = [int(x.strip()) for x in mantypes.split(",") if x.strip()]
+        else:
+            mantypes = "7,8,9,10"
+            t_types = [7, 8, 9, 10]
+
+        raw_gens = data.get("generals", [])
+        gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
+
         return cls(
+            mode=int(data.get("mode", 1)),
             radius=str(data.get("radius", "5")),
             min_army=str(data.get("min_army", "3000")),
             min_hp=str(data.get("min_hp", "50")),
             auto_comfort=bool(data.get("auto_comfort", True)),
             interval=str(data.get("interval", "15")),
+            camp_id=str(data.get("camp_id", "")),
+            parent_city_id=str(data.get("parent_city_id", "")),
+            threshold=str(data.get("threshold", "30")),
+            mantypes=mantypes,
+            target_types=t_types,
+            generals=gens,
         )
+
 
 
 @dataclass
@@ -310,7 +362,7 @@ class Profile:
             research=ResearchProfile.from_dict(res_raw),
             resource=ResourceProfile.from_dict(data.get("resource", {})),
             thao_phat=ThaoPhatProfile.from_dict(data.get("thao_phat", {})),
-            goi_dan=GoiDanProfile.from_dict(data.get("goi_dan", {})),
+            goi_dan=GoiDanProfile.from_dict(data.get("goi_man") or data.get("goi_dan", {})),
             binh_man=BinhManProfile.from_dict(data.get("binh_man", {})),
             logistics=LogisticsProfile.from_dict(data.get("logistics", {})),
             ditrai=DiTraiProfile.from_dict(data.get("ditrai", {})),

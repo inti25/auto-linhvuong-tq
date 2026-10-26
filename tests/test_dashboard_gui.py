@@ -415,12 +415,11 @@ def test_dashboard_combobox_dark_palette_and_contrast():
         assert field_map.get("readonly") == "#2a2e45"
         assert fg_map.get("readonly") == "#ffffff"
 
-        # Kiểm tra popdown listbox trên combobox thực tế
+        # Kiểm tra cấu hình màu sắc popdown listbox trên combobox
         cb = dash.tp_city_combo
-        popdown = cb.tk.eval(f"ttk::combobox::PopdownWindow {cb}")
-        lb = f"{popdown}.f.l"
-        bg = cb.tk.eval(f"{lb} cget -background")
-        fg = cb.tk.eval(f"{lb} cget -foreground")
+        lb = tk.Listbox(cb)
+        bg = cb.tk.eval(f"option get {lb} background Listbox")
+        fg = cb.tk.eval(f"option get {lb} foreground Listbox")
         assert bg == "#1e2130"
         assert fg == "#ffffff"
     finally:
@@ -1773,6 +1772,230 @@ def test_dashboard_morale_training_ui_and_actions():
             dash._morale_runner.join(timeout=2.0)
     finally:
         dash.destroy()
+
+
+def test_dashboard_binh_man_mode_toggle_and_ui_state():
+    dash = safe_dashboard()
+    try:
+        # Kiểm tra mặc định là Mode 1 (Doanh trại)
+        assert hasattr(dash, "bm_mode_var")
+        assert dash.bm_mode_var.get() == 1
+        assert "Doanh trại" in dash.bm_base_lbl.cget("text")
+        assert str(dash.bm_parent_city_combo.cget("state")) in ("readonly", "normal")
+        assert str(dash.bm_camp_id_entry.cget("state")) in ("normal", "")
+
+        # Chuyển sang Mode 2 (Thành trì)
+        dash.bm_mode_var.set(2)
+        dash._on_bm_mode_changed()
+        assert "Thành" in dash.bm_base_lbl.cget("text")
+        assert str(dash.bm_parent_city_combo.cget("state")) == "disabled"
+        assert str(dash.bm_camp_id_entry.cget("state")) == "disabled"
+
+        # Chuyển lại về Mode 1
+        dash.bm_mode_var.set(1)
+        dash._on_bm_mode_changed()
+        assert "Doanh trại" in dash.bm_base_lbl.cget("text")
+        assert str(dash.bm_parent_city_combo.cget("state")) in ("readonly", "normal")
+        assert str(dash.bm_camp_id_entry.cget("state")) in ("normal", "")
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_goi_man_target_level_options():
+    dash = safe_dashboard()
+    try:
+        # Kiểm tra danh sách 11 cấp độ (1..10 + Vong Linh)
+        assert len(dash.gd_target_options) == 11
+        assert dash.gd_target_options[0] == (301, "Vong Linh (ID 301)")
+        assert dash.gd_target_options[7] == (7, "Cấp 7 - Hung Nô")
+        assert dash.gd_target_options[10] == (10, "Cấp 10 - Hổ Báo Kỵ")
+
+        # Chọn Cấp 7 - Hung Nô (index 7)
+        dash.gd_mode_combo.current(7)
+        assert dash._get_gd_target_type() == 7
+
+        # Chọn Vong Linh (index 0)
+        dash.gd_mode_combo.current(0)
+        assert dash._get_gd_target_type() == 301
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_multiselect_dropdown_sync():
+    dash = safe_dashboard()
+    try:
+        # 1. Gọi Man MultiSelect
+        assert hasattr(dash, "gd_target_dropdown")
+        dash.gd_target_dropdown.set_selected([7, 8, 301])
+        selected_gd = set(dash.gd_target_dropdown.get_selected())
+        assert selected_gd == {7, 8, 301}
+
+        dash.gd_target_dropdown.deselect_all()
+        assert dash.gd_target_dropdown.get_selected() == []
+
+        dash.gd_target_dropdown.select_all()
+        assert len(dash.gd_target_dropdown.get_selected()) == 11
+
+        # 2. Bình Man MultiSelect
+        assert hasattr(dash, "bm_mantypes_dropdown")
+        dash.bm_mantypes_dropdown.set_selected([7, 8, 9, 10])
+        assert dash.bm_mantypes_dropdown.get_selected() == [7, 8, 9, 10]
+        assert "7,8,9,10" in dash.bm_mantypes_var.get()
+
+        # 3. Profile collect & apply sync
+        profile = dash._collect_unified_profile()
+        assert profile["goi_dan"]["target_types"] == [val for val, _ in dash.gd_target_options]
+        assert profile["binh_man"]["target_types"] == [7, 8, 9, 10]
+
+        # Thay đổi dữ liệu và nạp lại
+        dash._apply_unified_profile({
+            "goi_dan": {"target_types": [7, 8]},
+            "binh_man": {"target_types": [5, 6, 7]},
+        })
+        assert set(dash.gd_target_dropdown.get_selected()) == {7, 8}
+        assert set(dash.bm_mantypes_dropdown.get_selected()) == {5, 6, 7}
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_goidan_general_selection_and_task_creation():
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=101, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
+        gens = [
+            General(id=1001, name="TrieuVan", role="vo", level=10, morale=100, stamina=95, stamina_max=100),
+            General(id=1002, name="QuanVu", role="vo", level=11, morale=100, stamina=90, stamina_max=100),
+            General(id=1003, name="TruongPhi", role="vo", level=9, morale=100, stamina=85, stamina_max=100),
+            General(id=1004, name="MaSieu", role="vo", level=10, morale=100, stamina=90, stamina_max=100),
+            General(id=1005, name="GiaCatLuong", role="van", level=12, morale=100, stamina=100, stamina_max=100),
+        ]
+        r = Roster(cities=[c1], camps=[], _generals={101: gens})
+        dash._loaded(r)
+
+        # 1. gd_gen_tree checks
+        assert hasattr(dash, "gd_gen_tree")
+        children = dash.gd_gen_tree.get_children()
+        # Chỉ có 4 võ tướng xuất hiện, văn quan 1005 bị loại
+        assert len(children) == 4
+        # Mặc định chọn 3 tướng đầu tiên
+        assert dash.gd_gen_tree.item("1001", "values")[0] == "☑"
+        assert dash.gd_gen_tree.item("1002", "values")[0] == "☑"
+        assert dash.gd_gen_tree.item("1003", "values")[0] == "☑"
+        assert dash.gd_gen_tree.item("1004", "values")[0] == "☐"
+
+        # 2. Deselect all & Select all
+        dash._deselect_all_gd_gens()
+        for iid in children:
+            assert dash.gd_gen_tree.item(iid, "values")[0] == "☐"
+
+        dash._select_all_gd_gens()
+        for iid in children:
+            assert dash.gd_gen_tree.item(iid, "values")[0] == "☑"
+
+        # 3. Task creation with selected generals
+        task = dash._create_goidan_task()
+        assert task is not None
+        assert task.generals == [1001, 1002, 1003, 1004]
+
+        # 4. Khi không chọn tướng nào, task không được tạo
+        dash._deselect_all_gd_gens()
+        with patch("tkinter.messagebox.showwarning") as mock_warn:
+            task_empty = dash._create_goidan_task()
+            assert task_empty is None
+            assert mock_warn.called
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_binhman_general_selection_and_task_creation():
+    dash = safe_dashboard()
+    try:
+        camp1 = City(id=-201, name="DoanhTrai1", type="Doanh trại", pos_x=120, pos_y=220)
+        c1 = City(id=101, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
+        camp_gens = [
+            General(id=2001, name="TrieuVan", role="vo", level=10, morale=100, stamina=95, stamina_max=100),
+            General(id=2002, name="QuanVu", role="vo", level=11, morale=100, stamina=90, stamina_max=100),
+            General(id=2003, name="TruongPhi", role="vo", level=9, morale=100, stamina=85, stamina_max=100),
+            General(id=2004, name="MaSieu", role="vo", level=10, morale=100, stamina=90, stamina_max=100),
+            General(id=2005, name="HoangTrung", role="vo", level=10, morale=100, stamina=90, stamina_max=100),
+            General(id=2006, name="GiaCatLuong", role="van", level=12, morale=100, stamina=100, stamina_max=100),
+        ]
+        r = Roster(cities=[c1], camps=[camp1], _generals={-201: camp_gens, 101: [camp_gens[0]]})
+        dash._loaded(r)
+
+        # 1. bm_gen_tree checks (Chế độ 1: Doanh trại mặc định)
+        assert hasattr(dash, "bm_gen_tree")
+        children = dash.bm_gen_tree.get_children()
+        # 5 võ tướng xuất hiện, văn quan 2006 bị loại
+        assert len(children) == 5
+        # Mặc định chọn TẤT CẢ võ tướng (không giới hạn 3 hay 5)
+        for iid in children:
+            assert dash.bm_gen_tree.item(iid, "values")[0] == "☑"
+
+        # 2. Deselect all & Select all
+        dash._deselect_all_bm_gens()
+        for iid in children:
+            assert dash.bm_gen_tree.item(iid, "values")[0] == "☐"
+
+        dash._select_all_bm_gens()
+        for iid in children:
+            assert dash.bm_gen_tree.item(iid, "values")[0] == "☑"
+
+        # 3. Task creation with selected generals
+        task = dash._create_binhman_task()
+        assert task is not None
+        assert task.generals == [2001, 2002, 2003, 2004, 2005]
+
+        # 4. Khi không chọn tướng nào
+        dash._deselect_all_bm_gens()
+        with patch("tkinter.messagebox.showwarning") as mock_warn:
+            task_empty = dash._create_binhman_task()
+            assert task_empty is None
+            assert mock_warn.called
+
+        # 5. Chuyển sang Mode 2 (Thành)
+        dash.bm_mode_var.set(2)
+        dash._on_bm_mode_changed()
+        children_mode2 = dash.bm_gen_tree.get_children()
+        assert len(children_mode2) == 1
+        assert children_mode2[0] == "2001"
+        assert dash.bm_gen_tree.item("2001", "values")[0] == "☑"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_profile_sync_generals_selection():
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=101, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
+        gens = [
+            General(id=3001, name="TrieuVan", role="vo", level=10, morale=100, stamina=95, stamina_max=100),
+            General(id=3002, name="QuanVu", role="vo", level=11, morale=100, stamina=90, stamina_max=100),
+            General(id=3003, name="TruongPhi", role="vo", level=9, morale=100, stamina=85, stamina_max=100),
+        ]
+        r = Roster(cities=[c1], camps=[], _generals={101: gens})
+        dash._loaded(r)
+
+        # Chỉ chọn tướng 3002 ở Gọi Man
+        dash._deselect_all_gd_gens()
+        vals = list(dash.gd_gen_tree.item("3002", "values"))
+        vals[0] = "☑"
+        dash.gd_gen_tree.item("3002", values=vals)
+
+        prof = dash._collect_unified_profile()
+        assert prof["goi_dan"]["generals"] == [3002]
+
+        # Apply profile chỉ định chọn 3001 và 3003
+        dash._apply_unified_profile({
+            "goi_dan": {"generals": [3001, 3003]},
+            "binh_man": {"generals": [3002]},
+        })
+        assert dash.gd_gen_tree.item("3001", "values")[0] == "☑"
+        assert dash.gd_gen_tree.item("3002", "values")[0] == "☐"
+        assert dash.gd_gen_tree.item("3003", "values")[0] == "☑"
+    finally:
+        dash.destroy()
+
 
 
 

@@ -41,7 +41,7 @@ logger = logging.getLogger("linhvuong.dashboard")
 from .roster import Army, City, General, Roster, fetch_roster
 from .scan import Scanner
 from .tasks.base import CaptchaRequired, TaskContext
-from .tasks.binh_man import BinhMan
+from .tasks.binh_man import MAN_TARGET_OPTIONS, MODE_CAMP, MODE_CITY, BinhMan
 from .tasks.di_trai import DiTrai
 from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask, parse_boost_remaining_time
 from .tasks.goi_dan import GoiDan, VONG_LINH
@@ -66,6 +66,142 @@ BG, CARD, FG, MUTED, ACCENT, SUCCESS, DANGER = (
     "#dc3545",
 )
 ROLE_TEXT = {"van": "Văn quan", "vo": "Võ tướng"}
+
+
+class MultiSelectDropdown(ttk.Menubutton):
+    """Dropdown chọn nhiều loại Man với checkboxes trong tk.Menu."""
+
+    def __init__(
+        self,
+        parent,
+        options: list[tuple[int, str]],
+        default_selected: Optional[list[int]] = None,
+        width: int = 22,
+        command: Optional[Callable[[list[int]], None]] = None,
+        **kwargs,
+    ):
+        super().__init__(parent, width=width, **kwargs)
+        self.options = list(options)
+        self.command = command
+        default_set = set(default_selected if default_selected is not None else [opt[0] for opt in self.options])
+        self.vars: dict[int, tk.BooleanVar] = {
+            val: tk.BooleanVar(value=(val in default_set)) for val, _ in self.options
+        }
+
+        self.menu = tk.Menu(self, tearoff=False)
+        self["menu"] = self.menu
+
+        self.menu.add_command(label="✅ Chọn tất cả", command=self.select_all)
+        self.menu.add_command(label="❌ Bỏ chọn tất cả", command=self.deselect_all)
+        self.menu.add_separator()
+
+        for val, label in self.options:
+            self.menu.add_checkbutton(
+                label=label,
+                variable=self.vars[val],
+                onvalue=True,
+                offvalue=False,
+                command=self._on_toggle,
+            )
+
+        self._update_label()
+
+    def _update_label(self) -> None:
+        selected = self.get_selected()
+        total = len(self.options)
+        if len(selected) == total:
+            self.config(text=f"Tất cả ({total}) ▾")
+        elif not selected:
+            self.config(text="Chưa chọn ▾")
+        elif len(selected) <= 3:
+            labels = []
+            opt_map = dict(self.options)
+            for val in selected:
+                raw_lbl = opt_map.get(val, str(val))
+                if " - " in raw_lbl:
+                    labels.append(raw_lbl.split(" - ")[0])
+                elif " (" in raw_lbl:
+                    labels.append(raw_lbl.split(" (")[0])
+                else:
+                    labels.append(raw_lbl)
+            self.config(text=f"{', '.join(labels)} ▾")
+        else:
+            self.config(text=f"Đã chọn {len(selected)} loại ▾")
+
+    def _on_toggle(self) -> None:
+        self._update_label()
+        if self.command:
+            self.command(self.get_selected())
+
+    def get_selected(self) -> list[int]:
+        return [val for val, _ in self.options if self.vars[val].get()]
+
+    def get_selected_str(self) -> str:
+        return ",".join(str(x) for x in self.get_selected())
+
+    def set_selected(self, values: Union[list[int], set[int], tuple[int, ...]]) -> None:
+        val_set = set(values)
+        for val, var in self.vars.items():
+            var.set(val in val_set)
+        self._update_label()
+        if self.command:
+            self.command(self.get_selected())
+
+    def set_selected_str(self, s: str) -> None:
+        if not s:
+            self.deselect_all()
+            return
+        vals = []
+        for x in str(s).split(","):
+            try:
+                vals.append(int(x.strip()))
+            except ValueError:
+                pass
+        self.set_selected(vals)
+
+    def select_all(self) -> None:
+        for var in self.vars.values():
+            var.set(True)
+        self._update_label()
+        if self.command:
+            self.command(self.get_selected())
+
+    def deselect_all(self) -> None:
+        for var in self.vars.values():
+            var.set(False)
+        self._update_label()
+        if self.command:
+            self.command(self.get_selected())
+
+
+class _LegacyComboAdapter:
+    """Bộ chuyển đổi tương thích ngược cho code cũ hoặc test truy cập gd_mode_combo."""
+
+    def __init__(self, dropdown: MultiSelectDropdown):
+        self._dropdown = dropdown
+        self.values = [lbl for _, lbl in dropdown.options]
+
+    def current(self, idx: Optional[int] = None):
+        if idx is None:
+            sel = self._dropdown.get_selected()
+            if not sel:
+                return 0
+            for i, (val, _) in enumerate(self._dropdown.options):
+                if val == sel[0]:
+                    return i
+            return 0
+        if 0 <= idx < len(self._dropdown.options):
+            val = self._dropdown.options[idx][0]
+            self._dropdown.set_selected([val])
+
+    def __getitem__(self, item):
+        if item == "values":
+            return self.values
+        return None
+
+    def __setitem__(self, item, val):
+        if item == "values":
+            self.values = val
 
 
 # =============================================================================
@@ -362,6 +498,8 @@ class Dashboard(tk.Tk):
         self._selected_building_cities: set[int] = set()
         self._selected_resource_cities: set[int] = set()
         self._research_city_id: Optional[int] = None
+        self._pending_gd_generals: Optional[set[int]] = None
+        self._pending_bm_generals: Optional[set[int]] = None
         self._res_monitor_running: bool = False
         self._res_monitor_thread: Optional[threading.Thread] = None
         self._current_bld_city_id: Optional[int] = None
@@ -524,9 +662,9 @@ class Dashboard(tk.Tk):
         self.notebook.add(t3, text="🏕️ Bình Man")
         self._build_binhman_tab(t3)
 
-        # Tab 4: Vong Linh
+        # Tab 4: Gọi Man & Vong Linh
         t4 = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(t4, text="🧛 Vong Linh")
+        self.notebook.add(t4, text="🧛 Vong Linh / Gọi Man")
         self._build_goidan_tab(t4)
 
         # Tab 5: Tổng quan & Quân đội
@@ -733,16 +871,25 @@ class Dashboard(tk.Tk):
             },
             "goi_dan": {
                 "mode_idx": self.gd_mode_combo.current() if hasattr(self, "gd_mode_combo") else 0,
+                "target_type": self._get_gd_target_type() if hasattr(self, "_get_gd_target_type") else 301,
+                "target_types": self.gd_target_dropdown.get_selected() if hasattr(self, "gd_target_dropdown") else [301],
                 "radius": self.gd_radius_var.get() if hasattr(self, "gd_radius_var") else "5",
                 "auto_recover": bool(self.gd_recover_var.get()) if hasattr(self, "gd_recover_var") else True,
                 "interval": self.gd_interval_var.get() if hasattr(self, "gd_interval_var") else "10",
+                "generals": [int(iid) for iid in self.gd_gen_tree.get_children() if self.gd_gen_tree.item(iid, "values")[0] == "☑"] if hasattr(self, "gd_gen_tree") else [],
             },
             "binh_man": {
+                "mode": self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1,
                 "radius": self.bm_radius_var.get() if hasattr(self, "bm_radius_var") else "5",
                 "min_army": self.bm_min_army_var.get() if hasattr(self, "bm_min_army_var") else "3000",
                 "min_hp": self.bm_min_hp_var.get() if hasattr(self, "bm_min_hp_var") else "50",
                 "auto_comfort": bool(self.bm_comfort_var.get()) if hasattr(self, "bm_comfort_var") else True,
                 "interval": self.bm_interval_var.get() if hasattr(self, "bm_interval_var") else "15",
+                "camp_id": self.bm_camp_id_var.get() if hasattr(self, "bm_camp_id_var") else "",
+                "threshold": self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30",
+                "mantypes": self.bm_mantypes_dropdown.get_selected_str() if hasattr(self, "bm_mantypes_dropdown") else (self.bm_mantypes_var.get() if hasattr(self, "bm_mantypes_var") else "7,8,9,10"),
+                "target_types": self.bm_mantypes_dropdown.get_selected() if hasattr(self, "bm_mantypes_dropdown") else [7, 8, 9, 10],
+                "generals": [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"] if hasattr(self, "bm_gen_tree") else [],
             },
             "logistics": {
                 "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
@@ -1023,25 +1170,58 @@ class Dashboard(tk.Tk):
                 self.tp_interval_var.set(str(tp_data["interval"]))
             loaded_sections.append("Thảo Phạt")
 
-        # 4. Gọi Dân
-        if "goi_dan" in data and isinstance(data["goi_dan"], dict):
-            gd_data = data["goi_dan"]
-            if hasattr(self, "gd_mode_combo") and "mode_idx" in gd_data:
-                try:
-                    self.gd_mode_combo.current(int(gd_data["mode_idx"]))
-                except Exception:
-                    pass
+        # 4. Gọi Man
+        gd_raw = data.get("goi_dan") or data.get("goi_man")
+        if gd_raw and isinstance(gd_raw, dict):
+            gd_data = gd_raw
+            if hasattr(self, "gd_target_dropdown"):
+                if "target_types" in gd_data and gd_data["target_types"]:
+                    self.gd_target_dropdown.set_selected(gd_data["target_types"])
+                elif "target_type" in gd_data:
+                    self.gd_target_dropdown.set_selected([int(gd_data["target_type"])])
+                elif "mode_idx" in gd_data:
+                    try:
+                        self.gd_mode_combo.current(int(gd_data["mode_idx"]))
+                    except Exception:
+                        pass
+            elif hasattr(self, "gd_mode_combo"):
+                if "target_type" in gd_data:
+                    ttype = int(gd_data["target_type"])
+                    for idx, (t, _) in enumerate(getattr(self, "gd_target_options", [])):
+                        if t == ttype:
+                            self.gd_mode_combo.current(idx)
+                            break
+                elif "mode_idx" in gd_data:
+                    try:
+                        self.gd_mode_combo.current(int(gd_data["mode_idx"]))
+                    except Exception:
+                        pass
             if hasattr(self, "gd_radius_var") and "radius" in gd_data:
                 self.gd_radius_var.set(str(gd_data["radius"]))
             if hasattr(self, "gd_recover_var") and "auto_recover" in gd_data:
                 self.gd_recover_var.set(bool(gd_data["auto_recover"]))
             if hasattr(self, "gd_interval_var") and "interval" in gd_data:
                 self.gd_interval_var.set(str(gd_data["interval"]))
-            loaded_sections.append("Gọi Dân")
+            if "generals" in gd_data and isinstance(gd_data["generals"], list):
+                gd_gens = [int(x) for x in gd_data["generals"] if str(x).isdigit()]
+                self._pending_gd_generals = set(gd_gens)
+                if hasattr(self, "gd_gen_tree") and self.gd_gen_tree.get_children():
+                    for iid in self.gd_gen_tree.get_children():
+                        vals = list(self.gd_gen_tree.item(iid, "values"))
+                        vals[0] = "☑" if int(iid) in self._pending_gd_generals else "☐"
+                        self.gd_gen_tree.item(iid, values=vals)
+            loaded_sections.append("Gọi Man")
 
         # 5. Bình Man
         if "binh_man" in data and isinstance(data["binh_man"], dict):
             bm_data = data["binh_man"]
+            if hasattr(self, "bm_mode_var") and "mode" in bm_data:
+                try:
+                    self.bm_mode_var.set(int(bm_data["mode"]))
+                    if hasattr(self, "_on_bm_mode_changed"):
+                        self._on_bm_mode_changed()
+                except Exception:
+                    pass
             if hasattr(self, "bm_radius_var") and "radius" in bm_data:
                 self.bm_radius_var.set(str(bm_data["radius"]))
             if hasattr(self, "bm_min_army_var") and "min_army" in bm_data:
@@ -1052,6 +1232,25 @@ class Dashboard(tk.Tk):
                 self.bm_comfort_var.set(bool(bm_data["auto_comfort"]))
             if hasattr(self, "bm_interval_var") and "interval" in bm_data:
                 self.bm_interval_var.set(str(bm_data["interval"]))
+            if hasattr(self, "bm_camp_id_var") and "camp_id" in bm_data:
+                self.bm_camp_id_var.set(str(bm_data["camp_id"]))
+            if hasattr(self, "bm_mantypes_dropdown"):
+                if "target_types" in bm_data and bm_data["target_types"]:
+                    self.bm_mantypes_dropdown.set_selected(bm_data["target_types"])
+                elif "mantypes" in bm_data:
+                    self.bm_mantypes_dropdown.set_selected_str(str(bm_data["mantypes"]))
+            if hasattr(self, "bm_mantypes_var") and "mantypes" in bm_data:
+                self.bm_mantypes_var.set(str(bm_data["mantypes"]))
+            if hasattr(self, "bm_threshold_var") and "threshold" in bm_data:
+                self.bm_threshold_var.set(str(bm_data["threshold"]))
+            if "generals" in bm_data and isinstance(bm_data["generals"], list):
+                bm_gens = [int(x) for x in bm_data["generals"] if str(x).isdigit()]
+                self._pending_bm_generals = set(bm_gens)
+                if hasattr(self, "bm_gen_tree") and self.bm_gen_tree.get_children():
+                    for iid in self.bm_gen_tree.get_children():
+                        vals = list(self.bm_gen_tree.item(iid, "values"))
+                        vals[0] = "☑" if int(iid) in self._pending_bm_generals else "☐"
+                        self.bm_gen_tree.item(iid, values=vals)
             loaded_sections.append("Bình Man")
 
         # 6. Hậu Cần
@@ -1480,7 +1679,7 @@ class Dashboard(tk.Tk):
         self._append_text_buffer(self.tp_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
     # =========================================================================
-    # TAB 3: GỌI DÂN & VONG LINH
+    # TAB 3: GỌI MAN & VONG LINH
     # =========================================================================
     def _build_goidan_tab(self, parent):
         top = tk.Frame(parent, bg=BG)
@@ -1489,12 +1688,13 @@ class Dashboard(tk.Tk):
         tk.Label(top, text="Thành trì:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self.gd_city_combo = ttk.Combobox(top, state="readonly", width=20)
         self.gd_city_combo.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        self.gd_city_combo.bind("<<ComboboxSelected>>", self._on_gd_city_selected)
 
-        tk.Label(top, text="Chế độ:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=4, pady=4)
-        self.gd_mode_combo = ttk.Combobox(top, state="readonly", width=22)
-        self.gd_mode_combo["values"] = ["Gọi Vong Linh (ID 301)", "Gọi Dân Thường"]
-        self.gd_mode_combo.current(0)
-        self.gd_mode_combo.grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        tk.Label(top, text="Loại Man mục tiêu:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        self.gd_target_options = MAN_TARGET_OPTIONS
+        self.gd_target_dropdown = MultiSelectDropdown(top, options=self.gd_target_options, default_selected=[301], width=22)
+        self.gd_target_dropdown.grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        self.gd_mode_combo = _LegacyComboAdapter(self.gd_target_dropdown)
 
         tk.Label(top, text="Bán kính quét:", bg=BG, fg=FG).grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self.gd_radius_var = tk.StringVar(value="5")
@@ -1519,32 +1719,159 @@ class Dashboard(tk.Tk):
         # Điều khiển
         ctrl_frame = tk.Frame(top, bg=BG)
         ctrl_frame.grid(row=0, column=4, rowspan=3, padx=16)
-        self.gd_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Gọi Dân", style="Success.TButton", command=self._toggle_goidan)
+        self.gd_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Gọi Man", style="Success.TButton", command=self._toggle_goidan)
         self.gd_start_btn.pack(side="top", pady=2)
         self.gd_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_goidan_once)
         self.gd_once_btn.pack(side="top", pady=2)
 
-        # Log & Thông tin
-        f_log = ttk.LabelFrame(parent, text="Nhật ký Gọi Dân & Vong Linh", style="Card.TLabelframe")
-        f_log.pack(fill="both", expand=True, pady=6)
-        self.gd_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
-        self.gd_log_text.pack(fill="both", expand=True, padx=6, pady=6)
+        # Bảng tướng & Log sắp xếp theo container body
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill="both", expand=True, pady=4)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=3)
+        body.rowconfigure(1, weight=2)
+
+        # Row 0: Bảng danh sách võ tướng
+        f_top = ttk.LabelFrame(body, text="Võ tướng xuất kích", style="Card.TLabelframe")
+        f_top.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
+
+        btn_bar = tk.Frame(f_top, bg=BG)
+        btn_bar.pack(fill="x", padx=4, pady=2)
+        ttk.Button(btn_bar, text="✅ Chọn tất cả", style="Secondary.TButton", command=self._select_all_gd_gens).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="❌ Bỏ chọn tất cả", style="Secondary.TButton", command=self._deselect_all_gd_gens).pack(side="left", padx=2)
+
+        self.gd_gen_tree = ttk.Treeview(
+            f_top,
+            columns=("select", "lv", "stamina", "morale", "infantry", "cavalry", "archers", "total_army"),
+            show="tree headings",
+            selectmode="browse",
+            height=5,
+        )
+        self.gd_gen_tree.heading("#0", text="Tên võ tướng")
+        self.gd_gen_tree.heading("select", text="Chọn")
+        self.gd_gen_tree.heading("lv", text="Cấp")
+        self.gd_gen_tree.heading("stamina", text="Thể lực")
+        self.gd_gen_tree.heading("morale", text="Sĩ khí")
+        self.gd_gen_tree.heading("infantry", text="Bộ binh")
+        self.gd_gen_tree.heading("cavalry", text="Kỵ binh")
+        self.gd_gen_tree.heading("archers", text="Cung binh")
+        self.gd_gen_tree.heading("total_army", text="Tổng quân")
+
+        self.gd_gen_tree.column("#0", width=140)
+        self.gd_gen_tree.column("select", width=50, anchor="center")
+        self.gd_gen_tree.column("lv", width=50, anchor="center")
+        self.gd_gen_tree.column("stamina", width=75, anchor="center")
+        self.gd_gen_tree.column("morale", width=65, anchor="center")
+        self.gd_gen_tree.column("infantry", width=80, anchor="e")
+        self.gd_gen_tree.column("cavalry", width=80, anchor="e")
+        self.gd_gen_tree.column("archers", width=80, anchor="e")
+        self.gd_gen_tree.column("total_army", width=85, anchor="e")
+
+        gen_scroll = ttk.Scrollbar(f_top, orient="vertical", command=self.gd_gen_tree.yview)
+        self.gd_gen_tree.configure(yscrollcommand=gen_scroll.set)
+        self.gd_gen_tree.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=(0, 4))
+        gen_scroll.pack(side="right", fill="y", padx=(0, 4), pady=(0, 4))
+        self.gd_gen_tree.bind("<ButtonRelease-1>", self._on_gd_gen_toggle)
+
+        # Row 1: Khung nhật ký log Gọi Man & Vong Linh
+        f_bottom = ttk.LabelFrame(body, text="Nhật ký Gọi Man & Vong Linh", style="Card.TLabelframe")
+        f_bottom.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+
+        log_scroll = ttk.Scrollbar(f_bottom, orient="vertical")
+        self.gd_log_text = tk.Text(f_bottom, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0, yscrollcommand=log_scroll.set)
+        log_scroll.config(command=self.gd_log_text.yview)
+        self.gd_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
+        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
+
+    def _select_all_gd_gens(self):
+        for item in self.gd_gen_tree.get_children():
+            vals = list(self.gd_gen_tree.item(item, "values"))
+            vals[0] = "☑"
+            self.gd_gen_tree.item(item, values=vals)
+
+    def _deselect_all_gd_gens(self):
+        for item in self.gd_gen_tree.get_children():
+            vals = list(self.gd_gen_tree.item(item, "values"))
+            vals[0] = "☐"
+            self.gd_gen_tree.item(item, values=vals)
+
+    def _on_gd_gen_toggle(self, event):
+        item = self.gd_gen_tree.identify_row(event.y)
+        if not item:
+            return
+        vals = list(self.gd_gen_tree.item(item, "values"))
+        vals[0] = "☑" if vals[0] == "☐" else "☐"
+        self.gd_gen_tree.item(item, values=vals)
+
+    def _on_gd_city_selected(self, _event=None):
+        sel_idx = self.gd_city_combo.current()
+        cities = self.roster.cities if (self.roster and self.roster.cities) else []
+        if sel_idx < 0 or sel_idx >= len(cities):
+            return
+        city = cities[sel_idx]
+        self.gd_gen_tree.delete(*self.gd_gen_tree.get_children())
+        pending = self._pending_gd_generals
+        count = 0
+        for g in self.roster.generals_of(city.id):
+            if g.role != "vo":
+                continue
+            army = self.roster.army_of(g.id)
+            inf = army.infantry if army else 0
+            cav = army.cavalry if army else 0
+            arc = army.archers if army else 0
+            total = army.total if army else 0
+            if pending is not None:
+                checked = "☑" if g.id in pending else "☐"
+            else:
+                checked = "☑" if count < 3 else "☐"
+            self.gd_gen_tree.insert(
+                "",
+                "end",
+                iid=str(g.id),
+                text=g.name,
+                values=(checked, g.level, f"{g.stamina}/{g.stamina_max}", g.morale, inf, cav, arc, total),
+            )
+            count += 1
+        self._pending_gd_generals = None
 
     def _append_gd_log(self, msg: str):
         self._append_text_buffer(self.gd_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
+    def _get_gd_target_type(self) -> int:
+        if hasattr(self, "gd_target_dropdown"):
+            sel = self.gd_target_dropdown.get_selected()
+            if sel:
+                return sel[0]
+        sel_idx = self.gd_mode_combo.current() if hasattr(self, "gd_mode_combo") else 0
+        if 0 <= sel_idx < len(getattr(self, "gd_target_options", [])):
+            return self.gd_target_options[sel_idx][0]
+        return 301
+
     def _create_goidan_task(self) -> Optional[GoiDan]:
         sel_idx = self.gd_city_combo.current()
-        if sel_idx < 0:
+        cities = self.roster.cities if (self.roster and self.roster.cities) else []
+        if sel_idx < 0 or sel_idx >= len(cities):
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì!")
             return None
-        city = self.roster.cities[sel_idx]
-        gens = [g.id for g in self.roster.generals_of(city.id) if g.role == "vo"][:3]
-        if not gens:
-            messagebox.showwarning("Cảnh báo", "Thành này không có võ tướng khả dụng!")
+        city = cities[sel_idx]
+
+        sel_gens = []
+        if hasattr(self, "gd_gen_tree"):
+            sel_gens = [int(iid) for iid in self.gd_gen_tree.get_children() if self.gd_gen_tree.item(iid, "values")[0] == "☑"]
+
+        if not sel_gens:
+            vos = [g.id for g in self.roster.generals_of(city.id) if g.role == "vo"]
+            if not vos:
+                messagebox.showwarning("Cảnh báo", "Thành này không có võ tướng khả dụng!")
+                return None
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 võ tướng xuất kích!")
             return None
 
-        mode = "vong_linh" if "Vong Linh" in self.gd_mode_combo.get() else "dan"
+        target_types = self.gd_target_dropdown.get_selected() if hasattr(self, "gd_target_dropdown") else []
+        if not target_types:
+            target_types = [self._get_gd_target_type()]
+        target_type = target_types[0]
+        mode = "vong_linh" if target_type == 301 else "dan"
         radius = int(self.gd_radius_var.get() or "5")
         locks = TargetLocks()
         scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
@@ -1552,10 +1879,12 @@ class Dashboard(tk.Tk):
 
         return GoiDan(
             ctx=ctx,
-            generals=gens,
+            generals=sel_gens,
             origin=(0, 0),
             radius=radius,
             mode=mode,
+            target_type=target_type,
+            target_types=target_types,
             city_id=city.id,
             auto_recover=self.gd_recover_var.get(),
             refill_amount=500,
@@ -1583,10 +1912,10 @@ class Dashboard(tk.Tk):
                 status_cb=lambda s: None,
             )
             self._gd_runner.start()
-            self.gd_start_btn.configure(text="⏹️ Dừng Gọi Dân", style="Danger.TButton")
+            self.gd_start_btn.configure(text="⏹️ Dừng Gọi Man", style="Danger.TButton")
         else:
             self._gd_runner.stop()
-            self.gd_start_btn.configure(text="▶️ Bắt đầu Gọi Dân", style="Success.TButton")
+            self.gd_start_btn.configure(text="▶️ Bắt đầu Gọi Man", style="Success.TButton")
 
     # =========================================================================
     # TAB 4: BÌNH MAN & DI TRẠI
@@ -1596,60 +1925,229 @@ class Dashboard(tk.Tk):
         f_bm = ttk.LabelFrame(parent, text="🗡️ Tự Động Bình Man", style="Card.TLabelframe")
         f_bm.pack(fill="x", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Căn cứ xuất phát:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        # Chế độ tác chiến (Mode 1: Di Doanh trại, Mode 2: Xuất quân thẳng từ Thành)
+        tk.Label(f_bm, text="Chế độ tác chiến:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
+        self.bm_mode_var = tk.IntVar(value=1)
+        mode_f = tk.Frame(f_bm, bg=BG)
+        mode_f.grid(row=0, column=1, columnspan=3, sticky="w", padx=4, pady=4)
+        self.bm_mode_camp_rb = tk.Radiobutton(
+            mode_f, text="1: Di Doanh trại đến cạnh Man", variable=self.bm_mode_var, value=1,
+            command=self._on_bm_mode_changed, bg=BG, fg=FG, selectcolor=CARD, activebackground=BG, activeforeground=FG
+        )
+        self.bm_mode_camp_rb.pack(side="left", padx=(0, 10))
+        self.bm_mode_city_rb = tk.Radiobutton(
+            mode_f, text="2: Xuất quân thẳng từ Thành", variable=self.bm_mode_var, value=2,
+            command=self._on_bm_mode_changed, bg=BG, fg=FG, selectcolor=CARD, activebackground=BG, activeforeground=FG
+        )
+        self.bm_mode_city_rb.pack(side="left")
+
+        self.bm_base_lbl = tk.Label(f_bm, text="Doanh trại xuất phát:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold"))
+        self.bm_base_lbl.grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self.bm_city_combo = ttk.Combobox(f_bm, state="readonly", width=22)
-        self.bm_city_combo.grid(row=0, column=1, sticky="w", padx=4, pady=4)
+        self.bm_city_combo.grid(row=1, column=1, sticky="w", padx=4, pady=4)
         self.bm_city_combo.bind("<<ComboboxSelected>>", self._on_bm_city_selected)
 
-        tk.Label(f_bm, text="Thành mẹ (Hồi quân):", bg=BG, fg=FG, font=("Segoe UI", 10)).grid(row=0, column=2, sticky="w", padx=4, pady=4)
+        self.bm_parent_city_lbl = tk.Label(f_bm, text="Thành mẹ (Hồi quân):", bg=BG, fg=FG, font=("Segoe UI", 10))
+        self.bm_parent_city_lbl.grid(row=1, column=2, sticky="w", padx=4, pady=4)
         self.bm_parent_city_combo = ttk.Combobox(f_bm, state="readonly", width=18)
-        self.bm_parent_city_combo.grid(row=0, column=3, sticky="w", padx=4, pady=4)
+        self.bm_parent_city_combo.grid(row=1, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Doanh trại ID:", bg=BG, fg=FG).grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        self.bm_camp_id_lbl = tk.Label(f_bm, text="Doanh trại ID:", bg=BG, fg=FG)
+        self.bm_camp_id_lbl.grid(row=2, column=0, sticky="w", padx=4, pady=4)
         self.bm_camp_id_var = tk.StringVar(value="")
-        ttk.Entry(f_bm, textvariable=self.bm_camp_id_var, width=12).grid(row=1, column=1, sticky="w", padx=4, pady=4)
+        self.bm_camp_id_entry = ttk.Entry(f_bm, textvariable=self.bm_camp_id_var, width=12)
+        self.bm_camp_id_entry.grid(row=2, column=1, sticky="w", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Ngưỡng An Toàn (%):", bg=BG, fg=FG).grid(row=1, column=2, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Ngưỡng An Toàn (%):", bg=BG, fg=FG).grid(row=2, column=2, sticky="w", padx=4, pady=4)
         self.bm_threshold_var = tk.StringVar(value="30")
-        ttk.Entry(f_bm, textvariable=self.bm_threshold_var, width=8).grid(row=1, column=3, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_threshold_var, width=8).grid(row=2, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Bán kính quét:", bg=BG, fg=FG).grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Bán kính quét:", bg=BG, fg=FG).grid(row=3, column=0, sticky="w", padx=4, pady=4)
         self.bm_radius_var = tk.StringVar(value="10")
-        ttk.Entry(f_bm, textvariable=self.bm_radius_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_radius_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Cấp Man (1..10):", bg=BG, fg=FG).grid(row=2, column=2, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Loại Man mục tiêu:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=3, column=2, sticky="w", padx=4, pady=4)
         self.bm_mantypes_var = tk.StringVar(value="7,8,9,10")
-        ttk.Entry(f_bm, textvariable=self.bm_mantypes_var, width=18).grid(row=2, column=3, sticky="w", padx=4, pady=4)
+        self.bm_mantypes_dropdown = MultiSelectDropdown(
+            f_bm,
+            options=MAN_TARGET_OPTIONS,
+            default_selected=[7, 8, 9, 10],
+            width=22,
+            command=lambda sel: self.bm_mantypes_var.set(",".join(str(x) for x in sel)),
+        )
+        self.bm_mantypes_dropdown.grid(row=3, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(f_bm, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", padx=4, pady=4)
         self.bm_interval_var = tk.StringVar(value="15")
-        ttk.Entry(f_bm, textvariable=self.bm_interval_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_interval_var, width=8).grid(row=4, column=1, sticky="w", padx=4, pady=4)
 
         ctrl_frame = tk.Frame(f_bm, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=4, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=5, padx=16)
         self.bm_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Bình Man", style="Success.TButton", command=self._toggle_binhman)
         self.bm_start_btn.pack(side="top", pady=2)
         self.bm_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
         self.bm_once_btn.pack(side="top", pady=2)
 
-        # 2. Khung Nhật ký chung
-        f_log = ttk.LabelFrame(parent, text="Nhật ký Bình Man", style="Card.TLabelframe")
-        f_log.pack(fill="both", expand=True, padx=4, pady=4)
-        self.bm_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
-        self.bm_log_text.pack(fill="both", expand=True, padx=6, pady=6)
+        # 2. Bảng tướng & Log sắp xếp theo container body
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill="both", expand=True, padx=4, pady=4)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=3)
+        body.rowconfigure(1, weight=2)
+
+        # Row 0: Bảng danh sách võ tướng
+        f_gens = ttk.LabelFrame(body, text="Võ tướng xuất kích", style="Card.TLabelframe")
+        f_gens.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
+
+        btn_bar = tk.Frame(f_gens, bg=BG)
+        btn_bar.pack(fill="x", padx=4, pady=2)
+        ttk.Button(btn_bar, text="✅ Chọn tất cả", style="Secondary.TButton", command=self._select_all_bm_gens).pack(side="left", padx=2)
+        ttk.Button(btn_bar, text="❌ Bỏ chọn tất cả", style="Secondary.TButton", command=self._deselect_all_bm_gens).pack(side="left", padx=2)
+
+        self.bm_gen_tree = ttk.Treeview(
+            f_gens,
+            columns=("select", "lv", "stamina", "morale", "infantry", "cavalry", "archers", "total_army"),
+            show="tree headings",
+            selectmode="browse",
+            height=5,
+        )
+        self.bm_gen_tree.heading("#0", text="Tên võ tướng")
+        self.bm_gen_tree.heading("select", text="Chọn")
+        self.bm_gen_tree.heading("lv", text="Cấp")
+        self.bm_gen_tree.heading("stamina", text="Thể lực")
+        self.bm_gen_tree.heading("morale", text="Sĩ khí")
+        self.bm_gen_tree.heading("infantry", text="Bộ binh")
+        self.bm_gen_tree.heading("cavalry", text="Kỵ binh")
+        self.bm_gen_tree.heading("archers", text="Cung binh")
+        self.bm_gen_tree.heading("total_army", text="Tổng quân")
+
+        self.bm_gen_tree.column("#0", width=140)
+        self.bm_gen_tree.column("select", width=50, anchor="center")
+        self.bm_gen_tree.column("lv", width=50, anchor="center")
+        self.bm_gen_tree.column("stamina", width=75, anchor="center")
+        self.bm_gen_tree.column("morale", width=65, anchor="center")
+        self.bm_gen_tree.column("infantry", width=80, anchor="e")
+        self.bm_gen_tree.column("cavalry", width=80, anchor="e")
+        self.bm_gen_tree.column("archers", width=80, anchor="e")
+        self.bm_gen_tree.column("total_army", width=85, anchor="e")
+
+        gen_scroll = ttk.Scrollbar(f_gens, orient="vertical", command=self.bm_gen_tree.yview)
+        self.bm_gen_tree.configure(yscrollcommand=gen_scroll.set)
+        self.bm_gen_tree.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=(0, 4))
+        gen_scroll.pack(side="right", fill="y", padx=(0, 4), pady=(0, 4))
+        self.bm_gen_tree.bind("<ButtonRelease-1>", self._on_bm_gen_toggle)
+
+        # Row 1: Khung nhật ký Bình Man
+        f_log = ttk.LabelFrame(body, text="Nhật ký Bình Man", style="Card.TLabelframe")
+        f_log.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+        log_scroll = ttk.Scrollbar(f_log, orient="vertical")
+        self.bm_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0, yscrollcommand=log_scroll.set)
+        log_scroll.config(command=self.bm_log_text.yview)
+        self.bm_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
+        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
+
+    def _select_all_bm_gens(self):
+        for item in self.bm_gen_tree.get_children():
+            vals = list(self.bm_gen_tree.item(item, "values"))
+            vals[0] = "☑"
+            self.bm_gen_tree.item(item, values=vals)
+
+    def _deselect_all_bm_gens(self):
+        for item in self.bm_gen_tree.get_children():
+            vals = list(self.bm_gen_tree.item(item, "values"))
+            vals[0] = "☐"
+            self.bm_gen_tree.item(item, values=vals)
+
+    def _on_bm_gen_toggle(self, event):
+        item = self.bm_gen_tree.identify_row(event.y)
+        if not item:
+            return
+        vals = list(self.bm_gen_tree.item(item, "values"))
+        vals[0] = "☑" if vals[0] == "☐" else "☐"
+        self.bm_gen_tree.item(item, values=vals)
 
     def _append_bm_log(self, msg: str):
         self._append_text_buffer(self.bm_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
+    def _on_bm_mode_changed(self):
+        mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
+        if mode == 2:  # Chế độ 2: Xuất quân thẳng từ Thành
+            if hasattr(self, "bm_base_lbl"):
+                self.bm_base_lbl.configure(text="Thành xuất phát:")
+            if hasattr(self, "bm_parent_city_lbl"):
+                self.bm_parent_city_lbl.configure(state="disabled")
+            if hasattr(self, "bm_parent_city_combo"):
+                self.bm_parent_city_combo.configure(state="disabled")
+            if hasattr(self, "bm_camp_id_lbl"):
+                self.bm_camp_id_lbl.configure(state="disabled")
+            if hasattr(self, "bm_camp_id_entry"):
+                self.bm_camp_id_entry.configure(state="disabled")
+            if hasattr(self, "roster") and self.roster.cities and hasattr(self, "bm_city_combo"):
+                cities_items = [c.display_name for c in self.roster.cities]
+                self.bm_city_combo["values"] = cities_items
+                if cities_items and (self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(cities_items)):
+                    self.bm_city_combo.current(0)
+            self._on_bm_city_selected()
+        else:  # Chế độ 1: Di Doanh trại
+            if hasattr(self, "bm_base_lbl"):
+                self.bm_base_lbl.configure(text="Doanh trại xuất phát:")
+            if hasattr(self, "bm_parent_city_lbl"):
+                self.bm_parent_city_lbl.configure(state="normal")
+            if hasattr(self, "bm_parent_city_combo"):
+                self.bm_parent_city_combo.configure(state="readonly")
+            if hasattr(self, "bm_camp_id_lbl"):
+                self.bm_camp_id_lbl.configure(state="normal")
+            if hasattr(self, "bm_camp_id_entry"):
+                self.bm_camp_id_entry.configure(state="normal")
+            if hasattr(self, "roster") and hasattr(self, "bm_city_combo"):
+                camps_items = [c.display_name for c in self.roster.camps] if self.roster.camps else [b.display_name for b in self.roster.bases]
+                self.bm_city_combo["values"] = camps_items
+                if camps_items and (self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(camps_items)):
+                    self.bm_city_combo.current(0)
+            self._on_bm_city_selected()
+
     def _on_bm_city_selected(self, _event=None):
+        mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
         sel_idx = self.bm_city_combo.current()
-        bases = self.roster.camps if self.roster.camps else self.roster.bases
+        if mode == 2:
+            self.bm_camp_id_var.set("")
+            bases = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
+        else:
+            bases = self.roster.camps if (self.roster and self.roster.camps) else (self.roster.bases if self.roster else [])
+            if 0 <= sel_idx < len(bases):
+                base = bases[sel_idx]
+                if base.is_camp:
+                    self.bm_camp_id_var.set(str(base.id))
+                else:
+                    self.bm_camp_id_var.set("")
+
+        if not hasattr(self, "bm_gen_tree"):
+            return
+        self.bm_gen_tree.delete(*self.bm_gen_tree.get_children())
         if 0 <= sel_idx < len(bases):
             base = bases[sel_idx]
-            if base.is_camp:
-                self.bm_camp_id_var.set(str(base.id))
-            else:
-                self.bm_camp_id_var.set("")
+            pending = self._pending_bm_generals
+            for g in self.roster.generals_of(base.id):
+                if g.role != "vo":
+                    continue
+                army = self.roster.army_of(g.id)
+                inf = army.infantry if army else 0
+                cav = army.cavalry if army else 0
+                arc = army.archers if army else 0
+                total = army.total if army else 0
+                if pending is not None:
+                    checked = "☑" if g.id in pending else "☐"
+                else:
+                    checked = "☑"  # Bình Man mặc định chọn TẤT CẢ tướng võ trong căn cứ
+                self.bm_gen_tree.insert(
+                    "",
+                    "end",
+                    iid=str(g.id),
+                    text=g.name,
+                    values=(checked, g.level, f"{g.stamina}/{g.stamina_max}", g.morale, inf, cav, arc, total),
+                )
+            self._pending_bm_generals = None
+
 
     def _append_dt_log(self, msg: str):
         if hasattr(self, "_append_bld_log"):
@@ -1767,38 +2265,62 @@ class Dashboard(tk.Tk):
 
     def _update_all_combos_coordinates(self):
         camps_items = [c.display_name for c in self.roster.camps] if self.roster.camps else [b.display_name for b in self.roster.bases]
+        cities_items = [c.display_name for c in self.roster.cities]
         if hasattr(self, "dt_camp_combo") and camps_items:
             cur_idx = self.dt_camp_combo.current()
             self.dt_camp_combo["values"] = camps_items
             if cur_idx >= 0 and cur_idx < len(camps_items):
                 self.dt_camp_combo.current(cur_idx)
                 self._on_dt_camp_selected()
-        if hasattr(self, "bm_city_combo") and camps_items:
-            bm_idx = self.bm_city_combo.current()
-            self.bm_city_combo["values"] = camps_items
-            if bm_idx >= 0 and bm_idx < len(camps_items):
-                self.bm_city_combo.current(bm_idx)
-                self._on_bm_city_selected()
+        if hasattr(self, "bm_city_combo"):
+            mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
+            items = cities_items if (mode == 2 and cities_items) else camps_items
+            if items:
+                bm_idx = self.bm_city_combo.current()
+                self.bm_city_combo["values"] = items
+                if bm_idx >= 0 and bm_idx < len(items):
+                    self.bm_city_combo.current(bm_idx)
+                    self._on_bm_city_selected()
 
     def _create_binhman_task(self) -> Optional[BinhMan]:
+        mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
         sel_idx = self.bm_city_combo.current()
-        bases = self.roster.camps if self.roster.camps else self.roster.bases
+        if mode == 2:
+            bases = self.roster.cities if self.roster.cities else self.roster.bases
+        else:
+            bases = self.roster.camps if self.roster.camps else self.roster.bases
+
         if sel_idx < 0 or sel_idx >= len(bases):
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ/doanh trại xuất phát!")
+            msg = "Vui lòng chọn Thành xuất phát!" if mode == 2 else "Vui lòng chọn căn cứ/doanh trại xuất phát!"
+            messagebox.showwarning("Cảnh báo", msg)
             return None
         base = bases[sel_idx]
-        gens = [g.id for g in self.roster.generals_of(base.id) if g.role == "vo"][:3]
-        if not gens:
-            messagebox.showwarning("Cảnh báo", "Căn cứ này không có võ tướng khả dụng!")
+        sel_gens = []
+        if hasattr(self, "bm_gen_tree"):
+            sel_gens = [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"]
+
+        if not sel_gens:
+            vos = [g.id for g in self.roster.generals_of(base.id) if g.role == "vo"]
+            if not vos:
+                messagebox.showwarning("Cảnh báo", "Căn cứ này không có võ tướng khả dụng!")
+                return None
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 võ tướng xuất kích!")
             return None
 
-        parent_idx = self.bm_parent_city_combo.current()
-        parent_city_id = self.roster.cities[parent_idx].id if (parent_idx >= 0 and parent_idx < len(self.roster.cities)) else base.id
-        parent_id = self.roster.cities[parent_idx].id if parent_idx >= 0 else None
-        camp_id = int(self.bm_camp_id_var.get()) if self.bm_camp_id_var.get().strip() else (base.id if base.is_camp else None)
+        parent_idx = self.bm_parent_city_combo.current() if hasattr(self, "bm_parent_city_combo") else -1
+        parent_id = self.roster.cities[parent_idx].id if (parent_idx >= 0 and parent_idx < len(self.roster.cities)) else None
+        camp_id = int(self.bm_camp_id_var.get()) if (mode == 1 and self.bm_camp_id_var.get().strip()) else (base.id if (mode == 1 and base.is_camp) else None)
         radius = int(self.bm_radius_var.get() or "10")
-        threshold = int(self.bm_threshold_var.get() or "30")
-        man_types = [int(x.strip()) for x in self.bm_mantypes_var.get().split(",") if x.strip()]
+        try:
+            threshold = int(self.bm_threshold_var.get() or "30")
+        except ValueError:
+            threshold = 30
+        if hasattr(self, "bm_mantypes_dropdown"):
+            man_types = self.bm_mantypes_dropdown.get_selected()
+        else:
+            man_types = [int(x.strip()) for x in self.bm_mantypes_var.get().split(",") if x.strip()]
+        if not man_types:
+            man_types = [7, 8, 9, 10]
 
         locks = TargetLocks()
         scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
@@ -1806,13 +2328,15 @@ class Dashboard(tk.Tk):
 
         return BinhMan(
             ctx=ctx,
-            generals=gens,
+            generals=sel_gens,
             origin=(base.pos_x, base.pos_y),
             radius=radius,
             man_types=man_types,
             camp_id=camp_id,
-            parent_city_id=parent_id,
+            parent_city_id=parent_id or base.id,
+            city_id=base.id if mode == 2 else parent_id,
             return_threshold=threshold,
+            mode=mode,
             sleep_fn=time.sleep,
         )
 
@@ -4145,6 +4669,9 @@ class Dashboard(tk.Tk):
             self._on_tp_city_selected()
         if city_items:
             self._fetch_city_buildings()
+            self._on_gd_city_selected()
+        if camps_items or all_base_items:
+            self._on_bm_city_selected()
 
         today_str = time.strftime("%Y-%m-%d")
         if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():
