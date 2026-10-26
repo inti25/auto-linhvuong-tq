@@ -24,6 +24,7 @@ class GatewayClient:
         max_retries: int = 3,
         timeout: float = 30,
         relogin_callback: Optional[Callable[[], bool]] = None,
+        proxy_pool: Optional[Any] = None,
     ):
         self.server_id = server_id
         self.session = session
@@ -31,6 +32,7 @@ class GatewayClient:
         self.max_retries = max_retries
         self.timeout = timeout
         self.relogin_callback = relogin_callback
+        self.proxy_pool = proxy_pool
         self._relogin_lock = threading.Lock()
         self._last_relogin_time = 0.0
         self._mount_pool()
@@ -86,8 +88,28 @@ class GatewayClient:
                 logger.warning(
                     f"Lỗi mạng khi gọi {endpoint}?id={api_id} (lần {attempt}/{self.max_retries}): {e}"
                 )
+                if self.proxy_pool and getattr(self.session, "proxies", None):
+                    err_str = str(e).lower()
+                    if any(k in err_str for k in ("proxy", "connect", "timeout", "reset", "refused", "eof")):
+                        logger.info("Phát hiện sự cố kết nối Proxy. Đang kích hoạt Proxy Failover...")
+                        new_ep = self.proxy_pool.failover(self.session)
+                        if new_ep:
+                            logger.info(f"Đã chuyển sang proxy mới: {new_ep.display_name}. Đang thử lại yêu cầu...")
+                            attempt -= 1
+                            self._sleep(0.5)
+                            continue
                 self._sleep(0.5)
                 continue
+
+            if resp.status_code in (502, 504):
+                if self.proxy_pool and getattr(self.session, "proxies", None):
+                    logger.warning(f"Máy chủ/Proxy trả về HTTP {resp.status_code}. Đang kích hoạt Proxy Failover...")
+                    new_ep = self.proxy_pool.failover(self.session)
+                    if new_ep:
+                        logger.info(f"Đã chuyển sang proxy mới: {new_ep.display_name}. Đang thử lại yêu cầu...")
+                        attempt -= 1
+                        self._sleep(0.5)
+                        continue
 
             if resp.status_code == 503:
                 logger.warning(

@@ -9,6 +9,7 @@ from tkinter import ttk
 import requests
 
 from .auth import LoginError, login, normalize_proxy_url, parse_server_id
+from .proxy import ProxyPool
 
 SETTINGS = Path("gui_settings.json")  # chỉ lưu server, tài khoản, cấu hình proxy; không lưu mật khẩu game
 BG, CARD, FG, ACCENT = "#14161f", "#1e2130", "#e8eaf2", "#6c7bff"
@@ -65,6 +66,7 @@ class LoginWindow(tk.Tk):
         self.server_var = tk.StringVar()
         self.user_var = tk.StringVar()
         self.pass_var = tk.StringVar()
+        self.proxy_url_var = tk.StringVar()
         self.proxy_var = tk.StringVar()
         self.proxy_user_var = tk.StringVar()
         self.proxy_pass_var = tk.StringVar()
@@ -79,39 +81,52 @@ class LoginWindow(tk.Tk):
         self.saved_acc_combo.bind("<<ComboboxSelected>>", self._on_saved_acc_selected)
         ttk.Button(acc_frame, text="🗑️", width=3, command=self._delete_saved_acc).pack(side="left", padx=(4, 0))
 
-        fields = [
+        basic_fields = [
             ("Server ID", self.server_var, ""),
             ("Tài khoản", self.user_var, ""),
             ("Mật khẩu", self.pass_var, "•"),
+        ]
+        for row, (label, var, show) in enumerate(basic_fields, start=2):
+            ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 14))
+            ttk.Entry(card, textvariable=var, show=show, width=28).grid(row=row, column=1, pady=4)
+
+        # Dòng 5: URL Proxy List
+        ttk.Label(card, text="URL Proxy List").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 14))
+        purl_frame = tk.Frame(card, bg=CARD)
+        purl_frame.grid(row=5, column=1, sticky="ew", pady=4)
+        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=19).pack(side="left", fill="x", expand=True)
+        ttk.Button(purl_frame, text="🔄 Test", width=6, command=self._test_proxy_url).pack(side="left", padx=(4, 0))
+
+        proxy_fields = [
             ("Proxy", self.proxy_var, ""),
             ("Proxy User", self.proxy_user_var, ""),
             ("Proxy Pass", self.proxy_pass_var, "•"),
         ]
-        for row, (label, var, show) in enumerate(fields, start=2):
+        for row, (label, var, show) in enumerate(proxy_fields, start=6):
             ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 14))
             ttk.Entry(card, textvariable=var, show=show, width=28).grid(row=row, column=1, pady=4)
 
         proxy_hint = ttk.Label(
             card,
-            text="Hỗ trợ: http, https, socks5. Dán nhanh: ip:port hoặc ip:port:user:pass",
+            text="Hỗ trợ: URL tải proxy list hoặc thủ công ip:port / ip:port:user:pass",
             foreground="#8a90b0",
             font=("Segoe UI", 8),
             wraplength=310,
         )
-        proxy_hint.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 4))
+        proxy_hint.grid(row=9, column=0, columnspan=2, sticky="w", pady=(2, 4))
 
         ttk.Label(
             card,
             text="Địa chỉ: http://sg<Server ID>.dipan.com/",
             foreground="#8a90b0",
             font=("Segoe UI", 8),
-        ).grid(row=9, column=0, columnspan=2, sticky="w")
-        self.url_hint = card.grid_slaves(row=9)[0]
+        ).grid(row=10, column=0, columnspan=2, sticky="w")
+        self.url_hint = card.grid_slaves(row=10)[0]
         self.server_var.trace_add("write", self._update_hint)
         self.proxy_var.trace_add("write", self._on_proxy_change)
 
         self.btn = ttk.Button(card, text="Đăng nhập", style="Login.TButton", command=self._submit)
-        self.btn.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(14, 6))
+        self.btn.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(14, 6))
         self.status = tk.StringVar()
         tk.Label(
             card,
@@ -120,7 +135,7 @@ class LoginWindow(tk.Tk):
             fg="#ff8a8a",
             wraplength=320,
             font=("Segoe UI", 9),
-        ).grid(row=11, column=0, columnspan=2)
+        ).grid(row=12, column=0, columnspan=2)
 
         self._load_settings()
         self.bind("<Return>", lambda e: self._submit())
@@ -172,6 +187,7 @@ class LoginWindow(tk.Tk):
         acc = self.accounts_dict[key]
         self.server_var.set(str(acc.get("server", "")))
         self.user_var.set(acc.get("username", ""))
+        self.proxy_url_var.set(acc.get("proxy_url", ""))
         self.proxy_var.set(acc.get("proxy", ""))
         self.proxy_user_var.set(acc.get("proxy_user", ""))
         self.proxy_pass_var.set(acc.get("proxy_pass", ""))
@@ -186,6 +202,7 @@ class LoginWindow(tk.Tk):
             self._on_saved_acc_selected()
         else:
             self.user_var.set("")
+            self.proxy_url_var.set("")
             self.proxy_var.set("")
             self.proxy_user_var.set("")
             self.proxy_pass_var.set("")
@@ -195,6 +212,7 @@ class LoginWindow(tk.Tk):
         data = {
             "server": self.server_var.get().strip(),
             "username": self.user_var.get().strip(),
+            "proxy_url": self.proxy_url_var.get().strip(),
             "proxy": self.proxy_var.get().strip(),
             "proxy_user": self.proxy_user_var.get().strip(),
             "proxy_pass": self.proxy_pass_var.get(),
@@ -218,6 +236,7 @@ class LoginWindow(tk.Tk):
                     self.accounts_dict[k] = {
                         "server": srv,
                         "username": usr,
+                        "proxy_url": data.get("proxy_url", ""),
                         "proxy": data.get("proxy", ""),
                         "proxy_user": data.get("proxy_user", ""),
                         "proxy_pass": data.get("proxy_pass", ""),
@@ -233,6 +252,7 @@ class LoginWindow(tk.Tk):
                 else:
                     self.server_var.set(str(data.get("server", "")))
                     self.user_var.set(data.get("username", ""))
+                    self.proxy_url_var.set(data.get("proxy_url", ""))
                     self.proxy_var.set(data.get("proxy", ""))
                     self.proxy_user_var.set(data.get("proxy_user", ""))
                     self.proxy_pass_var.set(data.get("proxy_pass", ""))
@@ -242,6 +262,39 @@ class LoginWindow(tk.Tk):
                     self.pass_var.set(pwd)
             except Exception:
                 pass
+
+    def _test_proxy_url(self):
+        url = self.proxy_url_var.get().strip()
+        if not url:
+            self.status.set("Vui lòng nhập URL danh sách Proxy trước khi kiểm tra.")
+            return
+        self.status.set("🔄 Đang tải và kiểm tra danh sách proxy...")
+
+        def run_test():
+            try:
+                pool = ProxyPool(url=url)
+                count = pool.fetch_from_url()
+                if count == 0:
+                    self.after(0, self.status.set, "⚠️ Không tìm thấy proxy hợp lệ trong file tải về.")
+                    return
+                alive = pool.check_all()
+                if alive:
+                    best = alive[0]
+                    self.after(
+                        0,
+                        self.status.set,
+                        f"✅ Tìm thấy {len(alive)}/{count} proxy sống (Tốt nhất: {best.display_name} - {best.latency}s)",
+                    )
+                else:
+                    self.after(
+                        0,
+                        self.status.set,
+                        f"❌ Đã tải {count} proxy nhưng toàn bộ đều không kết nối được game.",
+                    )
+            except Exception as ex:
+                self.after(0, self.status.set, f"❌ Lỗi kiểm tra proxy: {ex}")
+
+        threading.Thread(target=run_test, daemon=True).start()
 
     def _submit(self):
         try:
@@ -254,25 +307,29 @@ class LoginWindow(tk.Tk):
             self.status.set("Nhập tài khoản và mật khẩu.")
             return
 
+        proxy_url = self.proxy_url_var.get().strip()
         proxy_raw = self.proxy_var.get().strip()
         proxy_user = self.proxy_user_var.get().strip()
         proxy_pass = self.proxy_pass_var.get()
-        try:
-            normalized_proxy = normalize_proxy_url(
-                proxy_raw, username=proxy_user, password=proxy_pass
-            )
-        except ValueError as e:
-            self.status.set(f"Proxy không hợp lệ: {e}")
-            return
+        normalized_proxy = None
+        if not proxy_url and proxy_raw:
+            try:
+                normalized_proxy = normalize_proxy_url(
+                    proxy_raw, username=proxy_user, password=proxy_pass
+                )
+            except ValueError as e:
+                self.status.set(f"Proxy không hợp lệ: {e}")
+                return
 
         self.btn.state(["disabled"])
-        self.status.set("")
+        self.status.set("Đang chuẩn bị kết nối...")
         threading.Thread(
             target=self._do_login,
             args=(
                 server_id,
                 username,
                 password,
+                proxy_url,
                 proxy_raw,
                 proxy_user,
                 proxy_pass,
@@ -286,14 +343,38 @@ class LoginWindow(tk.Tk):
         server_id,
         username,
         password,
+        proxy_url,
         proxy_raw,
         proxy_user,
         proxy_pass,
         normalized_proxy,
     ):
         session = requests.Session()
+        proxy_pool = None
+        if proxy_url:
+            self.after(0, self.status.set, "🔄 Đang tải và kiểm tra danh sách proxy...")
+            try:
+                proxy_pool = ProxyPool(url=proxy_url)
+                count = proxy_pool.fetch_from_url()
+                alive = proxy_pool.check_all()
+                if not alive:
+                    self.after(
+                        0,
+                        self._failed,
+                        f"Tải được {count} proxy từ URL nhưng toàn bộ đều không kết nối được.",
+                    )
+                    return
+                proxy_pool.apply_to_session(session)
+            except Exception as ex:
+                self.after(0, self._failed, f"Lỗi nạp proxy từ URL: {ex}")
+                return
+
+        self.after(0, self.status.set, "🔑 Đang đăng nhập máy chủ Linh Vương...")
         try:
-            login(session, server_id, username, password, proxy=normalized_proxy)
+            if not proxy_url and normalized_proxy:
+                login(session, server_id, username, password, proxy=normalized_proxy)
+            else:
+                login(session, server_id, username, password)
         except LoginError as e:
             self.after(0, self._failed, str(e))
             return
@@ -307,6 +388,8 @@ class LoginWindow(tk.Tk):
             proxy_user,
             proxy_pass,
             password,
+            proxy_url,
+            proxy_pool,
         )
 
     def _failed(self, msg):
@@ -314,14 +397,25 @@ class LoginWindow(tk.Tk):
         self.btn.state(["!disabled"])
 
     def _succeeded(
-        self, session, server_id, username, proxy_raw, proxy_user, proxy_pass, password=""
+        self,
+        session,
+        server_id,
+        username,
+        proxy_raw,
+        proxy_user,
+        proxy_pass,
+        password="",
+        proxy_url="",
+        proxy_pool=None,
     ):
         acc_key = f"{username} @ S{server_id}"
+        p_url = proxy_url or (self.proxy_url_var.get().strip() if hasattr(self, "proxy_url_var") else "")
         if not hasattr(self, "accounts_dict") or not isinstance(self.accounts_dict, dict):
             self.accounts_dict = {}
         self.accounts_dict[acc_key] = {
             "server": server_id,
             "username": username,
+            "proxy_url": p_url or "",
             "proxy": proxy_raw or "",
             "proxy_user": proxy_user or "",
             "proxy_pass": proxy_pass or "",
@@ -329,6 +423,7 @@ class LoginWindow(tk.Tk):
         data = {
             "server": server_id,
             "username": username,
+            "proxy_url": p_url or "",
             "proxy": proxy_raw or "",
             "proxy_user": proxy_user or "",
             "proxy_pass": proxy_pass or "",
@@ -338,14 +433,16 @@ class LoginWindow(tk.Tk):
         SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self.session, self.server_id, self.username = session, server_id, username
         self.password = password
+        self.proxy_url = p_url
         self.proxy_raw = proxy_raw
         self.proxy_user = proxy_user
         self.proxy_pass = proxy_pass
+        self.proxy_pool = proxy_pool
         self.destroy()
 
 
 def ask_login():
-    """Hiện cửa sổ đăng nhập; trả (session, server_id, username, password, proxy_raw, proxy_user, proxy_pass) hoặc None nếu đóng cửa sổ."""
+    """Hiện cửa sổ đăng nhập; trả (session, server_id, username, password, proxy_raw, proxy_user, proxy_pass, proxy_pool) hoặc None nếu đóng cửa sổ."""
     win = LoginWindow()
     win.mainloop()
     if win.session:
@@ -354,7 +451,8 @@ def ask_login():
         p_raw = getattr(win, "proxy_raw", win.proxy_var.get().strip())
         p_user = getattr(win, "proxy_user", win.proxy_user_var.get().strip())
         p_pass = getattr(win, "proxy_pass", win.proxy_pass_var.get())
-        return (win.session, win.server_id, user, pwd, p_raw, p_user, p_pass)
+        p_pool = getattr(win, "proxy_pool", None)
+        return (win.session, win.server_id, user, pwd, p_raw, p_user, p_pass, p_pool)
     return None
 
 
@@ -369,6 +467,7 @@ if __name__ == "__main__":
         proxy_raw = rest[2] if len(rest) > 2 else ""
         proxy_user = rest[3] if len(rest) > 3 else ""
         proxy_pass = rest[4] if len(rest) > 4 else ""
+        proxy_pool = rest[5] if len(rest) > 5 else None
         Dashboard(
             session,
             server_id,
@@ -377,4 +476,5 @@ if __name__ == "__main__":
             proxy_raw=proxy_raw,
             proxy_user=proxy_user,
             proxy_pass=proxy_pass,
+            proxy_pool=proxy_pool,
         ).mainloop()

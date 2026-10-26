@@ -193,3 +193,32 @@ def test_login_window_account_switcher_and_multi_account_persistence(temp_settin
             win.destroy()
         except Exception:
             pass
+
+
+def test_login_window_loads_and_persists_proxy_url(temp_settings):
+    temp_settings.write_text(
+        json.dumps(
+            {
+                "server": 53,
+                "username": "inti00",
+                "proxy_url": "http://proxy.example.com/api?key=abc",
+                "proxy": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    win = safe_login_window()
+    win.withdraw()
+    try:
+        assert win.proxy_url_var.get() == "http://proxy.example.com/api?key=abc"
+        # Thay đổi URL và lưu lại
+        win.proxy_url_var.set("http://new-proxy.com/list.txt")
+        win._persist_current_accounts()
+        saved = json.loads(temp_settings.read_text(encoding="utf-8"))
+        assert saved.get("proxy_url") == "http://new-proxy.com/list.txt"
+    finally:
+        try:
+            win.destroy()
+        except Exception:
+            pass
+

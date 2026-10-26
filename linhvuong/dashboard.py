@@ -17,7 +17,7 @@ import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from .auth import login
 from .battle import (
@@ -426,6 +426,7 @@ class Dashboard(tk.Tk):
         proxy_raw: str = "",
         proxy_user: str = "",
         proxy_pass: str = "",
+        proxy_pool: Optional[Any] = None,
     ):
         super().__init__()
         self.session = session
@@ -435,6 +436,7 @@ class Dashboard(tk.Tk):
         self._proxy_raw = proxy_raw
         self._proxy_user = proxy_user
         self._proxy_pass = proxy_pass
+        self.proxy_pool = proxy_pool
         try:
             setup_logger(username=username or "guest", server_id=server_id)
         except Exception:
@@ -450,6 +452,14 @@ class Dashboard(tk.Tk):
         self.geometry("1100x700")
         self.minsize(1060, 650)
 
+        if self.proxy_pool:
+            def _on_proxy_failover(old_ep, new_ep):
+                old_name = old_ep.display_name if old_ep else "không rõ"
+                new_name = new_ep.display_name if new_ep else "hết proxy"
+                self._log_global(f"⚠️ Proxy lỗi ({old_name}). Đã tự động đổi sang proxy mới: {new_name}")
+                self.after(0, self._update_title_and_proxy_status)
+            self.proxy_pool.on_failover = _on_proxy_failover
+
         relogin_cb = None
         if self.username and self._password:
             def auto_relogin() -> bool:
@@ -458,12 +468,14 @@ class Dashboard(tk.Tk):
                         f"Đang tự động đăng nhập lại tài khoản {self.username} (Server {self.server_id})..."
                     )
                     self._log_global("🔑 Phiên hết hạn (198599). Đang tự động đăng nhập lại tài khoản...")
+                    active_p = self.proxy_pool.get_active() if self.proxy_pool else None
+                    proxy_to_use = active_p.url if active_p else (self._proxy_raw or None)
                     login(
                         self.session,
                         self.server_id,
                         self.username,
                         self._password,
-                        proxy=self._proxy_raw or None,
+                        proxy=proxy_to_use,
                         proxy_user=self._proxy_user or None,
                         proxy_pass=self._proxy_pass or None,
                     )
@@ -479,7 +491,9 @@ class Dashboard(tk.Tk):
 
             relogin_cb = auto_relogin
 
-        self.gateway = GatewayClient(server_id, session, relogin_callback=relogin_cb)
+        self.gateway = GatewayClient(
+            server_id, session, relogin_callback=relogin_cb, proxy_pool=self.proxy_pool
+        )
         self.tp_executor = ThaoPhatExecutor(self.gateway)
         self.roster = Roster()
         self._results = queue.Queue()
@@ -634,6 +648,13 @@ class Dashboard(tk.Tk):
         top.pack(fill="x", padx=12, pady=(10, 6))
         self.status = tk.StringVar(value="Đang kết nối & tải dữ liệu...")
         tk.Label(top, textvariable=self.status, bg=BG, fg=MUTED, font=("Segoe UI", 10)).pack(side="left")
+
+        self.proxy_status_var = tk.StringVar()
+        self.proxy_status_lbl = tk.Label(
+            top, textvariable=self.proxy_status_var, bg=BG, fg="#8591ff", font=("Segoe UI", 9, "bold")
+        )
+        self.proxy_status_lbl.pack(side="left", padx=12)
+
         self.refresh_btn = ttk.Button(top, text="🔄 Làm mới", style="Action.TButton", command=self.reload)
         self.refresh_btn.pack(side="right")
         self.open_logs_btn = ttk.Button(
@@ -643,6 +664,17 @@ class Dashboard(tk.Tk):
             command=lambda: open_logs_directory(),
         )
         self.open_logs_btn.pack(side="right", padx=(0, 6))
+
+        if self.proxy_pool:
+            self.rotate_proxy_btn = ttk.Button(
+                top,
+                text="🔄 Đổi Proxy",
+                style="Warning.TButton",
+                command=self._do_manual_proxy_rotate,
+            )
+            self.rotate_proxy_btn.pack(side="right", padx=(0, 6))
+
+        self._update_title_and_proxy_status()
 
         # Notebook chứa 5 Tab (theo thứ tự quy hoạch mới):
         # 1. 🏛️ Nội Chính & Nghiên Cứu
@@ -3239,6 +3271,42 @@ class Dashboard(tk.Tk):
             except Exception as e:
                 self._log_global(f"❌ Lỗi đăng nhập lại: {e}")
         threading.Thread(target=run_relogin, daemon=True).start()
+
+    def _update_title_and_proxy_status(self):
+        title_base = (
+            f"LinhVuong - S{self.server_id} - [{self.username}]"
+            if self.username
+            else f"LinhVuong - Server {self.server_id}"
+        )
+        if self.proxy_pool:
+            active = self.proxy_pool.get_active()
+            alive_cnt = self.proxy_pool.alive_count()
+            tot_cnt = self.proxy_pool.total_count()
+            if active:
+                p_text = f"Proxy: {active.display_name} ({alive_cnt}/{tot_cnt} sống)"
+            else:
+                p_text = f"Proxy: Hết proxy sống ({alive_cnt}/{tot_cnt})"
+            if hasattr(self, "proxy_status_var"):
+                self.proxy_status_var.set(f"🌐 {p_text}")
+            self.title(f"{title_base} | {p_text}")
+        else:
+            if hasattr(self, "proxy_status_var"):
+                if self._proxy_raw:
+                    self.proxy_status_var.set(f"🌐 Proxy: {self._proxy_raw}")
+                else:
+                    self.proxy_status_var.set("")
+            self.title(title_base)
+
+    def _do_manual_proxy_rotate(self):
+        if not self.proxy_pool:
+            messagebox.showinfo("Thông báo", "Phiên hiện tại không sử dụng Bể Proxy (ProxyPool).")
+            return
+        new_ep = self.proxy_pool.failover(self.session)
+        if new_ep:
+            self._log_global(f"🔄 Đã chủ động đổi sang proxy mới: {new_ep.display_name}")
+            self._update_title_and_proxy_status()
+        else:
+            self._log_global("❌ Không còn proxy nào khả dụng để đổi.")
 
     def _add_army_transfer_order(self):
         f_city = self.log_from_city_combo.get()

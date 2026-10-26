@@ -278,6 +278,22 @@ _Avoid_: ThreadManager, RunnerPool, task daemon
 Seam chuẩn hóa cho mọi nhiệm vụ có thể thực thi tuần tự trong bot, cung cấp phương thức `run_step() -> str` và `reset()` để Động Cơ Điều Phối Tác Vụ có thể vận hành đa hình mà không cần biết chi tiết logic nội tại của từng nghiệp vụ.
 _Avoid_: Runnable, TaskWrapper, WorkerJob
 
+**Bể Proxy** (`ProxyPool`):
+Module tập trung quản lý danh sách các Điểm Cầu Proxy được nạp từ URL hoặc tệp cấu hình, duy trì trạng thái hoạt động (Sống/Chết), độ trễ phản hồi và điều phối cấp phát proxy an toàn luồng cho toàn bộ phiên làm việc.
+_Avoid_: ProxyList, ProxyArray, danh sách IP
+
+**Điểm Cầu Proxy** (`ProxyEndpoint`):
+Thực thể biểu diễn một địa chỉ proxy cụ thể gồm máy chủ (`host`), cổng (`port`), giao thức mạng (`http`/`socks5h`) và chứng thực truy cập (`username`, `password`), gắn liền với trạng thái kiểm định và độ trễ đo được.
+_Avoid_: ProxyItem, ProxyAddress, chuỗi proxy
+
+**Kiểm Tra Trạng Thái Proxy** (`ProxyHealthCheck`):
+Tiến trình kiểm tra kết nối đồng thời đa luồng qua Điểm Cầu Proxy tới trực tiếp cổng xác thực của máy chủ game (`http://pass.dipan.com/`) với ngưỡng timeout chặt chẽ (3-5 giây) để loại trừ các proxy chết hoặc bị tường lửa game chặn.
+_Avoid_: Ping proxy, test ip, proxy check
+
+**Hoán Đổi Proxy Tự Động** (`ProxyFailover`):
+Cơ chế tự động phát hiện lỗi gián đoạn kết nối proxy (`ProxyError`, `ConnectTimeout`) trong lúc bot đang vận hành, tức thì đánh dấu proxy hỏng, kích hoạt Điểm Cầu Proxy sống kế tiếp vào phiên kết nối và tự động thử lại yêu cầu dở dang.
+_Avoid_: Chuyển proxy thủ công, restart session, switch proxy
+
 
 
 

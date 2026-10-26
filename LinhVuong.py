@@ -13,6 +13,7 @@ def main():
         proxy_raw = rest[2] if len(rest) > 2 else ""
         proxy_user = rest[3] if len(rest) > 3 else ""
         proxy_pass = rest[4] if len(rest) > 4 else ""
+        proxy_pool = rest[5] if len(rest) > 5 else None
         app = Dashboard(
             session,
             server_id,
@@ -21,6 +22,7 @@ def main():
             proxy_raw=proxy_raw,
             proxy_user=proxy_user,
             proxy_pass=proxy_pass,
+            proxy_pool=proxy_pool,
         )
         app.mainloop()
 
