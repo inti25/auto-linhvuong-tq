@@ -2002,5 +2002,44 @@ def test_dashboard_profile_sync_generals_selection():
         dash.destroy()
 
 
+def test_dashboard_gen_count_label_displays_and_updates():
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=101, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
+        gens = [
+            General(id=4001, name="G1", role="vo", level=10, morale=100, stamina=100, stamina_max=100),
+            General(id=4002, name="G2", role="vo", level=10, morale=100, stamina=100, stamina_max=100),
+            General(id=4003, name="G3", role="vo", level=10, morale=100, stamina=100, stamina_max=100),
+            General(id=4004, name="G4", role="vo", level=10, morale=100, stamina=100, stamina_max=100),
+            General(id=4005, name="G5", role="vo", level=10, morale=100, stamina=100, stamina_max=100),
+        ]
+        camp1 = City(id=501, name="DoanhTrai1", type="Doanh trại", pos_x=105, pos_y=205)
+        r = Roster(cities=[c1], camps=[camp1], _generals={101: gens, 501: gens})
+        dash._loaded(r)
+
+        # 1. Gọi Man: Mặc định chọn 3 tướng đầu tiên -> 1 đợt xuất kích
+        assert hasattr(dash, "gd_gen_count_lbl")
+        assert dash.gd_gen_count_lbl.cget("text") == "Đã chọn: 3 tướng (1 đợt xuất kích)"
+
+        # Bỏ chọn tất cả Gọi Man -> 0 tướng, 0 đợt
+        dash._deselect_all_gd_gens()
+        assert dash.gd_gen_count_lbl.cget("text") == "Đã chọn: 0 tướng (0 đợt xuất kích)"
+
+        # Chọn tất cả Gọi Man (5 tướng) -> 2 đợt xuất kích
+        dash._select_all_gd_gens()
+        assert dash.gd_gen_count_lbl.cget("text") == "Đã chọn: 5 tướng (2 đợt xuất kích)"
+
+        # 2. Bình Man: Mặc định chọn tất cả tướng võ trong căn cứ (5 tướng) -> 2 đợt xuất kích
+        assert hasattr(dash, "bm_gen_count_lbl")
+        assert dash.bm_gen_count_lbl.cget("text") == "Đã chọn: 5 tướng (2 đợt xuất kích)"
+
+        # Bỏ chọn tất cả Bình Man
+        dash._deselect_all_bm_gens()
+        assert dash.bm_gen_count_lbl.cget("text") == "Đã chọn: 0 tướng (0 đợt xuất kích)"
+    finally:
+        dash.destroy()
+
+
+
 
 

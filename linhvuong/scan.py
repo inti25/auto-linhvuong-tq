@@ -23,8 +23,11 @@ MAN_NAMES = {
     8: "Đột Quyết",
     9: "Long Phi",
     10: "Hổ Báo Kỵ",
+    101: "Đạo quân lương",
+    201: "Thần thú",
     301: "Vong Linh",
 }
+
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,8 @@ Reverse engineered chính xác từ ZMan.exe:
   2. Bổ sung quân số: OPT.ashx?id=6 (lGeneralID, lSoldierType, lAmount, tid).
 """
 
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 from ..coords import coords_from_mid, mid_from_coords
 from ..locks import LockReason
@@ -42,6 +43,8 @@ class GoiDan:
         soldier_type: int = 1,
         refill_amount: int = 0,
         auto_recover: bool = False,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        check_idle: bool = True,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -58,6 +61,8 @@ class GoiDan:
         self.soldier_type = soldier_type
         self.refill_amount = refill_amount
         self.auto_recover = auto_recover
+        self.sleep_fn = sleep_fn
+        self.check_idle = check_idle
 
         # Tự động suy ra mode từ target_type nếu mode chưa được chỉ định
         if mode:
@@ -180,7 +185,35 @@ class GoiDan:
                     },
                 )
 
+    def check_generals_idle(self) -> bool:
+        """Kiểm tra toàn bộ võ tướng có đang rảnh rỗi (status == 0) hay không."""
+        if not self.generals:
+            return True
+        resp = self.ctx.gateway.call("Common.ashx", 32, {"type": "2", "_": ""}) or {}
+        if not resp or "list" not in resp:
+            return True
+
+        for entry in resp.get("list", []):
+            g_entries = entry[4] if len(entry) > 4 else []
+            for g in g_entries:
+                try:
+                    gid = int(g[0])
+                except (ValueError, IndexError, TypeError):
+                    continue
+                if gid in self.generals:
+                    status = int(g[5]) if len(g) > 5 else 0
+                    if status != 0:
+                        return False
+        return True
+
     def run_once(self) -> str:
+        # 0. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle
+        if self.check_idle and self.city_id:
+            if not self.check_generals_idle():
+                if self.ctx.notify:
+                    self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
+                return "generals_busy"
+
         # 1. Tìm mục tiêu có sẵn quanh thành trước
         target = self.ctx.scanner.find_nearest(
             *self.origin,
@@ -189,7 +222,7 @@ class GoiDan:
             skip_capital_radius=self.skip_capital_radius,
         )
         if target is not None:
-            result = attack(self.ctx, target, self.generals)
+            result = attack(self.ctx, target, self.generals, sleep_fn=self.sleep_fn)
             if self.auto_recover:
                 self.recover_generals()
             return result
@@ -202,7 +235,7 @@ class GoiDan:
             return "no_target"
 
         self.ctx.locks.try_lock(target.target_id, LockReason.CLAIMED)
-        result = attack(self.ctx, target, self.generals)
+        result = attack(self.ctx, target, self.generals, sleep_fn=self.sleep_fn)
         if self.auto_recover:
             self.recover_generals()
         return "called_and_attacked" if result == "attacked" else result

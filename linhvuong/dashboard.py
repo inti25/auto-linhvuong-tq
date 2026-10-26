@@ -1248,6 +1248,7 @@ class Dashboard(tk.Tk):
                         vals = list(self.gd_gen_tree.item(iid, "values"))
                         vals[0] = "☑" if int(iid) in self._pending_gd_generals else "☐"
                         self.gd_gen_tree.item(iid, values=vals)
+                    self._update_gd_gen_count_label()
             loaded_sections.append("Gọi Man")
 
         # 5. Bình Man
@@ -1289,6 +1290,7 @@ class Dashboard(tk.Tk):
                         vals = list(self.bm_gen_tree.item(iid, "values"))
                         vals[0] = "☑" if int(iid) in self._pending_bm_generals else "☐"
                         self.bm_gen_tree.item(iid, values=vals)
+                    self._update_bm_gen_count_label()
             loaded_sections.append("Bình Man")
 
         # 6. Hậu Cần
@@ -1799,6 +1801,8 @@ class Dashboard(tk.Tk):
         btn_bar.pack(fill="x", padx=4, pady=2)
         ttk.Button(btn_bar, text="✅ Chọn tất cả", style="Secondary.TButton", command=self._select_all_gd_gens).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="❌ Bỏ chọn tất cả", style="Secondary.TButton", command=self._deselect_all_gd_gens).pack(side="left", padx=2)
+        self.gd_gen_count_lbl = tk.Label(btn_bar, text="Đã chọn: 0 tướng (0 đợt xuất kích)", bg=BG, fg=FG, font=("Segoe UI", 9, "bold"))
+        self.gd_gen_count_lbl.pack(side="left", padx=8)
 
         self.gd_gen_tree = ttk.Treeview(
             f_top,
@@ -1843,17 +1847,26 @@ class Dashboard(tk.Tk):
         self.gd_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
         log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
 
+    def _update_gd_gen_count_label(self):
+        if not hasattr(self, "gd_gen_count_lbl") or not hasattr(self, "gd_gen_tree"):
+            return
+        selected_count = sum(1 for item in self.gd_gen_tree.get_children() if self.gd_gen_tree.item(item, "values")[0] == "☑")
+        batches = (selected_count + 2) // 3 if selected_count > 0 else 0
+        self.gd_gen_count_lbl.config(text=f"Đã chọn: {selected_count} tướng ({batches} đợt xuất kích)")
+
     def _select_all_gd_gens(self):
         for item in self.gd_gen_tree.get_children():
             vals = list(self.gd_gen_tree.item(item, "values"))
             vals[0] = "☑"
             self.gd_gen_tree.item(item, values=vals)
+        self._update_gd_gen_count_label()
 
     def _deselect_all_gd_gens(self):
         for item in self.gd_gen_tree.get_children():
             vals = list(self.gd_gen_tree.item(item, "values"))
             vals[0] = "☐"
             self.gd_gen_tree.item(item, values=vals)
+        self._update_gd_gen_count_label()
 
     def _on_gd_gen_toggle(self, event):
         item = self.gd_gen_tree.identify_row(event.y)
@@ -1862,6 +1875,7 @@ class Dashboard(tk.Tk):
         vals = list(self.gd_gen_tree.item(item, "values"))
         vals[0] = "☑" if vals[0] == "☐" else "☐"
         self.gd_gen_tree.item(item, values=vals)
+        self._update_gd_gen_count_label()
 
     def _on_gd_city_selected(self, _event=None):
         sel_idx = self.gd_city_combo.current()
@@ -1893,6 +1907,7 @@ class Dashboard(tk.Tk):
             )
             count += 1
         self._pending_gd_generals = None
+        self._update_gd_gen_count_label()
 
     def _append_gd_log(self, msg: str):
         self._append_text_buffer(self.gd_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
@@ -1948,6 +1963,7 @@ class Dashboard(tk.Tk):
             city_id=city.id,
             auto_recover=self.gd_recover_var.get(),
             refill_amount=500,
+            sleep_fn=time.sleep,
         )
 
     def _run_goidan_once(self):
@@ -2063,6 +2079,8 @@ class Dashboard(tk.Tk):
         btn_bar.pack(fill="x", padx=4, pady=2)
         ttk.Button(btn_bar, text="✅ Chọn tất cả", style="Secondary.TButton", command=self._select_all_bm_gens).pack(side="left", padx=2)
         ttk.Button(btn_bar, text="❌ Bỏ chọn tất cả", style="Secondary.TButton", command=self._deselect_all_bm_gens).pack(side="left", padx=2)
+        self.bm_gen_count_lbl = tk.Label(btn_bar, text="Đã chọn: 0 tướng (0 đợt xuất kích)", bg=BG, fg=FG, font=("Segoe UI", 9, "bold"))
+        self.bm_gen_count_lbl.pack(side="left", padx=8)
 
         self.bm_gen_tree = ttk.Treeview(
             f_gens,
@@ -2106,17 +2124,26 @@ class Dashboard(tk.Tk):
         self.bm_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
         log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
 
+    def _update_bm_gen_count_label(self):
+        if not hasattr(self, "bm_gen_count_lbl") or not hasattr(self, "bm_gen_tree"):
+            return
+        selected_count = sum(1 for item in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(item, "values")[0] == "☑")
+        batches = (selected_count + 2) // 3 if selected_count > 0 else 0
+        self.bm_gen_count_lbl.config(text=f"Đã chọn: {selected_count} tướng ({batches} đợt xuất kích)")
+
     def _select_all_bm_gens(self):
         for item in self.bm_gen_tree.get_children():
             vals = list(self.bm_gen_tree.item(item, "values"))
             vals[0] = "☑"
             self.bm_gen_tree.item(item, values=vals)
+        self._update_bm_gen_count_label()
 
     def _deselect_all_bm_gens(self):
         for item in self.bm_gen_tree.get_children():
             vals = list(self.bm_gen_tree.item(item, "values"))
             vals[0] = "☐"
             self.bm_gen_tree.item(item, values=vals)
+        self._update_bm_gen_count_label()
 
     def _on_bm_gen_toggle(self, event):
         item = self.bm_gen_tree.identify_row(event.y)
@@ -2125,6 +2152,7 @@ class Dashboard(tk.Tk):
         vals = list(self.bm_gen_tree.item(item, "values"))
         vals[0] = "☑" if vals[0] == "☐" else "☐"
         self.bm_gen_tree.item(item, values=vals)
+        self._update_bm_gen_count_label()
 
     def _append_bm_log(self, msg: str):
         self._append_text_buffer(self.bm_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
@@ -2207,6 +2235,7 @@ class Dashboard(tk.Tk):
                     values=(checked, g.level, f"{g.stamina}/{g.stamina_max}", g.morale, inf, cav, arc, total),
                 )
             self._pending_bm_generals = None
+        self._update_bm_gen_count_label()
 
 
     def _append_dt_log(self, msg: str):

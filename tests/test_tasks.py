@@ -201,3 +201,93 @@ def test_attack_auto_relogins_and_succeeds_on_session_expired():
     assert len(relogin_called) == 1
     assert sess.calls == 2
 
+
+def test_attack_empty_generals_returns_error():
+    gw = GatewayClient(53, session=None)
+    locks = TargetLocks()
+    scanner = Scanner(gw, locks, delay=0.0)
+    ctx = TaskContext(gw, scanner, locks)
+    target = Target(x=5, y=5, target_id=10, man_type=7)
+    assert attack(ctx, target, []) == "attack_failed:no_generals"
+
+
+def test_attack_splits_more_than_3_generals_into_batches_with_delay():
+    calls = []
+
+    def mock_call(endpoint, action_id, payload):
+        calls.append((endpoint, action_id, payload))
+        return {"ret": 0}
+
+    gw = GatewayClient(53, session=None)
+    gw.call = mock_call
+    locks = TargetLocks()
+    scanner = Scanner(gw, locks, delay=0.0)
+    alerts = []
+    ctx = TaskContext(gw, scanner, locks, notify=alerts.append)
+    target = Target(x=10, y=20, target_id=555, man_type=7)
+
+    delays = []
+    # 5 võ tướng: chia thành 2 đợt (3 tướng và 2 tướng)
+    res = attack(
+        ctx,
+        target,
+        generals=[101, 102, 103, 104, 105],
+        batch_size=3,
+        batch_delay=0.5,
+        sleep_fn=delays.append,
+    )
+
+    assert res == "attacked"
+    assert len(calls) == 2
+    # Đợt 1
+    assert calls[0][0] == "OPT.ashx"
+    assert calls[0][1] == 53
+    assert calls[0][2]["generals"] == "101,102,103"
+    assert calls[0][2]["target_id"] == "555"
+    # Đợt 2
+    assert calls[1][0] == "OPT.ashx"
+    assert calls[1][1] == 53
+    assert calls[1][2]["generals"] == "104,105"
+    assert calls[1][2]["target_id"] == "555"
+
+    # Có delay giữa 2 đợt
+    assert delays == [0.5]
+    # Có thông báo tiến độ từng đợt
+    assert any("Đợt 1/2" in a for a in alerts)
+    assert any("Đợt 2/2" in a for a in alerts)
+    assert any("Hoàn tất xuất kích 2 đợt" in a for a in alerts)
+
+
+def test_attack_batch_short_circuits_on_error():
+    calls = []
+
+    def mock_call(endpoint, action_id, payload):
+        calls.append((endpoint, action_id, payload))
+        if len(calls) == 1:
+            return {"ret": 230}  # RET_TAKEN_BY_OTHER
+        return {"ret": 0}
+
+    gw = GatewayClient(53, session=None)
+    gw.call = mock_call
+    locks = TargetLocks()
+    scanner = Scanner(gw, locks, delay=0.0)
+    alerts = []
+    ctx = TaskContext(gw, scanner, locks, notify=alerts.append)
+    target = Target(x=10, y=20, target_id=555, man_type=7)
+
+    delays = []
+    res = attack(
+        ctx,
+        target,
+        generals=[1, 2, 3, 4, 5, 6],
+        batch_size=3,
+        batch_delay=0.5,
+        sleep_fn=delays.append,
+    )
+
+    # Đợt 1 thất bại -> ngắt chuỗi ngay, không gọi đợt 2
+    assert res == "taken"
+    assert len(calls) == 1
+    assert delays == []
+
+

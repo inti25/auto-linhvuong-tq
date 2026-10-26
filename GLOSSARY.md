@@ -61,6 +61,10 @@ _Avoid_: Gọi dân, summon
 Các Võ tướng có vai trò võ quan (`role == "vo"`) được người chơi tích chọn tham gia đạo quân viễn chinh đánh Man, Gọi Man hoặc Thảo Phạt.
 _Avoid_: Tướng đánh, active general, selected general
 
+**Đợt xuất quân**:
+Một lệnh xuất kích tấn công mục tiêu dã ngoại (`OPT.ashx?id=53`), mang tối đa 3 đạo quân (3 Võ tướng). Khi danh sách Võ tướng xuất kích vượt quá 3, hệ thống tự động chia thành nhiều đợt xuất quân liền nhau tới cùng một mục tiêu.
+_Avoid_: Attack wave, đợt đánh
+
 **Thảo Phạt**:
 Chiến dịch tấn công các cứ điểm dã ngoại theo 8 cấp độ chiến dịch, chỉ sử dụng tối đa 5 Võ tướng.
 _Avoid_: Đánh ải, càn quét

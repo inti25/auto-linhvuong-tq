@@ -248,8 +248,8 @@ class BinhMan:
                 self.recover_in_city()
                 return "recovered_in_city"
 
-        # 2. Ở Chế độ 2 (Xuất quân từ Thành): Kiểm tra tướng rảnh rỗi (Idle Check) nếu có city_id
-        if self.mode == MODE_CITY and self.check_idle and self.city_id:
+        # 2. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle
+        if self.check_idle and (self.city_id or self.camp_id):
             if not self.check_generals_idle():
                 if self.ctx.notify:
                     self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
@@ -271,7 +271,7 @@ class BinhMan:
             if not reached:
                 return "relocate_failed"
 
-        # 5. Xuất quân tấn công
-        result = attack(self.ctx, target, self.generals)
+        # 5. Xuất quân tấn công (hỗ trợ chia nhiều đợt nếu > 3 tướng)
+        result = attack(self.ctx, target, self.generals, sleep_fn=self.sleep_fn)
         return result
 

@@ -294,3 +294,68 @@ def test_binh_man_mode_camp_stays_at_current_origin_when_target_lost():
     # Doanh trại dừng tại tọa độ mới đã tiến tới
     assert task.origin == (2, 2)
 
+
+def test_binh_man_attacks_multiple_batches_for_more_than_3_generals():
+    # Chọn 5 tướng: Đợt 1 (3 tướng), Đợt 2 (2 tướng) cùng tấn công mục tiêu 303
+    target_mid = mid_from_coords(12, 12)
+    server = FakeServer(
+        map_views={
+            mid_from_coords(10, 10): {"npc_tent": [man(12, 12, 303, 7)]},
+            target_mid: {"npc_tent": [man(12, 12, 303, 7)]},
+        },
+        handlers={
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    delays = []
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[11, 12, 13, 14, 15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        sleep_fn=delays.append,
+    )
+    out = task.run_once()
+    assert out == "attacked"
+
+    attack_calls = [d for k, d in server.calls if k == "OPT.ashx?id=53"]
+    assert len(attack_calls) == 2
+    assert attack_calls[0]["generals"] == "11,12,13"
+    assert attack_calls[0]["target_id"] == "303"
+    assert attack_calls[1]["generals"] == "14,15"
+    assert attack_calls[1]["target_id"] == "303"
+    assert delays == [0.5]
+
+
+def test_binh_man_mode_camp_idle_check_blocks_when_generals_busy():
+    # Chế độ 1 (Camp): Khi tướng tại trại đang bận (status != 0), bot tạm dừng và trả về generals_busy
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [9999, "Camp", 0, 0, [[21, "General 21", 1, 100, 100, 1]]],
+                ],
+            }
+        }
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[21],
+        origin=(0, 0),
+        radius=5,
+        man_types=[7],
+        mode=1,
+        camp_id=9999,
+        check_idle=True,
+    )
+    out = task.run_once()
+    assert out == "generals_busy"
+    assert any("đang bận" in a for a in alerts)
+
+

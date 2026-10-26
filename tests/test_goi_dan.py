@@ -242,3 +242,59 @@ def test_goi_man_multiple_target_types_fallback_on_failure():
     assert calls_69[0]["param1"] == "7"
     assert calls_69[1]["param1"] == "8"
 
+
+def test_goi_dan_idle_check_returns_generals_busy():
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [123, "City", 0, 0, [[50, "Gen 50", 1, 100, 100, 1]]],  # status=1 (bận)
+                ],
+            }
+        }
+    )
+    ctx, alerts = ctx_for(server)
+    task = GoiDan(ctx, generals=[50], origin=(2, 2), radius=5, city_id=123, check_idle=True)
+    out = task.run_once()
+    assert out == "generals_busy"
+    assert any("đang bận" in a for a in alerts)
+    # Không phát sinh request gọi quái hay đánh
+    assert [k for k, _ in server.calls if k != "Common.ashx?id=32"] == []
+
+
+def test_goi_dan_attacks_multiple_batches_for_more_than_3_generals():
+    mid = mid_from_coords(2, 2)
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(2, 2, 888, VONG_LINH)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    delays = []
+    ctx, alerts = ctx_for(server)
+    # Chọn 4 tướng: Đợt 1 (3 tướng: 10, 11, 12) -> Đợt 2 (1 tướng: 13)
+    task = GoiDan(
+        ctx,
+        generals=[10, 11, 12, 13],
+        origin=(2, 2),
+        radius=5,
+        mode="vong_linh",
+        city_id=123,
+        sleep_fn=delays.append,
+    )
+    out = task.run_once()
+    assert out == "called_and_attacked"
+
+    attack_calls = [d for k, d in server.calls if k == "OPT.ashx?id=53"]
+    assert len(attack_calls) == 2
+    assert attack_calls[0]["generals"] == "10,11,12"
+    assert attack_calls[0]["target_id"] == "888"
+    assert attack_calls[1]["generals"] == "13"
+    assert attack_calls[1]["target_id"] == "888"
+    assert delays == [0.5]
+    assert any("Đợt 1/2" in a for a in alerts)
+    assert any("Đợt 2/2" in a for a in alerts)
+
+
