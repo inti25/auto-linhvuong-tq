@@ -133,7 +133,7 @@ Hành động tăng điểm sĩ khí cho tướng tại Điểm Tướng Đài (
 _Avoid_: Nâng sĩ khí, tăng morale, buff sĩ khí
 
 **Luyện Sĩ Khí Đa Thành**:
-Tính năng điều phối luyện sĩ khí đồng thời cho nhiều tướng có quân đội đồn trú tại các Thành và Doanh trại khác nhau bằng đa luồng worker song song, tự động lặp các nhịp 10 điểm cho đến khi chạm Sĩ Khí Mục Tiêu.
+Tính năng điều phối luyện sĩ khí đồng loạt cho tất cả tướng có quân đội đồn trú tại các Thành và Doanh trại khác nhau theo cơ chế vòng lặp chu kỳ (Tick Scheduler), tự động kích hoạt song song và lặp các nhịp 10 điểm cho đến khi chạm Sĩ Khí Mục Tiêu mà không bị giới hạn số luồng worker.
 _Avoid_: Buff morale hàng loạt, train sĩ khí đa thành, nâng sĩ khí hàng loạt
 
 **Định Mức Biên Chế**:

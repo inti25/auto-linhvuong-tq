@@ -185,3 +185,131 @@ def test_train_general_morale_waits_when_upgrading_in_progress():
     assert final_morale == 100
     assert "Đã luyện thành công" in msg or "đạt mục tiêu" in msg
 
+
+def test_train_multiple_generals_tick_scheduler_ten_generals_all_concurrent():
+    """Kiểm tra Phương án 2 (Tick Scheduler):
+    Luyện 10 võ tướng cùng lúc mà không bị giới hạn 3 luồng.
+    Tất cả 10 tướng đều được kích hoạt gọi OPT.ashx?id=47 và hoàn thành đồng loạt.
+    """
+    server = FakeServer()
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    trainer = MoraleTrainer(gw, poll_interval=0.001)
+
+    targets = [
+        {"city_id": 21936, "general_id": 1000 + i, "current_morale": 90, "name": f"General_{i}"}
+        for i in range(10)
+    ]
+
+    progress_reports = []
+    step_reports = []
+
+    def on_prog(done, total, res):
+        progress_reports.append((done, total, res["general_id"]))
+
+    def on_step(gid, cur, tgt, msg):
+        step_reports.append((gid, cur, tgt, msg))
+
+    results = trainer.train_multiple_generals(
+        targets=targets,
+        target_morale=100,
+        on_progress=on_prog,
+        on_step=on_step,
+    )
+
+    # Đảm bảo toàn bộ 10 tướng đều được luyện thành công
+    assert len(results) == 10
+    assert all(r["success"] for r in results.values())
+    for i in range(10):
+        gid = 1000 + i
+        assert results[gid]["final_morale"] == 100
+        assert results[gid]["name"] == f"General_{i}"
+
+    assert len(progress_reports) == 10
+    # Đã gọi API 47 cho cả 10 tướng
+    opt47_calls = [c for c in server.calls if "OPT.ashx" in c[0]]
+    assert len(opt47_calls) == 10
+    called_gids = {int(c[1]["lGeneralID"]) for c in opt47_calls}
+    assert called_gids == {1000 + i for i in range(10)}
+
+
+def test_train_multiple_generals_tick_scheduler_with_server_upgrading_time():
+    """Kiểm tra Tick Scheduler khi máy chủ trả về upgrading_time > 0 từ Common.ashx?id=76.
+    Scheduler đếm ngược và đồng bộ theo từng thành, sau đó hoàn tất khi đạt target.
+    """
+    # 2 tướng ở thành 21936
+    city_data = {
+        201: {"morale": 90, "up_t": 2},
+        202: {"morale": 90, "up_t": 1},
+    }
+    opt_calls = []
+
+    def mock_cb(endpoint, data):
+        if "Common.ashx" in endpoint and (data.get("id") == "76" or "id=76" in endpoint or endpoint == "Common.ashx"):
+            # Trả về danh sách tướng thành 21936
+            generals_list = [
+                [gid, f"Gen_{gid}", 0, "", 0, 100, 0, 0, 0, d["morale"], d["up_t"], 500]
+                for gid, d in city_data.items()
+            ]
+            return MagicMock(status_code=200, json=lambda: {
+                "ret": 0,
+                "list": [[21936, "Thành", generals_list]]
+            })
+        elif "OPT.ashx" in endpoint and (data.get("id") == "47" or "id=47" in endpoint or endpoint == "OPT.ashx"):
+            gid = int(data.get("lGeneralID", 0))
+            opt_calls.append(gid)
+            city_data[gid]["morale"] += 10
+            city_data[gid]["up_t"] = 0
+            return MagicMock(status_code=200, json=lambda: {"ret": 0})
+        return MagicMock(status_code=200, json=lambda: {"ret": 0})
+
+    server = FakeServer(step_callback=mock_cb)
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    trainer = MoraleTrainer(gw, poll_interval=0.001)
+
+    targets = [
+        {"city_id": 21936, "general_id": 201, "current_morale": 90, "name": "Gen_201"},
+        {"city_id": 21936, "general_id": 202, "current_morale": 90, "name": "Gen_202"},
+    ]
+
+    results = trainer.train_multiple_generals(targets=targets, target_morale=100)
+    assert len(results) == 2
+    assert results[201]["success"] is True
+    assert results[201]["final_morale"] == 100
+    assert results[202]["success"] is True
+    assert results[202]["final_morale"] == 100
+    assert set(opt_calls) == {201, 202}
+
+
+def test_train_multiple_generals_tick_scheduler_handles_stop_event():
+    """Kiểm tra khi stop_event được kích hoạt giữa chừng."""
+    stop_event = threading.Event()
+    call_count = 0
+
+    def mock_cb(endpoint, data):
+        nonlocal call_count
+        if "OPT.ashx" in endpoint:
+            call_count += 1
+            if call_count >= 2:
+                stop_event.set()
+        return MagicMock(status_code=200, json=lambda: {"ret": 0})
+
+    server = FakeServer(step_callback=mock_cb)
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    trainer = MoraleTrainer(gw, poll_interval=0.001)
+
+    targets = [
+        {"city_id": 100, "general_id": 300 + i, "current_morale": 80, "name": f"Gen_{i}"}
+        for i in range(5)
+    ]
+
+    results = trainer.train_multiple_generals(
+        targets=targets,
+        target_morale=100,
+        stop_event=stop_event,
+    )
+
+    assert len(results) == 5
+    # Ít nhất một số tướng bị dừng
+    assert any("dừng" in r["message"].lower() for r in results.values())
+
+

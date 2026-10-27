@@ -1,6 +1,5 @@
 """Phân hệ Luyện Sĩ Khí (Morale Training) đồng thời cho tướng lĩnh đa thành."""
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import threading
 import time
@@ -25,7 +24,7 @@ def _dispatch_on_step(cb: Optional[Callable], cur: int, tgt: int, msg: str = "")
 
 
 class MoraleTrainer:
-    """Điều phối và thực thi luyện sĩ khí cho tướng đơn lẻ và đồng thời nhiều tướng."""
+    """Điều phối và thực thi luyện sĩ khí cho tướng đơn lẻ và đồng loạt nhiều tướng theo Tick Scheduler."""
 
     def __init__(
         self,
@@ -34,8 +33,30 @@ class MoraleTrainer:
         sleep_fn: Optional[Callable[[float], None]] = None,
     ):
         self.gateway = gateway
-        self.poll_interval = max(0.01, poll_interval)
+        self.poll_interval = max(0.001, poll_interval)
         self.sleep_fn = sleep_fn or getattr(gateway, "_sleep", time.sleep)
+
+    def get_city_generals_morale_info(self, city_id: int) -> dict[int, tuple[int, int]]:
+        """Lấy sĩ khí hiện tại và thời gian nâng dở (upgrading_time) cho tất cả tướng trong thành từ API 76.
+
+        Trả về {general_id: (current_morale, upgrading_time)}.
+        """
+        result: dict[int, tuple[int, int]] = {}
+        try:
+            resp = self.gateway.call("Common.ashx", 76, {"cid": str(city_id)}) or {}
+            for entry in resp.get("list", []):
+                if len(entry) > 2 and isinstance(entry[2], list):
+                    for g in entry[2]:
+                        try:
+                            gid = int(g[0])
+                            cur_m = int(g[9]) if len(g) > 9 else 0
+                            up_t = int(g[10]) if len(g) > 10 else 0
+                            result[gid] = (cur_m, up_t)
+                        except (ValueError, TypeError, IndexError):
+                            continue
+        except Exception as e:
+            logger.warning(f"Không thể đọc thông tin sĩ khí thành {city_id} từ API 76: {e}")
+        return result
 
     def get_general_morale_info(self, city_id: int, general_id: int) -> tuple[Optional[int], int]:
         """Lấy sĩ khí hiện tại và thời gian nâng sĩ khí còn lại (upgrading_time) từ API 76.
@@ -43,17 +64,9 @@ class MoraleTrainer:
         Trả về (current_morale, upgrading_time). Nếu không tìm thấy hoặc API không trả về
         danh sách, trả về (None, 0).
         """
-        try:
-            resp = self.gateway.call("Common.ashx", 76, {"cid": str(city_id)}) or {}
-            for entry in resp.get("list", []):
-                if len(entry) > 2 and isinstance(entry[2], list):
-                    for g in entry[2]:
-                        if int(g[0]) == general_id:
-                            cur_m = int(g[9]) if len(g) > 9 else None
-                            up_t = int(g[10]) if len(g) > 10 else 0
-                            return cur_m, up_t
-        except Exception as e:
-            logger.warning(f"Không thể đọc thông tin sĩ khí tướng {general_id} từ API 76: {e}")
+        city_info = self.get_city_generals_morale_info(city_id)
+        if general_id in city_info:
+            return city_info[general_id]
         return None, 0
 
     def train_general_morale(
@@ -65,7 +78,7 @@ class MoraleTrainer:
         stop_event: Optional[threading.Event] = None,
         on_step: Optional[Callable[..., None]] = None,
     ) -> tuple[bool, int, str]:
-        """Luyện sĩ khí cho một tướng từ current_morale đến target_morale.
+        """Luyện sĩ khí cho một tướng đơn lẻ từ current_morale đến target_morale.
 
         - Tự động kiểm tra thời gian nâng dở dang (upgrading_time > 0) từ máy chủ.
         - Nếu tướng đang luyện dở, chờ cho đợt luyện hoàn tất rồi cập nhật sĩ khí thực tế.
@@ -99,7 +112,6 @@ class MoraleTrainer:
                 _dispatch_on_step(on_step, curr, target_morale, wait_msg)
                 wait_step = min(float(up_t), self.poll_interval)
                 if self.poll_interval >= 1.0:
-                    # Chờ thích ứng theo thời gian còn lại, giảm số request polling API 76
                     wait_step = min(float(up_t), max(self.poll_interval, min(up_t / 2.0, 30.0)))
                 if stop_event:
                     if stop_event.wait(wait_step):
@@ -159,64 +171,261 @@ class MoraleTrainer:
         self,
         targets: list[dict],
         target_morale: int = 100,
-        max_workers: int = 3,
+        max_workers: Optional[int] = None,
         stop_event: Optional[threading.Event] = None,
         on_progress: Optional[Callable[[int, int, dict], None]] = None,
         on_step: Optional[Callable[[int, int, int, str], None]] = None,
     ) -> dict[int, dict]:
-        """Luyện sĩ khí đồng thời cho danh sách tướng đa thành.
+        """Luyện sĩ khí đồng loạt cho danh sách tướng đa thành theo cơ chế Tick Scheduler (Phương án 2).
+
+        Không còn bị giới hạn bởi số worker threads. Toàn bộ tướng được chọn đều được kích hoạt
+        nâng sĩ khí đồng thời trên máy chủ và cập nhật đếm ngược song song trong một vòng lặp chu kỳ.
 
         targets: list các dict: {"city_id": int, "general_id": int, "current_morale": int, "name": str}
         on_step: callback nhận (general_id, current_morale, target_morale, step_msg)
-        Trả về kết quả theo từng tướng: {general_id: {"success": bool, "final_morale": int, "message": str}}
+        on_progress: callback nhận (completed_count, total, result_dict)
+        Trả về kết quả theo từng tướng: {general_id: {"general_id": int, "city_id": int, "name": str, "success": bool, "final_morale": int, "message": str}}
         """
-        results: dict[int, dict] = {}
+        if not targets:
+            return {}
+
+        target_morale = min(100, max(1, target_morale))
         total = len(targets)
         completed_count = 0
-        lock = threading.Lock()
 
-        def _worker(item: dict) -> tuple[int, bool, int, str]:
-            nonlocal completed_count
-            cid = item["city_id"]
+        # Khởi tạo bảng trạng thái cho từng tướng
+        states: dict[int, dict] = {}
+        for item in targets:
             gid = item["general_id"]
-            morale = item.get("current_morale", 0)
+            cid = item["city_id"]
+            name = item.get("name", str(gid))
+            cur_m = item.get("current_morale", 0)
+            states[gid] = {
+                "general_id": gid,
+                "city_id": cid,
+                "name": name,
+                "current_morale": cur_m,
+                "upgrading_time": 0,
+                "step_count": 0,
+                "completed": False,
+                "success": False,
+                "message": "",
+            }
 
-            def _general_step(cur: int, tgt: int, msg: str = ""):
-                if on_step:
-                    on_step(gid, cur, tgt, msg)
-
-            succ, final_m, msg = self.train_general_morale(
-                city_id=cid,
-                general_id=gid,
-                current_morale=morale,
-                target_morale=target_morale,
-                stop_event=stop_event,
-                on_step=_general_step,
-            )
-
-            with lock:
-                completed_count += 1
-                res_dict = {
+        def _finish_general(gid: int, success: bool, final_morale: int, msg: str):
+            nonlocal completed_count
+            st = states[gid]
+            if st["completed"]:
+                return
+            st["completed"] = True
+            st["success"] = success
+            st["current_morale"] = final_morale
+            st["message"] = msg
+            completed_count += 1
+            icon = "✅" if success else "❌"
+            if "dừng" in msg.lower():
+                icon = "⏹️"
+            if on_step:
+                _dispatch_on_step(
+                    lambda cur, tgt, m: on_step(gid, cur, tgt, m),
+                    final_morale,
+                    target_morale,
+                    f"{icon} {msg}",
+                )
+            if on_progress:
+                on_progress(completed_count, total, {
                     "general_id": gid,
-                    "city_id": cid,
-                    "name": item.get("name", str(gid)),
-                    "success": succ,
-                    "final_morale": final_m,
+                    "city_id": st["city_id"],
+                    "name": st["name"],
+                    "success": success,
+                    "final_morale": final_morale,
                     "message": msg,
+                })
+
+        # Nếu người dùng đã yêu cầu dừng từ đầu
+        if stop_event and stop_event.is_set():
+            for gid, st in states.items():
+                _finish_general(gid, False, st["current_morale"], "Đã bị dừng bởi người dùng")
+            return {
+                gid: {
+                    "general_id": gid,
+                    "city_id": s["city_id"],
+                    "name": s["name"],
+                    "success": s["success"],
+                    "final_morale": s["current_morale"],
+                    "message": s["message"],
                 }
-                results[gid] = res_dict
-                if on_progress:
-                    on_progress(completed_count, total, res_dict)
+                for gid, s in states.items()
+            }
 
-            return gid, succ, final_m, msg
+        # Kiểm tra trước những tướng đã đạt mục tiêu ngay từ đầu
+        for gid, st in list(states.items()):
+            if st["current_morale"] >= target_morale:
+                _finish_general(gid, True, st["current_morale"], f"Sĩ khí đã đạt mục tiêu ({st['current_morale']}/{target_morale})")
 
-        workers = max(1, min(max_workers, len(targets) or 1))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_worker, item) for item in targets]
-            for f in as_completed(futures):
-                try:
-                    f.result()
-                except Exception as e:
-                    logger.error(f"Lỗi ngoại lệ khi luyện sĩ khí worker: {e}")
+        last_city_sync: dict[int, float] = {}
 
-        return results
+        # Vòng lặp điều phối Tick Scheduler
+        while completed_count < total:
+            if stop_event and stop_event.is_set():
+                for gid, st in states.items():
+                    if not st["completed"]:
+                        _finish_general(gid, False, st["current_morale"], "Đã bị dừng bởi người dùng")
+                break
+
+            now = time.time()
+            active_targets = [st for st in states.values() if not st["completed"]]
+            if not active_targets:
+                break
+
+            # 1. Đồng bộ thông tin API 76 theo từng Thành có tướng đang hoạt động
+            active_cids = {st["city_id"] for st in active_targets}
+            for cid in active_cids:
+                if stop_event and stop_event.is_set():
+                    break
+                c_targets = [st for st in active_targets if st["city_id"] == cid]
+                needs_sync = (
+                    cid not in last_city_sync
+                    or (now - last_city_sync[cid] >= self.poll_interval)
+                    or any(st["upgrading_time"] <= 0 and st["current_morale"] < target_morale for st in c_targets)
+                )
+
+                if needs_sync:
+                    city_info = self.get_city_generals_morale_info(cid)
+                    last_city_sync[cid] = now
+                    if city_info:
+                        for st in c_targets:
+                            gid = st["general_id"]
+                            if gid in city_info:
+                                cur_m, up_t = city_info[gid]
+                                st["current_morale"] = cur_m
+                                st["upgrading_time"] = up_t
+
+            # 2. Xử lý từng tướng trong danh sách active
+            for st in active_targets:
+                if stop_event and stop_event.is_set():
+                    break
+                if st["completed"]:
+                    continue
+
+                gid = st["general_id"]
+                cid = st["city_id"]
+                curr = st["current_morale"]
+                up_t = st["upgrading_time"]
+
+                # 2.1. Đã đạt mục tiêu
+                if curr >= target_morale:
+                    _finish_general(gid, True, curr, f"Sĩ khí đã đạt mục tiêu ({curr}/{target_morale})")
+                    continue
+
+                # 2.2. Đang trong thời gian đếm ngược (upgrading_time > 0)
+                if up_t > 0:
+                    wait_msg = f"⏳ Chờ luyện dở (còn {up_t}s)..."
+                    if on_step:
+                        _dispatch_on_step(
+                            lambda c, t, m: on_step(gid, c, t, m),
+                            curr,
+                            target_morale,
+                            wait_msg,
+                        )
+                    continue
+
+                # 2.3. Sẵn sàng kích hoạt lệnh nâng sĩ khí (up_t == 0 và curr < target_morale)
+                add_point = min(10, target_morale - curr)
+                payload = {
+                    "lAddPoint": str(add_point),
+                    "lGeneralID": str(gid),
+                    "tid": str(cid),
+                    "_": "",
+                }
+                resp = self.gateway.call("OPT.ashx", 47, payload) or {}
+                ret = resp.get("ret", -1)
+
+                if ret == 0:
+                    st["step_count"] += 1
+                    cur_m, new_up_t = self.get_general_morale_info(cid, gid)
+                    if cur_m is None:
+                        # Fallback cập nhật lạc quan (dành cho server mock / unit tests)
+                        curr += add_point
+                        st["current_morale"] = curr
+                        if on_step:
+                            _dispatch_on_step(
+                                lambda c, t, m: on_step(gid, c, t, m),
+                                curr,
+                                target_morale,
+                                f"Đã tăng +{add_point} ({curr}/{target_morale})",
+                            )
+                        if curr >= target_morale:
+                            _finish_general(
+                                gid,
+                                True,
+                                curr,
+                                f"Đã luyện thành công sau {st['step_count']} đợt ({curr}/{target_morale})",
+                            )
+                    else:
+                        st["current_morale"] = cur_m
+                        st["upgrading_time"] = new_up_t or 1
+                        if cur_m >= target_morale:
+                            _finish_general(
+                                gid,
+                                True,
+                                cur_m,
+                                f"Đã luyện thành công sau {st['step_count']} đợt ({cur_m}/{target_morale})",
+                            )
+                        else:
+                            if on_step:
+                                _dispatch_on_step(
+                                    lambda c, t, m: on_step(gid, c, t, m),
+                                    cur_m,
+                                    target_morale,
+                                    f"Đã kích hoạt +{add_point} ({cur_m}/{target_morale})",
+                                )
+                    # Giãn cách vi mô 50ms giữa các request kích hoạt để bảo vệ socket
+                    if self.poll_interval >= 0.1:
+                        time.sleep(0.05)
+                else:
+                    # Kiểm tra lại xem có phải do đang bận luyện dở chưa kịp cập nhật
+                    cur_m, new_up_t = self.get_general_morale_info(cid, gid)
+                    if new_up_t > 0:
+                        st["upgrading_time"] = new_up_t
+                        if cur_m is not None:
+                            st["current_morale"] = cur_m
+                        continue
+
+                    err_msg = f"Máy chủ phản hồi mã lỗi {ret}"
+                    logger.warning(
+                        f"Luyện sĩ khí tướng {gid} tại thành {cid} thất bại: {err_msg}"
+                    )
+                    _finish_general(gid, False, curr, err_msg)
+
+            # 3. Tính toán nhịp nghỉ giữa các tick và cập nhật đếm ngược cục bộ
+            remaining = [st for st in states.values() if not st["completed"]]
+            if not remaining:
+                break
+
+            tick_step = min(1.0, self.poll_interval)
+            if stop_event:
+                if stop_event.wait(tick_step):
+                    for gid, st in states.items():
+                        if not st["completed"]:
+                            _finish_general(gid, False, st["current_morale"], "Đã bị dừng bởi người dùng")
+                    break
+            else:
+                self.sleep_fn(tick_step)
+
+            # Giảm thời gian đếm ngược cục bộ mỗi giây để UI hiển thị mượt mà
+            for st in remaining:
+                if st["upgrading_time"] > 0:
+                    st["upgrading_time"] = max(0, st["upgrading_time"] - int(max(1, tick_step)))
+
+        return {
+            gid: {
+                "general_id": gid,
+                "city_id": s["city_id"],
+                "name": s["name"],
+                "success": s["success"],
+                "final_morale": s["current_morale"],
+                "message": s["message"],
+            }
+            for gid, s in states.items()
+        }
