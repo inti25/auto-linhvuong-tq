@@ -48,6 +48,7 @@ from .tasks.goi_dan import GoiDan, VONG_LINH
 from .tasks.logistics import ArmyTransferOrder, LogisticsTask
 from .tasks.morale import MoraleTrainer
 from .tasks.research import ResearchTask, TECH_NAMES, TechPlan
+from .troops import ArmyProvisioner
 from .tasks.thao_phat import (
     ERROR_MESSAGES,
     THAOPHAT_MISSIONS,
@@ -251,6 +252,9 @@ class GoiDanAutoRunner(BaseTaskRunner):
         self.interval = interval
 
     def run(self):
+        self.task.stop_event = self.stop_event
+        if getattr(self.task, "sleep_fn", None) is time.sleep:
+            self.task.sleep_fn = lambda s: self.wait(s)
         self.status_cb("Đang chạy...")
         self.log(f"🚀 Bắt đầu nhiệm vụ Gọi Dân (chế độ: {self.task.mode})...")
         cycle = 0
@@ -281,6 +285,9 @@ class BinhManAutoRunner(BaseTaskRunner):
         self.interval = interval
 
     def run(self):
+        self.task.stop_event = self.stop_event
+        if getattr(self.task, "sleep_fn", None) is time.sleep:
+            self.task.sleep_fn = lambda s: self.wait(s)
         self.status_cb("Đang chạy...")
         self.log("🚀 Bắt đầu nhiệm vụ Bình Man...")
         cycle = 0
@@ -915,6 +922,12 @@ class Dashboard(tk.Tk):
                 "auto_recover": bool(self.gd_recover_var.get()) if hasattr(self, "gd_recover_var") else True,
                 "interval": self.gd_interval_var.get() if hasattr(self, "gd_interval_var") else "10",
                 "generals": [int(iid) for iid in self.gd_gen_tree.get_children() if self.gd_gen_tree.item(iid, "values")[0] == "☑"] if hasattr(self, "gd_gen_tree") else [],
+                "target_infantry": self.gd_target_inf_var.get() if hasattr(self, "gd_target_inf_var") else "0",
+                "target_cavalry": self.gd_target_cav_var.get() if hasattr(self, "gd_target_cav_var") else "0",
+                "target_archers": self.gd_target_arc_var.get() if hasattr(self, "gd_target_arc_var") else "0",
+                "auto_recruit": bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True,
+                "auto_morale": bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True,
+                "min_morale": self.gd_min_morale_var.get() if hasattr(self, "gd_min_morale_var") else "95",
             },
             "binh_man": {
                 "mode": self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1,
@@ -928,6 +941,12 @@ class Dashboard(tk.Tk):
                 "mantypes": self.bm_mantypes_dropdown.get_selected_str() if hasattr(self, "bm_mantypes_dropdown") else (self.bm_mantypes_var.get() if hasattr(self, "bm_mantypes_var") else "7,8,9,10"),
                 "target_types": self.bm_mantypes_dropdown.get_selected() if hasattr(self, "bm_mantypes_dropdown") else [7, 8, 9, 10],
                 "generals": [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"] if hasattr(self, "bm_gen_tree") else [],
+                "target_infantry": self.bm_target_inf_var.get() if hasattr(self, "bm_target_inf_var") else "0",
+                "target_cavalry": self.bm_target_cav_var.get() if hasattr(self, "bm_target_cav_var") else "0",
+                "target_archers": self.bm_target_arc_var.get() if hasattr(self, "bm_target_arc_var") else "0",
+                "auto_recruit": bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True,
+                "auto_morale": bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True,
+                "min_morale": self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95",
             },
             "logistics": {
                 "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
@@ -1240,6 +1259,18 @@ class Dashboard(tk.Tk):
                 self.gd_recover_var.set(bool(gd_data["auto_recover"]))
             if hasattr(self, "gd_interval_var") and "interval" in gd_data:
                 self.gd_interval_var.set(str(gd_data["interval"]))
+            if hasattr(self, "gd_target_inf_var") and "target_infantry" in gd_data:
+                self.gd_target_inf_var.set(str(gd_data["target_infantry"]))
+            if hasattr(self, "gd_target_cav_var") and "target_cavalry" in gd_data:
+                self.gd_target_cav_var.set(str(gd_data["target_cavalry"]))
+            if hasattr(self, "gd_target_arc_var") and "target_archers" in gd_data:
+                self.gd_target_arc_var.set(str(gd_data["target_archers"]))
+            if hasattr(self, "gd_auto_recruit_var") and "auto_recruit" in gd_data:
+                self.gd_auto_recruit_var.set(bool(gd_data["auto_recruit"]))
+            if hasattr(self, "gd_auto_morale_var") and "auto_morale" in gd_data:
+                self.gd_auto_morale_var.set(bool(gd_data["auto_morale"]))
+            if hasattr(self, "gd_min_morale_var") and "min_morale" in gd_data:
+                self.gd_min_morale_var.set(str(gd_data["min_morale"]))
             if "generals" in gd_data and isinstance(gd_data["generals"], list):
                 gd_gens = [int(x) for x in gd_data["generals"] if str(x).isdigit()]
                 self._pending_gd_generals = set(gd_gens)
@@ -1282,6 +1313,18 @@ class Dashboard(tk.Tk):
                 self.bm_mantypes_var.set(str(bm_data["mantypes"]))
             if hasattr(self, "bm_threshold_var") and "threshold" in bm_data:
                 self.bm_threshold_var.set(str(bm_data["threshold"]))
+            if hasattr(self, "bm_target_inf_var") and "target_infantry" in bm_data:
+                self.bm_target_inf_var.set(str(bm_data["target_infantry"]))
+            if hasattr(self, "bm_target_cav_var") and "target_cavalry" in bm_data:
+                self.bm_target_cav_var.set(str(bm_data["target_cavalry"]))
+            if hasattr(self, "bm_target_arc_var") and "target_archers" in bm_data:
+                self.bm_target_arc_var.set(str(bm_data["target_archers"]))
+            if hasattr(self, "bm_auto_recruit_var") and "auto_recruit" in bm_data:
+                self.bm_auto_recruit_var.set(bool(bm_data["auto_recruit"]))
+            if hasattr(self, "bm_auto_morale_var") and "auto_morale" in bm_data:
+                self.bm_auto_morale_var.set(bool(bm_data["auto_morale"]))
+            if hasattr(self, "bm_min_morale_var") and "min_morale" in bm_data:
+                self.bm_min_morale_var.set(str(bm_data["min_morale"]))
             if "generals" in bm_data and isinstance(bm_data["generals"], list):
                 bm_gens = [int(x) for x in bm_data["generals"] if str(x).isdigit()]
                 self._pending_bm_generals = set(bm_gens)
@@ -1762,25 +1805,49 @@ class Dashboard(tk.Tk):
         self.gd_radius_var = tk.StringVar(value="5")
         ttk.Entry(top, textvariable=self.gd_radius_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=4)
 
-        self.gd_recover_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            top,
-            text="Tự động Trị thương & Bổ sung lính sau trận",
-            variable=self.gd_recover_var,
-            bg=BG,
-            fg=FG,
-            selectcolor=CARD,
-            activebackground=BG,
-            activeforeground=FG,
-        ).grid(row=1, column=2, columnspan=2, sticky="w", padx=4, pady=4)
-
-        tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        tk.Label(top, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=1, column=2, sticky="w", padx=4, pady=4)
         self.gd_interval_var = tk.StringVar(value="10")
-        ttk.Entry(top, textvariable=self.gd_interval_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
+        ttk.Entry(top, textvariable=self.gd_interval_var, width=8).grid(row=1, column=3, sticky="w", padx=4, pady=4)
+
+        # Row 2: Định mức quân đội (Bộ MT, Kỵ MT, Cung MT) & Nút Biên chế ngay
+        tk.Label(top, text="Bộ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=2, column=0, sticky="w", padx=4, pady=4)
+        self.gd_target_inf_var = tk.StringVar(value="0")
+        ttk.Entry(top, textvariable=self.gd_target_inf_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
+
+        army_f = tk.Frame(top, bg=BG)
+        army_f.grid(row=2, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        tk.Label(army_f, text="Kỵ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
+        self.gd_target_cav_var = tk.StringVar(value="0")
+        ttk.Entry(army_f, textvariable=self.gd_target_cav_var, width=6).pack(side="left", padx=(0, 6))
+
+        tk.Label(army_f, text="Cung MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
+        self.gd_target_arc_var = tk.StringVar(value="0")
+        ttk.Entry(army_f, textvariable=self.gd_target_arc_var, width=6).pack(side="left", padx=(0, 8))
+
+        self.gd_adjust_troops_btn = ttk.Button(army_f, text="⚔️ Biên chế ngay", style="Action.TButton", command=self._manual_adjust_gd_troops)
+        self.gd_adjust_troops_btn.pack(side="left", padx=(0, 4))
+
+        # Row 3: Tự động bổ sung lính, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        self.gd_auto_recruit_var = tk.BooleanVar(value=True)
+        self.gd_recover_var = self.gd_auto_recruit_var  # Giữ alias tương thích ngược
+        ttk.Checkbutton(
+            top,
+            text="Tự động bổ sung lính",
+            variable=self.gd_auto_recruit_var,
+            style="TCheckbutton",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+
+        mor_f = tk.Frame(top, bg=BG)
+        mor_f.grid(row=3, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        self.gd_auto_morale_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(mor_f, text="Tự động nâng sĩ khí", variable=self.gd_auto_morale_var, style="TCheckbutton").pack(side="left", padx=(0, 8))
+        tk.Label(mor_f, text="Sĩ khí tối thiểu:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.gd_min_morale_var = tk.StringVar(value="95")
+        ttk.Entry(mor_f, textvariable=self.gd_min_morale_var, width=5).pack(side="left")
 
         # Điều khiển
         ctrl_frame = tk.Frame(top, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=3, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=4, padx=16)
         self.gd_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Gọi Man", style="Success.TButton", command=self._toggle_goidan)
         self.gd_start_btn.pack(side="top", pady=2)
         self.gd_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_goidan_once)
@@ -1952,10 +2019,31 @@ class Dashboard(tk.Tk):
         scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
         ctx = TaskContext(self.gateway, scanner, locks, notify=lambda m: self.after(0, self._append_gd_log, m))
 
+        try:
+            target_inf = int(self.gd_target_inf_var.get() or "0")
+        except ValueError:
+            target_inf = 0
+        try:
+            target_cav = int(self.gd_target_cav_var.get() or "0")
+        except ValueError:
+            target_cav = 0
+        try:
+            target_arc = int(self.gd_target_arc_var.get() or "0")
+        except ValueError:
+            target_arc = 0
+        try:
+            min_morale = int(self.gd_min_morale_var.get() or "95")
+        except ValueError:
+            min_morale = 95
+
+        target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
+        auto_recruit = bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True
+        auto_morale = bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True
+
         return GoiDan(
             ctx=ctx,
             generals=sel_gens,
-            origin=(0, 0),
+            origin=(city.pos_x, city.pos_y) if hasattr(city, "pos_x") else (0, 0),
             radius=radius,
             mode=mode,
             target_type=target_type,
@@ -1964,7 +2052,135 @@ class Dashboard(tk.Tk):
             auto_recover=self.gd_recover_var.get(),
             refill_amount=500,
             sleep_fn=time.sleep,
+            combat_config=self._build_combat_config(),
+            on_battle_found=lambda bid: self.after(
+                0, lambda b=bid: self.bt_id_var.set(str(b)) if hasattr(self, "bt_id_var") else None
+            ),
+            on_battle_state=lambda st: self.after(
+                0, lambda s=st: self._bt_render_state(s) if hasattr(self, "_bt_render_state") else None
+            ),
+            target_army=target_army,
+            auto_recruit=auto_recruit,
+            auto_morale=auto_morale,
+            min_morale=min_morale,
         )
+
+    def _manual_adjust_gd_troops(self):
+        sel_idx = self.gd_city_combo.current()
+        cities = self.roster.cities if (self.roster and self.roster.cities) else []
+        if sel_idx < 0 or sel_idx >= len(cities):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì!")
+            return
+        city_id = cities[sel_idx].id
+        sel_gens = [int(iid) for iid in self.gd_gen_tree.get_children() if self.gd_gen_tree.item(iid, "values")[0] == "☑"]
+        if not sel_gens:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 võ tướng!")
+            return
+
+        try:
+            target_inf = int(self.gd_target_inf_var.get() or "0")
+        except ValueError:
+            target_inf = 0
+        try:
+            target_cav = int(self.gd_target_cav_var.get() or "0")
+        except ValueError:
+            target_cav = 0
+        try:
+            target_arc = int(self.gd_target_arc_var.get() or "0")
+        except ValueError:
+            target_arc = 0
+        try:
+            min_morale = int(self.gd_min_morale_var.get() or "95")
+        except ValueError:
+            min_morale = 95
+
+        target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
+        auto_recruit = bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True
+        auto_morale = bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True
+
+        def _worker():
+            try:
+                self.after(0, self._append_gd_log, "⚔️ Bắt đầu tiến trình biên chế Gọi Man & Luyện sĩ khí...")
+                prov = ArmyProvisioner(self.gateway, sleep_fn=time.sleep)
+
+                # 1. Trị thương
+                for gid in sel_gens:
+                    prov.heal_general(city_id, gid)
+
+                # 2. Bổ sung lính
+                if target_army.total > 0 and auto_recruit:
+                    total_needed = 0
+                    fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                    for gid in sel_gens:
+                        army = fresh_roster.army_of(gid)
+                        cur_inf = army.infantry if army else 0
+                        cur_cav = army.cavalry if army else 0
+                        cur_arc = army.archers if army else 0
+                        total_needed += max(0, target_army.infantry - cur_inf)
+                        total_needed += max(0, target_army.cavalry - cur_cav)
+                        total_needed += max(0, target_army.archers - cur_arc)
+
+                    if total_needed > 0:
+                        avail = prov.check_recruits(city_id)
+                        if avail is not None and avail < total_needed:
+                            missing = total_needed - avail
+                            self.after(0, self._append_gd_log, f"📦 [Tân binh] Kho có {avail}/{total_needed}, tự động chiêu mộ thêm {missing} tân binh...")
+                            b_succ, b_ret = prov.buy_recruits(city_id, missing)
+                            if b_succ:
+                                self.after(0, self._append_gd_log, f"   [Chiêu mộ] ✅ Đã chiêu mộ thành công {missing} tân binh!")
+                            else:
+                                err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
+                                self.after(0, self._append_gd_log, f"   [Chiêu mộ] ⚠️ Chiêu mộ thất bại ({err_desc})")
+
+                    fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                    for gid in sel_gens:
+                        g = city_gens.get(gid)
+                        gname = g.name if g else str(gid)
+                        cur_army = fresh_roster.army_of(gid)
+                        results = prov.adjust_troops(
+                            base_id=city_id,
+                            general_id=gid,
+                            current_army=cur_army,
+                            target_army=target_army,
+                            auto_recruit=True,
+                            on_log=lambda m: self.after(0, self._append_gd_log, m),
+                        )
+                        if results:
+                            for stype, diff, succ, ret_code in results:
+                                tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(stype, "Quân")
+                                if succ:
+                                    self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ✅ Thành công")
+                                else:
+                                    err_desc = ERROR_MESSAGES.get(ret_code, f"Mã lỗi: {ret_code}")
+                                    self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
+                        else:
+                            self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
+
+                # 3. Luyện sĩ khí
+                if auto_morale:
+                    fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                    for gid in sel_gens:
+                        g = city_gens.get(gid)
+                        gname = g.name if g else str(gid)
+                        cur_m = g.morale if g else 0
+                        if cur_m < min_morale:
+                            m_succ, m_ret = prov.adjust_morale(city_id, gid, cur_m, min_morale)
+                            if m_succ:
+                                self.after(0, self._append_gd_log, f"   [Sĩ khí] Tướng {gname}: ✅ Bắt đầu nâng sĩ khí (+10)!")
+                            else:
+                                err_desc = ERROR_MESSAGES.get(m_ret, f"Mã lỗi: {m_ret}")
+                                self.after(0, self._append_gd_log, f"   [Sĩ khí] Tướng {gname}: ❌ Nâng thất bại ({err_desc})")
+
+                self.after(0, self._append_gd_log, "🏁 Hoàn tất tiến trình biên chế Gọi Man!")
+                new_roster = fetch_roster(self.gateway)
+                self.roster = new_roster
+                self.after(0, self._on_gd_city_selected)
+            except Exception as e:
+                self.after(0, self._append_gd_log, f"❌ Lỗi ngoại lệ khi biên chế: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _run_goidan_once(self):
         task = self._create_goidan_task()
@@ -2057,8 +2273,43 @@ class Dashboard(tk.Tk):
         self.bm_interval_var = tk.StringVar(value="15")
         ttk.Entry(f_bm, textvariable=self.bm_interval_var, width=8).grid(row=4, column=1, sticky="w", padx=4, pady=4)
 
+        # Row 5: Định mức quân đội (Bộ MT, Kỵ MT, Cung MT) & Nút Biên chế ngay
+        tk.Label(f_bm, text="Bộ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=5, column=0, sticky="w", padx=4, pady=4)
+        self.bm_target_inf_var = tk.StringVar(value="0")
+        ttk.Entry(f_bm, textvariable=self.bm_target_inf_var, width=8).grid(row=5, column=1, sticky="w", padx=4, pady=4)
+
+        bm_army_f = tk.Frame(f_bm, bg=BG)
+        bm_army_f.grid(row=5, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        tk.Label(bm_army_f, text="Kỵ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
+        self.bm_target_cav_var = tk.StringVar(value="0")
+        ttk.Entry(bm_army_f, textvariable=self.bm_target_cav_var, width=6).pack(side="left", padx=(0, 6))
+
+        tk.Label(bm_army_f, text="Cung MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
+        self.bm_target_arc_var = tk.StringVar(value="0")
+        ttk.Entry(bm_army_f, textvariable=self.bm_target_arc_var, width=6).pack(side="left", padx=(0, 8))
+
+        self.bm_adjust_troops_btn = ttk.Button(bm_army_f, text="⚔️ Biên chế ngay", style="Action.TButton", command=self._manual_adjust_bm_troops)
+        self.bm_adjust_troops_btn.pack(side="left", padx=(0, 4))
+
+        # Row 6: Tự động bổ sung lính, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        self.bm_auto_recruit_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            f_bm,
+            text="Tự động bổ sung lính",
+            variable=self.bm_auto_recruit_var,
+            style="TCheckbutton",
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+
+        bm_mor_f = tk.Frame(f_bm, bg=BG)
+        bm_mor_f.grid(row=6, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        self.bm_auto_morale_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bm_mor_f, text="Tự động nâng sĩ khí", variable=self.bm_auto_morale_var, style="TCheckbutton").pack(side="left", padx=(0, 8))
+        tk.Label(bm_mor_f, text="Sĩ khí tối thiểu:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.bm_min_morale_var = tk.StringVar(value="95")
+        ttk.Entry(bm_mor_f, textvariable=self.bm_min_morale_var, width=5).pack(side="left")
+
         ctrl_frame = tk.Frame(f_bm, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=5, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=7, padx=16)
         self.bm_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Bình Man", style="Success.TButton", command=self._toggle_binhman)
         self.bm_start_btn.pack(side="top", pady=2)
         self.bm_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
@@ -2415,6 +2666,27 @@ class Dashboard(tk.Tk):
         scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
         ctx = TaskContext(self.gateway, scanner, locks, notify=lambda m: self.after(0, self._append_bm_log, m))
 
+        try:
+            target_inf = int(self.bm_target_inf_var.get() or "0")
+        except ValueError:
+            target_inf = 0
+        try:
+            target_cav = int(self.bm_target_cav_var.get() or "0")
+        except ValueError:
+            target_cav = 0
+        try:
+            target_arc = int(self.bm_target_arc_var.get() or "0")
+        except ValueError:
+            target_arc = 0
+        try:
+            min_morale = int(self.bm_min_morale_var.get() or "95")
+        except ValueError:
+            min_morale = 95
+
+        target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
+        auto_recruit = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
+        auto_morale = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
+
         return BinhMan(
             ctx=ctx,
             generals=sel_gens,
@@ -2427,7 +2699,163 @@ class Dashboard(tk.Tk):
             return_threshold=threshold,
             mode=mode,
             sleep_fn=time.sleep,
+            combat_config=self._build_combat_config(),
+            on_battle_found=lambda bid: self.after(
+                0, lambda b=bid: self.bt_id_var.set(str(b)) if hasattr(self, "bt_id_var") else None
+            ),
+            on_battle_state=lambda st: self.after(
+                0, lambda s=st: self._bt_render_state(s) if hasattr(self, "_bt_render_state") else None
+            ),
+            target_army=target_army,
+            auto_recruit=auto_recruit,
+            auto_morale=auto_morale,
+            min_morale=min_morale,
         )
+
+    def _manual_adjust_bm_troops(self):
+        mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
+        sel_idx = self.bm_city_combo.current()
+        if mode == 2:
+            bases = self.roster.cities if self.roster.cities else self.roster.bases
+        else:
+            bases = self.roster.camps if self.roster.camps else self.roster.bases
+
+        if sel_idx < 0 or sel_idx >= len(bases):
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ!")
+            return
+        base = bases[sel_idx]
+        sel_gens = [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"]
+        if not sel_gens:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 võ tướng!")
+            return
+
+        try:
+            target_inf = int(self.bm_target_inf_var.get() or "0")
+        except ValueError:
+            target_inf = 0
+        try:
+            target_cav = int(self.bm_target_cav_var.get() or "0")
+        except ValueError:
+            target_cav = 0
+        try:
+            target_arc = int(self.bm_target_arc_var.get() or "0")
+        except ValueError:
+            target_arc = 0
+        try:
+            min_morale = int(self.bm_min_morale_var.get() or "95")
+        except ValueError:
+            min_morale = 95
+
+        target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
+        auto_recruit = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
+        auto_morale = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
+
+        parent_idx = self.bm_parent_city_combo.current() if hasattr(self, "bm_parent_city_combo") else -1
+        parent_id = self.roster.cities[parent_idx].id if (parent_idx >= 0 and parent_idx < len(self.roster.cities)) else None
+
+        def _worker():
+            try:
+                self.after(0, self._append_bm_log, "⚔️ Bắt đầu tiến trình biên chế quân đội Bình Man...")
+                prov = ArmyProvisioner(self.gateway, sleep_fn=time.sleep)
+
+                if mode == 2:
+                    # Chế độ 2: Thành
+                    city_id = base.id
+                    for gid in sel_gens:
+                        prov.heal_general(city_id, gid)
+
+                    if target_army.total > 0 and auto_recruit:
+                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                        for gid in sel_gens:
+                            army = fresh_roster.army_of(gid)
+                            prov.adjust_troops(
+                                base_id=city_id,
+                                general_id=gid,
+                                current_army=army,
+                                target_army=target_army,
+                                auto_recruit=True,
+                                on_log=lambda m: self.after(0, self._append_bm_log, m),
+                            )
+
+                    if auto_morale:
+                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                        for gid in sel_gens:
+                            g = city_gens.get(gid)
+                            gname = g.name if g else str(gid)
+                            cur_m = g.morale if g else 0
+                            if cur_m < min_morale:
+                                m_succ, m_ret = prov.adjust_morale(city_id, gid, cur_m, min_morale)
+                                if m_succ:
+                                    self.after(0, self._append_bm_log, f"   [Sĩ khí] Tướng {gname}: ✅ Bắt đầu nâng sĩ khí (+10)!")
+
+                    self.after(0, self._append_bm_log, "🏁 Hoàn tất biên chế quân đội Bình Man tại Thành!")
+                    new_roster = fetch_roster(self.gateway)
+                    self.roster = new_roster
+                    self.after(0, self._on_bm_mode_changed)
+                else:
+                    # Chế độ 1: Doanh trại
+                    # 1. Trị thương
+                    for gid in sel_gens:
+                        prov.heal_general(base.id, gid)
+
+                    # 2. Bù từ quân đồn trú tại trại trước (auto_recruit=False)
+                    if target_army.total > 0:
+                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[base.id])
+                        for gid in sel_gens:
+                            army = fresh_roster.army_of(gid)
+                            prov.adjust_troops(
+                                base_id=base.id,
+                                general_id=gid,
+                                current_army=army,
+                                target_army=target_army,
+                                auto_recruit=False,
+                                on_log=lambda m: self.after(0, self._append_bm_log, m),
+                            )
+
+                        # Kiểm tra xem có tướng nào vẫn thiếu quân so với TargetArmy
+                        rechecked_roster = fetch_roster(self.gateway, only_base_ids=[base.id])
+                        deficient_gens = []
+                        for gid in sel_gens:
+                            a = rechecked_roster.army_of(gid)
+                            inf = a.infantry if a else 0
+                            cav = a.cavalry if a else 0
+                            arc = a.archers if a else 0
+                            if inf < target_army.infantry or cav < target_army.cavalry or arc < target_army.archers:
+                                deficient_gens.append(gid)
+
+                        if deficient_gens:
+                            if parent_id:
+                                self.after(0, self._append_bm_log, f"⛺ Quân đồn trú tại trại không đủ cho {len(deficient_gens)} tướng. Tự động điều về Thành mẹ {parent_id} bổ sung...")
+                                prov.provision_camp_generals_with_parent_city(
+                                    camp_id=base.id,
+                                    parent_city_id=parent_id,
+                                    general_ids=deficient_gens,
+                                    target_army=target_army,
+                                    min_morale=min_morale,
+                                    on_log=lambda m: self.after(0, self._append_bm_log, m),
+                                )
+                            else:
+                                self.after(0, self._append_bm_log, "⚠️ Quân đồn trú tại trại không đủ và chưa chọn Thành mẹ! Vui lòng chọn Thành mẹ hoặc Chuyển quân giới ra trại.")
+
+                    if auto_morale:
+                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[base.id])
+                        camp_gens = {g.id: g for g in fresh_roster.generals_of(base.id)}
+                        for gid in sel_gens:
+                            g = camp_gens.get(gid)
+                            gname = g.name if g else str(gid)
+                            cur_m = g.morale if g else 0
+                            if cur_m < min_morale:
+                                prov.adjust_morale(base.id, gid, cur_m, min_morale)
+
+                    self.after(0, self._append_bm_log, "🏁 Hoàn tất tiến trình biên chế Bình Man!")
+                    new_roster = fetch_roster(self.gateway)
+                    self.roster = new_roster
+                    self.after(0, self._on_bm_mode_changed)
+            except Exception as e:
+                self.after(0, self._append_bm_log, f"❌ Lỗi ngoại lệ khi biên chế: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _run_binhman_once(self):
         task = self._create_binhman_task()
@@ -5340,13 +5768,10 @@ class Dashboard(tk.Tk):
             self.bt_start_btn.configure(text="⏹️ Dừng Theo Dõi", style="Danger.TButton")
             threading.Thread(target=self._bt_auto_thread, daemon=True).start()
 
-    def _bt_auto_thread(self):
-        raw_id = self.bt_id_var.get().strip() if hasattr(self, "bt_id_var") else "0"
-        battle_id = int(raw_id) if raw_id.isdigit() else 0
-
+    def _build_combat_config(self) -> CombatConfig:
         action_mode = "adaptive"
         fixed_id = 13
-        combo_val = self.bt_action_mode_combo.get()
+        combo_val = self.bt_action_mode_combo.get() if hasattr(self, "bt_action_mode_combo") else ""
         if "13" in combo_val:
             fixed_id = 13
             action_mode = "fixed"
@@ -5360,35 +5785,38 @@ class Dashboard(tk.Tk):
             fixed_id = 1
             action_mode = "fixed"
 
-        s_val = self.bt_stratagem_combo.get()
-        s_id = int(s_val.split(".")[0]) if "." in s_val else 0
+        s_val = self.bt_stratagem_combo.get() if hasattr(self, "bt_stratagem_combo") else ""
+        s_id = int(s_val.split(".")[0]) if "." in s_val and s_val.split(".")[0].isdigit() else 0
 
-        cfg = CombatConfig(
-            auto_counter_formation=bool(self.bt_auto_counter_var.get()),
-            formation_window_seconds=int(self.bt_window_var.get()) if self.bt_window_var.get().isdigit() else 15,
+        win_raw = self.bt_window_var.get() if hasattr(self, "bt_window_var") else "15"
+        retreat_raw = self.bt_retreat_var.get() if hasattr(self, "bt_retreat_var") else "0"
+
+        return CombatConfig(
+            auto_counter_formation=bool(self.bt_auto_counter_var.get()) if hasattr(self, "bt_auto_counter_var") else True,
+            formation_window_seconds=int(win_raw) if win_raw.isdigit() else 15,
             attack_action_mode=action_mode,
             fixed_action_id=fixed_id,
-            skip_confused_enemy=bool(self.bt_skip_confused_var.get()),
-            leave_boss_last=bool(self.bt_leave_boss_var.get()),
-            auto_cleanse_confusion=bool(self.bt_cleanse_var.get()),
-            emergency_retreat_threshold=int(self.bt_retreat_var.get()) if self.bt_retreat_var.get().isdigit() else 0,
+            skip_confused_enemy=bool(self.bt_skip_confused_var.get()) if hasattr(self, "bt_skip_confused_var") else True,
+            leave_boss_last=bool(self.bt_leave_boss_var.get()) if hasattr(self, "bt_leave_boss_var") else True,
+            auto_cleanse_confusion=bool(self.bt_cleanse_var.get()) if hasattr(self, "bt_cleanse_var") else True,
+            emergency_retreat_threshold=int(retreat_raw) if retreat_raw.isdigit() else 0,
             offensive_stratagem_id=s_id,
         )
+
+    def _bt_auto_thread(self):
+        raw_id = self.bt_id_var.get().strip() if hasattr(self, "bt_id_var") else "0"
+        battle_id = int(raw_id) if raw_id.isdigit() else 0
+
+        cfg = self._build_combat_config()
 
         self._append_bt_log(f"🚀 Bắt đầu động cơ tác chiến tự động cho chiến trường ID {battle_id}...")
         engine = BattleController(self.gateway, config=cfg)
 
-        def _on_log(msg: str):
-            self._append_bt_log(msg)
-            if "Chiến trường - Hiệp" in msg:
-                st = engine.get_battle_info(battle_id)
-                if st:
-                    self.after(0, lambda s=st: self._bt_render_state(s))
-
         try:
             report = engine.track_battle(
                 battle_id=battle_id,
-                on_log=_on_log,
+                on_log=self._append_bt_log,
+                on_state=lambda st: self.after(0, lambda s=st: self._bt_render_state(s)),
                 stop_event=self._bt_stop_event,
                 config=cfg,
             )
@@ -5417,7 +5845,7 @@ class Dashboard(tk.Tk):
         target_troop = next((t for t in st.our_troops if t.position == pos_id), None)
         if not target_troop:
             return
-        ok = engine.change_formation(target_troop.general_id, fid)
+        ok = engine._change_formation_preserving_plan(target_troop, fid, battle_id=battle_id)
         if ok:
             self._append_bt_log(f"🔄 Đã gửi lệnh đổi tướng [{target_troop.general_name}] sang {FORMATION_NAMES.get(fid, fid)}")
             self._bt_load_battle()

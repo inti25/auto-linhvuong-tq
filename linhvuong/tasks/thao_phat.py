@@ -21,6 +21,7 @@ logger = logging.getLogger("linhvuong.tasks.thao_phat")
 from ..battle import BattleController
 from ..gateway import GatewayClient
 from ..roster import Army, fetch_roster
+from ..troops import ArmyProvisioner, ERROR_MESSAGES, TargetArmy
 from .base import TaskContext, attack
 
 # Bản đồ nhiệm vụ chuẩn từ ZMan.exe
@@ -36,53 +37,6 @@ THAOPHAT_MISSIONS = {
     28: {"name": "GM", "travel_time": 180, "max_generals": 5},
 }
 
-ERROR_MESSAGES = {
-    0: "Thành công",
-    1: "Thao tác thất bại, vui lòng thử lại sau",
-    6: "Quân số không đủ",
-    7: "Sỹ khí không đủ",
-    8: "Thảo phạt đang trong thời gian chờ",
-    20: "Tướng đang không ở trong thành (hoặc đang bận)",
-    32: "Tài nguyên không đủ",
-    33: "Đồng không đủ",
-    34: "Dân số rảnh rỗi không đủ",
-    35: "Thành không có tướng khả dụng",
-    40: "Tướng đang bận (không ở trong thành)",
-    53: "Tân binh không đủ để biên chế",
-    55: "Đang trong thời gian chờ an dân",
-    78: "Trong thời gian đóng băng không thể xuất binh",
-    79: "Tướng đang làm nhiệm vụ / đang đi thảo phạt chưa về",
-    10032: "Tướng không có trong thành",
-    10033: "Mưu sĩ không tồn tại trong thành",
-    10034: "Tướng không tồn tại trong thành",
-    10035: "Tướng đang bận",
-    10036: "Tướng bị thương",
-    10037: "Mưu sĩ đã được gán cho tướng khác",
-    10038: "Quân số không đủ",
-    10039: "Sỹ khí không đủ",
-    10040: "Thảo phạt đang trong thời gian chờ",
-}
-
-
-@dataclass
-class TargetArmy:
-    infantry: int = 0
-    cavalry: int = 0
-    archers: int = 0
-    bo_binh: Optional[int] = None
-    ky_binh: Optional[int] = None
-    cung_binh: Optional[int] = None
-
-    def __post_init__(self):
-        if self.bo_binh is not None and self.infantry == 0:
-            self.infantry = self.bo_binh
-        if self.ky_binh is not None and self.cavalry == 0:
-            self.cavalry = self.ky_binh
-        if self.cung_binh is not None and self.archers == 0:
-            self.archers = self.cung_binh
-
-
-
 @dataclass
 class ThaoPhatResult:
     success: bool
@@ -91,24 +45,17 @@ class ThaoPhatResult:
 
 
 class ThaoPhatExecutor:
-    def __init__(self, gateway: GatewayClient):
+    def __init__(self, gateway: GatewayClient, sleep_fn: Optional[Callable[[float], None]] = None):
         self.gateway = gateway
+        self.sleep_fn = sleep_fn or gateway._sleep
+        self.provisioner = ArmyProvisioner(gateway, sleep_fn=self.sleep_fn)
 
     def check_recruits(self, city_id: int) -> Optional[int]:
         """
         Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API Common.ashx?id=27.
         Trả về số tân binh (int), hoặc None nếu không lấy được.
         """
-        resp = self.gateway.call("Common.ashx", 27, {"_": ""}) or {}
-        if resp.get("ret") == 0:
-            for city_data in resp.get("list", []):
-                if isinstance(city_data, list) and len(city_data) > 2:
-                    try:
-                        if int(city_data[0]) == int(city_id):
-                            return int(city_data[2])
-                    except (ValueError, TypeError):
-                        continue
-        return None
+        return self.provisioner.check_recruits(city_id)
 
     def comfort_population(self, city_id: int, ltype: int = 4) -> tuple[bool, int]:
         """
@@ -116,14 +63,7 @@ class ThaoPhatExecutor:
         lType=4: Tăng nhân khẩu.
         Trả về (success, ret_code).
         """
-        payload = {
-            "lType": str(ltype),
-            "tid": str(city_id),
-            "_": "",
-        }
-        resp = self.gateway.call("OPT.ashx", 4, payload) or {}
-        ret = resp.get("ret", -1)
-        return ret == 0, ret
+        return self.provisioner.comfort_population(city_id, ltype=ltype)
 
     def buy_recruits(
         self,
@@ -137,24 +77,7 @@ class ThaoPhatExecutor:
             Tự động gọi an dân (lType=4) tăng nhân khẩu rồi thử lại.
         Trả về (success, ret_code).
         """
-        if amount <= 0:
-            return True, 0
-
-        payload = {
-            "lAmount": str(amount),
-            "tid": str(city_id),
-            "_": "",
-        }
-        resp = self.gateway.call("OPT.ashx", 41, payload) or {}
-        ret = resp.get("ret", -1)
-
-        if ret == 34 and auto_comfort:
-            self.comfort_population(city_id, ltype=4)
-            self.gateway._sleep(1.0)
-            resp = self.gateway.call("OPT.ashx", 41, payload) or {}
-            ret = resp.get("ret", -1)
-
-        return ret == 0, ret
+        return self.provisioner.buy_recruits(city_id, amount, auto_comfort=auto_comfort)
 
     def adjust_troops(
         self,
@@ -171,49 +94,14 @@ class ThaoPhatExecutor:
             Tự động chiêu mộ tân binh (API id=41) và thử lại biên chế.
         Trả về danh sách [(soldier_type, amount, success, ret_code)]
         """
-        current_inf = current_army.infantry if current_army else 0
-        current_cav = current_army.cavalry if current_army else 0
-        current_arc = current_army.archers if current_army else 0
-
-        adjustments = [
-            (1, target_army.infantry - current_inf),
-            (2, target_army.cavalry - current_cav),
-            (3, target_army.archers - current_arc),
-        ]
-
-        results = []
-        for soldier_type, diff in adjustments:
-            # Chỉ bổ sung quân nếu thiếu (diff > 0), không tháo quân nếu thừa
-            if diff <= 0:
-                continue
-            payload = {
-                "lGeneralID": str(general_id),
-                "lSoldierType": str(soldier_type),
-                "lAmount": str(diff),
-                "tid": str(city_id),
-                "_": "",
-            }
-            resp = self.gateway.call("OPT.ashx", 6, payload) or {}
-            ret = resp.get("ret", -1)
-
-            # Nếu tân binh không đủ để biên chế (ret=53) và bật tự động chiêu mộ
-            if ret == 53 and auto_recruit:
-                tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(soldier_type, "Quân")
-                if on_log:
-                    on_log(f"   [Chiêu mộ] Tân binh không đủ để bổ sung {tname} +{diff}, tự động chiêu mộ...")
-                buy_succ, buy_ret = self.buy_recruits(city_id, diff)
-                if buy_succ:
-                    if on_log:
-                        on_log(f"   [Chiêu mộ] ✅ Chiêu mộ thành công {diff} tân binh, tiếp tục biên chế...")
-                    resp = self.gateway.call("OPT.ashx", 6, payload) or {}
-                    ret = resp.get("ret", -1)
-                else:
-                    err_desc = ERROR_MESSAGES.get(buy_ret, f"Mã lỗi: {buy_ret}")
-                    if on_log:
-                        on_log(f"   [Chiêu mộ] ❌ Chiêu mộ thất bại ({err_desc})")
-
-            results.append((soldier_type, diff, ret == 0, ret))
-        return results
+        return self.provisioner.adjust_troops(
+            base_id=city_id,
+            general_id=general_id,
+            current_army=current_army,
+            target_army=target_army,
+            auto_recruit=auto_recruit,
+            on_log=on_log,
+        )
 
     def adjust_morale(
         self,
@@ -227,18 +115,12 @@ class ThaoPhatExecutor:
         Mỗi lần nâng sỹ khí tăng tối đa 10 điểm (nâng trên 10 điểm yêu cầu đạo cụ rượu).
         Trả về (success, ret_code)
         """
-        if current_morale >= min_morale or current_morale >= 100:
-            return True, 0
-        add_point = min(10, max(1, 100 - current_morale))
-        payload = {
-            "lAddPoint": str(add_point),
-            "lGeneralID": str(general_id),
-            "tid": str(city_id),
-            "_": "",
-        }
-        resp = self.gateway.call("OPT.ashx", 47, payload) or {}
-        ret = resp.get("ret", -1)
-        return ret == 0, ret
+        return self.provisioner.adjust_morale(
+            base_id=city_id,
+            general_id=general_id,
+            current_morale=current_morale,
+            min_morale=min_morale,
+        )
 
     def send_request(
         self,

@@ -173,6 +173,12 @@ class GoiDanProfile:
     target_type: int = 301  # 301: Vong Linh, 1..10: Uy Quốc..Hổ Báo Kỵ
     target_types: list[int] = field(default_factory=lambda: [301])
     generals: list[int] = field(default_factory=list)
+    target_infantry: str = "0"
+    target_cavalry: str = "0"
+    target_archers: str = "0"
+    auto_recruit: bool = True
+    auto_morale: bool = True
+    min_morale: str = "95"
 
     @classmethod
     def from_dict(cls, data: dict) -> "GoiDanProfile":
@@ -192,14 +198,24 @@ class GoiDanProfile:
         gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
 
         first_type = t_types[0] if t_types else 301
+        auto_rec = data.get("auto_recruit")
+        if auto_rec is None:
+            auto_rec = data.get("auto_recover", True)
+
         return cls(
             mode_idx=int(data.get("mode_idx", 0)),
             radius=str(data.get("radius", "5")),
-            auto_recover=bool(data.get("auto_recover", True)),
+            auto_recover=bool(data.get("auto_recover", auto_rec)),
             interval=str(data.get("interval", "10")),
             target_type=int(data.get("target_type", first_type)),
             target_types=t_types,
             generals=gens,
+            target_infantry=str(data.get("target_infantry", "0")),
+            target_cavalry=str(data.get("target_cavalry", "0")),
+            target_archers=str(data.get("target_archers", "0")),
+            auto_recruit=bool(auto_rec),
+            auto_morale=bool(data.get("auto_morale", True)),
+            min_morale=str(data.get("min_morale", "95")),
         )
 
 
@@ -220,6 +236,12 @@ class BinhManProfile:
     mantypes: str = "7,8,9,10"
     target_types: list[int] = field(default_factory=lambda: [7, 8, 9, 10])
     generals: list[int] = field(default_factory=list)
+    target_infantry: str = "0"
+    target_cavalry: str = "0"
+    target_archers: str = "0"
+    auto_recruit: bool = True
+    auto_morale: bool = True
+    min_morale: str = "95"
 
     @classmethod
     def from_dict(cls, data: dict) -> "BinhManProfile":
@@ -252,6 +274,12 @@ class BinhManProfile:
             mantypes=mantypes,
             target_types=t_types,
             generals=gens,
+            target_infantry=str(data.get("target_infantry", "0")),
+            target_cavalry=str(data.get("target_cavalry", "0")),
+            target_archers=str(data.get("target_archers", "0")),
+            auto_recruit=bool(data.get("auto_recruit", True)),
+            auto_morale=bool(data.get("auto_morale", True)),
+            min_morale=str(data.get("min_morale", "95")),
         )
 
 

@@ -136,8 +136,12 @@ _Avoid_: Nâng sĩ khí, tăng morale, buff sĩ khí
 Tính năng điều phối luyện sĩ khí đồng thời cho nhiều tướng có quân đội đồn trú tại các Thành và Doanh trại khác nhau bằng đa luồng worker song song, tự động lặp các nhịp 10 điểm cho đến khi chạm Sĩ Khí Mục Tiêu.
 _Avoid_: Buff morale hàng loạt, train sĩ khí đa thành, nâng sĩ khí hàng loạt
 
+**Định Mức Biên Chế**:
+Quân số mục tiêu theo từng binh chủng (Bộ binh, Kỵ binh, Cung thủ) áp dụng chung cho các Võ tướng xuất kích của từng phân hệ; hệ thống chỉ bù phần quân số thiếu hụt và giữ nguyên nếu tướng đang mang nhiều quân hơn định mức.
+_Avoid_: Mức lính mục tiêu, target army, biên chế cố định
+
 **Biên Chế Quân Tự Động**:
-Quy trình kiểm tra quân số tướng, tự động chiêu mộ tân binh và bổ sung binh lính theo loại quân chỉ định trước khi xuất kích.
+Quy trình chuẩn bị quân lực trước khi xuất kích (Thảo Phạt, Bình Man, Gọi Man): trị thương Võ tướng, chiêu mộ tân binh tại Thành hoặc lấy từ quân đồn trú sẵn có tại Doanh trại để bù theo Định Mức Biên Chế, sau đó Luyện Sĩ Khí đạt ngưỡng tối thiểu.
 _Avoid_: Bổ sung lính, refill lính, auto recruit
 
 **Quy Hoạch Đa Căn Cứ**:

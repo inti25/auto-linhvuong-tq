@@ -2040,6 +2040,122 @@ def test_dashboard_gen_count_label_displays_and_updates():
         dash.destroy()
 
 
+def test_dashboard_binhman_and_goidan_army_provisioning_controls_and_profile_sync(tmp_path):
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra tồn tại và giá trị mặc định (0 / 0 / 0) của Gọi Man
+        assert hasattr(dash, "gd_target_inf_var")
+        assert hasattr(dash, "gd_target_cav_var")
+        assert hasattr(dash, "gd_target_arc_var")
+        assert hasattr(dash, "gd_auto_recruit_var")
+        assert hasattr(dash, "gd_auto_morale_var")
+        assert hasattr(dash, "gd_min_morale_var")
+        assert hasattr(dash, "gd_adjust_troops_btn")
+
+        assert dash.gd_target_inf_var.get() == "0"
+        assert dash.gd_target_cav_var.get() == "0"
+        assert dash.gd_target_arc_var.get() == "0"
+        assert dash.gd_auto_recruit_var.get() is True
+        assert dash.gd_auto_morale_var.get() is True
+        assert dash.gd_min_morale_var.get() == "95"
+
+        # 2. Kiểm tra tồn tại và giá trị mặc định (0 / 0 / 0) của Bình Man
+        assert hasattr(dash, "bm_target_inf_var")
+        assert hasattr(dash, "bm_target_cav_var")
+        assert hasattr(dash, "bm_target_arc_var")
+        assert hasattr(dash, "bm_auto_recruit_var")
+        assert hasattr(dash, "bm_auto_morale_var")
+        assert hasattr(dash, "bm_min_morale_var")
+        assert hasattr(dash, "bm_adjust_troops_btn")
+
+        assert dash.bm_target_inf_var.get() == "0"
+        assert dash.bm_target_cav_var.get() == "0"
+        assert dash.bm_target_arc_var.get() == "0"
+        assert dash.bm_auto_recruit_var.get() is True
+        assert dash.bm_auto_morale_var.get() is True
+        assert dash.bm_min_morale_var.get() == "95"
+
+        # 3. Thay đổi giá trị và kiểm tra _collect_unified_profile
+        dash.gd_target_inf_var.set("2000")
+        dash.gd_target_cav_var.set("3000")
+        dash.gd_target_arc_var.set("1000")
+        dash.gd_auto_recruit_var.set(False)
+        dash.gd_auto_morale_var.set(True)
+        dash.gd_min_morale_var.set("90")
+
+        dash.bm_target_inf_var.set("4000")
+        dash.bm_target_cav_var.set("500")
+        dash.bm_target_arc_var.set("2500")
+        dash.bm_auto_recruit_var.set(True)
+        dash.bm_auto_morale_var.set(False)
+        dash.bm_min_morale_var.set("85")
+
+        prof = dash._collect_unified_profile()
+        assert prof["goi_dan"]["target_infantry"] == "2000"
+        assert prof["goi_dan"]["target_cavalry"] == "3000"
+        assert prof["goi_dan"]["target_archers"] == "1000"
+        assert prof["goi_dan"]["auto_recruit"] is False
+        assert prof["goi_dan"]["auto_morale"] is True
+        assert prof["goi_dan"]["min_morale"] == "90"
+
+        assert prof["binh_man"]["target_infantry"] == "4000"
+        assert prof["binh_man"]["target_cavalry"] == "500"
+        assert prof["binh_man"]["target_archers"] == "2500"
+        assert prof["binh_man"]["auto_recruit"] is True
+        assert prof["binh_man"]["auto_morale"] is False
+        assert prof["binh_man"]["min_morale"] == "85"
+
+        # 4. Lưu profile ra file và nạp lại qua _apply_unified_profile
+        prof_file = tmp_path / "army_profile.json"
+        dash._save_unified_profile(prof_file)
+
+        # Reset các biến trên GUI về 0
+        dash.gd_target_inf_var.set("0")
+        dash.bm_target_inf_var.set("0")
+
+        ok, msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+        assert dash.gd_target_inf_var.get() == "2000"
+        assert dash.gd_target_cav_var.get() == "3000"
+        assert dash.gd_target_arc_var.get() == "1000"
+        assert dash.gd_auto_recruit_var.get() is False
+        assert dash.gd_auto_morale_var.get() is True
+        assert dash.gd_min_morale_var.get() == "90"
+
+        assert dash.bm_target_inf_var.get() == "4000"
+        assert dash.bm_target_cav_var.get() == "500"
+        assert dash.bm_target_arc_var.get() == "2500"
+        assert dash.bm_auto_recruit_var.get() is True
+        assert dash.bm_auto_morale_var.get() is False
+        assert dash.bm_min_morale_var.get() == "85"
+
+        # 5. Kiểm tra _create_goidan_task và _create_binhman_task nhận TargetArmy
+        r = dummy_roster()
+        dash._loaded(r)
+        dash.gd_city_combo.current(0)
+        dash._on_gd_city_selected()
+        gd_task = dash._create_goidan_task()
+        assert gd_task is not None
+        assert gd_task.target_army is not None
+        assert gd_task.target_army.infantry == 2000
+        assert gd_task.target_army.cavalry == 3000
+        assert gd_task.auto_recruit is False
+        assert gd_task.min_morale == 90
+
+        dash.bm_city_combo.current(0)
+        dash._on_bm_city_selected()
+        bm_task = dash._create_binhman_task()
+        assert bm_task is not None
+        assert bm_task.target_army is not None
+        assert bm_task.target_army.infantry == 4000
+        assert bm_task.target_army.cavalry == 500
+        assert bm_task.auto_morale is False
+        assert bm_task.min_morale == 85
+    finally:
+        dash.destroy()
+
+
+
 
 
 

@@ -18,10 +18,21 @@ Reverse engineered chính xác từ ZMan.exe:
 
 import math
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
+from ..battle import BattleEngine, BattleReport, BattleState, CombatConfig
+from ..roster import Army, fetch_roster
 from ..scan import Target
-from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired, TaskContext, attack
+from ..troops import ArmyProvisioner, TargetArmy
+from .base import (
+    RET_CAPTCHA_REQUIRED,
+    RET_OK,
+    WORLD_ACTIVE_STATUSES,
+    CaptchaRequired,
+    TaskContext,
+    attack,
+    inspect_general_statuses,
+)
 from .di_trai import DiTrai, chebyshev_distance
 
 
@@ -61,6 +72,15 @@ class BinhMan:
         mode: Optional[int] = None,
         city_id: Optional[int] = None,
         check_idle: bool = True,
+        combat_config: Optional[CombatConfig] = None,
+        stop_event: Optional[Any] = None,
+        on_battle_found: Optional[Callable[[int], None]] = None,
+        on_battle_state: Optional[Callable[[BattleState], None]] = None,
+        target_army: Optional[TargetArmy] = None,
+        auto_recruit: bool = True,
+        auto_morale: bool = True,
+        min_morale: int = 95,
+        provisioner: Optional[ArmyProvisioner] = None,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -76,6 +96,15 @@ class BinhMan:
         self.sleep_fn = sleep_fn
         self.city_id = city_id or parent_city_id
         self.check_idle = check_idle
+        self.combat_config = combat_config
+        self.stop_event = stop_event
+        self.on_battle_found = on_battle_found
+        self.on_battle_state = on_battle_state
+        self.target_army = target_army
+        self.auto_recruit = auto_recruit
+        self.auto_morale = auto_morale
+        self.min_morale = min_morale
+        self.provisioner = provisioner or ArmyProvisioner(ctx.gateway, sleep_fn=sleep_fn)
 
         # Tự động suy ra mode nếu không chỉ định: có camp_id là Chế độ 1, không có là Chế độ 2
         if mode is not None:
@@ -83,30 +112,61 @@ class BinhMan:
         else:
             self.mode = MODE_CAMP if self.camp_id else MODE_CITY
 
-    def needs_return(self, remaining_percent: float) -> bool:
+    @property
+    def origin_id(self) -> int:
+        if self.mode == MODE_CAMP and self.camp_id:
+            return int(self.camp_id)
+        return int(self.city_id or 0)
+
+    def needs_return(self, remaining_percent: Optional[float] = None) -> bool:
         """Binh lực hoặc thể lực còn lại (%) dưới ngưỡng thì cần rút về thành."""
-        return remaining_percent < self.return_threshold
+        if remaining_percent is not None and remaining_percent < 100.0:
+            return remaining_percent < self.return_threshold
+
+        # Nếu có target_army hoặc return_threshold > 0: kiểm tra tỷ lệ thực tế
+        if self.return_threshold > 0 and self.origin_id:
+            try:
+                roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.origin_id])
+                gens = {g.id: g for g in roster.generals_of(self.origin_id)}
+                for gid in self.generals:
+                    g = gens.get(gid)
+                    if not g:
+                        continue
+                    stamina_pct = (g.stamina / g.stamina_max * 100.0) if g.stamina_max > 0 else 100.0
+                    if stamina_pct < self.return_threshold:
+                        return True
+                    if self.target_army and self.target_army.total > 0:
+                        army = roster.army_of(gid)
+                        army_tot = army.total if army else 0
+                        army_pct = (army_tot / self.target_army.total) * 100.0
+                        if army_pct < self.return_threshold:
+                            return True
+            except Exception:
+                pass
+
+        if remaining_percent is not None:
+            return remaining_percent < self.return_threshold
+        return False
 
     def check_generals_idle(self) -> bool:
         """Kiểm tra toàn bộ võ tướng có đang rảnh rỗi (status == 0) hay không."""
-        if not self.generals:
-            return True
-        resp = self.ctx.gateway.call("Common.ashx", 32, {"type": "2", "_": ""}) or {}
-        if not resp or "list" not in resp:
-            return True
+        statuses = inspect_general_statuses(self.ctx.gateway, self.generals)
+        return all(st == 0 for st in statuses.values())
 
-        for entry in resp.get("list", []):
-            g_entries = entry[4] if len(entry) > 4 else []
-            for g in g_entries:
-                try:
-                    gid = int(g[0])
-                except (ValueError, IndexError, TypeError):
-                    continue
-                if gid in self.generals:
-                    status = int(g[5]) if len(g) > 5 else 0
-                    if status != 0:
-                        return False
-        return True
+    def _track_active_battle(self) -> Optional[BattleReport]:
+        """Tự động dò chiến trường thế giới đang diễn ra (hoặc đang hành quân tới) và vào điều khiển."""
+        engine = BattleEngine(self.ctx.gateway, config=self.combat_config)
+        return engine.wait_and_track_world_battle(
+            generals=self.generals,
+            origin_id=self.origin_id,
+            on_log=self.ctx.notify,
+            on_boss_alert=self.ctx.notify,
+            on_battle_found=self.on_battle_found,
+            on_state=self.on_battle_state,
+            stop_event=self.stop_event,
+            sleep_fn=self.sleep_fn,
+            config=self.combat_config,
+        )
 
     def step_towards(self, target_x: int, target_y: int, step_limit: Optional[int] = None) -> tuple[int, int]:
         """Tính tọa độ bước dời kế tiếp hướng về mục tiêu, giới hạn bởi step_limit."""
@@ -174,30 +234,42 @@ class BinhMan:
                     "_": "",
                 },
             )
-            # 2. Trị thương (OPT.ashx?id=31)
-            self.ctx.gateway.call(
-                "OPT.ashx",
-                31,
-                {"lCityTentID": str(self.parent_city_id), "lGeneralID": str(gid), "_": ""},
-            )
-            # 3. Mua tân binh và bổ sung nếu cần (OPT.ashx?id=41, id=6)
-            self.ctx.gateway.call(
-                "OPT.ashx",
-                41,
-                {"lAmount": "1000", "tid": str(self.parent_city_id), "_": ""},
-            )
-            self.ctx.gateway.call(
-                "OPT.ashx",
-                6,
-                {
-                    "lGeneralID": str(gid),
-                    "lSoldierType": "1",
-                    "lAmount": "1000",
-                    "tid": str(self.parent_city_id),
-                    "_": "",
-                },
-            )
-            # 4. Tái phái tướng trở lại Trại (OPT.ashx?id=50)
+            # 2. Trị thương
+            self.provisioner.heal_general(self.parent_city_id, gid)
+
+            # 3. Bổ sung quân số theo TargetArmy hoặc cấu hình legacy
+            if self.target_army and self.target_army.total > 0 and self.auto_recruit:
+                self.provisioner.adjust_troops(
+                    base_id=self.parent_city_id,
+                    general_id=gid,
+                    current_army=None,
+                    target_army=self.target_army,
+                    auto_recruit=True,
+                    on_log=self.ctx.notify,
+                )
+            else:
+                self.ctx.gateway.call(
+                    "OPT.ashx",
+                    41,
+                    {"lAmount": "1000", "tid": str(self.parent_city_id), "_": ""},
+                )
+                self.ctx.gateway.call(
+                    "OPT.ashx",
+                    6,
+                    {
+                        "lGeneralID": str(gid),
+                        "lSoldierType": "1",
+                        "lAmount": "1000",
+                        "tid": str(self.parent_city_id),
+                        "_": "",
+                    },
+                )
+
+            # 4. Luyện sĩ khí nếu bật auto_morale
+            if self.auto_morale:
+                self.provisioner.adjust_morale(self.parent_city_id, gid, current_morale=0, min_morale=self.min_morale)
+
+            # 5. Tái phái tướng trở lại Trại (OPT.ashx?id=50)
             self.ctx.gateway.call(
                 "OPT.ashx",
                 50,
@@ -213,32 +285,42 @@ class BinhMan:
         """Trị thương và bổ sung quân tại chỗ trong Thành (Chế độ 2 - Xuất quân từ Thành)."""
         cid = self.city_id or self.parent_city_id or 0
         for gid in self.generals:
-            # 1. Trị thương (OPT.ashx?id=31)
-            self.ctx.gateway.call(
-                "OPT.ashx",
-                31,
-                {"lCityTentID": str(cid), "lGeneralID": str(gid), "_": ""},
-            )
-            # 2. Chiêu mộ tân binh nếu cần (OPT.ashx?id=41)
-            self.ctx.gateway.call(
-                "OPT.ashx",
-                41,
-                {"lAmount": "1000", "tid": str(cid), "_": ""},
-            )
-            # 3. Biên chế quân vào đạo (OPT.ashx?id=6)
-            self.ctx.gateway.call(
-                "OPT.ashx",
-                6,
-                {
-                    "lGeneralID": str(gid),
-                    "lSoldierType": "1",
-                    "lAmount": "1000",
-                    "tid": str(cid),
-                    "_": "",
-                },
-            )
+            # 1. Trị thương
+            self.provisioner.heal_general(cid, gid)
 
-    def run_once(self, remaining_percent: float = 100.0) -> str:
+            # 2. Bổ sung quân theo TargetArmy hoặc cấu hình legacy
+            if self.target_army and self.target_army.total > 0 and self.auto_recruit:
+                self.provisioner.adjust_troops(
+                    base_id=cid,
+                    general_id=gid,
+                    current_army=None,
+                    target_army=self.target_army,
+                    auto_recruit=True,
+                    on_log=self.ctx.notify,
+                )
+            else:
+                self.ctx.gateway.call(
+                    "OPT.ashx",
+                    41,
+                    {"lAmount": "1000", "tid": str(cid), "_": ""},
+                )
+                self.ctx.gateway.call(
+                    "OPT.ashx",
+                    6,
+                    {
+                        "lGeneralID": str(gid),
+                        "lSoldierType": "1",
+                        "lAmount": "1000",
+                        "tid": str(cid),
+                        "_": "",
+                    },
+                )
+
+            # 3. Luyện sĩ khí nếu bật auto_morale
+            if self.auto_morale:
+                self.provisioner.adjust_morale(cid, gid, current_morale=0, min_morale=self.min_morale)
+
+    def run_once(self, remaining_percent: Optional[float] = None) -> str:
         # 1. Kiểm tra ngưỡng an toàn trước tiên
         if self.needs_return(remaining_percent):
             if self.mode == MODE_CAMP:
@@ -250,12 +332,56 @@ class BinhMan:
 
         # 2. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle
         if self.check_idle and (self.city_id or self.camp_id):
-            if not self.check_generals_idle():
+            statuses = inspect_general_statuses(self.ctx.gateway, self.generals)
+            if any(st != 0 for st in statuses.values()):
+                if any(st in WORLD_ACTIVE_STATUSES for st in statuses.values()):
+                    report = self._track_active_battle()
+                    if report is not None:
+                        return "battle_tracked"
                 if self.ctx.notify:
                     self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
                 return "generals_busy"
 
-        # 3. Quét tìm Man mục tiêu
+        # 3. Chuẩn bị quân lực & Luyện sĩ khí trước khi xuất quân
+        if self.origin_id and self.target_army is not None and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale):
+            try:
+                roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.origin_id])
+                base_gens = {g.id: g for g in roster.generals_of(self.origin_id)}
+            except Exception:
+                roster = None
+                base_gens = {}
+
+            is_city = (self.mode == MODE_CITY or int(self.origin_id) > 0)
+            for gid in self.generals:
+                self.provisioner.heal_general(self.origin_id, gid)
+                if self.auto_recruit and self.target_army.total > 0 and roster:
+                    cur_army = roster.army_of(gid)
+                    # Thành thì cho phép mua tân binh (auto_recruit=True), Doanh trại chỉ rút đồn trú (auto_recruit=False)
+                    self.provisioner.adjust_troops(
+                        base_id=self.origin_id,
+                        general_id=gid,
+                        current_army=cur_army,
+                        target_army=self.target_army,
+                        auto_recruit=is_city,
+                        on_log=self.ctx.notify,
+                    )
+
+            if self.auto_morale and base_gens:
+                for gid in self.generals:
+                    g = base_gens.get(gid)
+                    cur_m = g.morale if g else 0
+                    up_t = g.upgrading_time if g else 0
+                    if cur_m < self.min_morale or up_t > 0:
+                        if up_t == 0:
+                            self.provisioner.adjust_morale(self.origin_id, gid, cur_m, self.min_morale)
+                            if self.ctx.notify:
+                                self.ctx.notify(f"⏳ Tướng {gid} (sĩ khí {cur_m}/{self.min_morale}) bắt đầu nâng sĩ khí...")
+                        else:
+                            if self.ctx.notify:
+                                self.ctx.notify(f"⏳ Tướng {gid} đang đếm ngược nâng sĩ khí ({up_t}s)...")
+                        return "waiting_morale"
+
+        # 4. Quét tìm Man mục tiêu
         target = self.ctx.scanner.find_nearest(
             *self.origin,
             self.radius,
@@ -272,6 +398,14 @@ class BinhMan:
                 return "relocate_failed"
 
         # 5. Xuất quân tấn công (hỗ trợ chia nhiều đợt nếu > 3 tướng)
-        result = attack(self.ctx, target, self.generals, sleep_fn=self.sleep_fn)
+        result = attack(
+            self.ctx,
+            target,
+            self.generals,
+            sleep_fn=self.sleep_fn,
+            origin_id=self.origin_id,
+        )
+        if result == "attacked" and (self.city_id or self.camp_id):
+            self._track_active_battle()
         return result
 

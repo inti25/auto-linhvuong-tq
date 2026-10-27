@@ -267,6 +267,7 @@ def build_task(
             ctx,
             man_types=types,
             mode=cfg.get("mode"),
+            city_id=cfg.get("city_id"),
             return_threshold=cfg.get("return_threshold", 0),
             skip_capital_radius=skip,
             parent_city_id=cfg.get("parent_city_id") or cfg.get("base_city_id"),

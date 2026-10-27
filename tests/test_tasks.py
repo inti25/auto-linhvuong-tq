@@ -291,3 +291,39 @@ def test_attack_batch_short_circuits_on_error():
     assert delays == []
 
 
+def test_attack_sends_official_dipan_barracks_parameters():
+    """OPT.ashx?id=53 trên server thật dipan.com bắt buộc đủ bộ tham số từ barracks.js (_fightGo),
+    nếu thiếu sẽ bị trả về ret=198599.
+    """
+    calls = []
+
+    def mock_call(endpoint, action_id, payload):
+        calls.append((endpoint, action_id, payload))
+        return {"ret": 0}
+
+    gw = GatewayClient(53, session=None)
+    gw.call = mock_call
+    locks = TargetLocks()
+    scanner = Scanner(gw, locks, delay=0.0)
+    ctx = TaskContext(gw, scanner, locks, notify=lambda m: None)
+    target = Target(x=268, y=251, target_id=1002, man_type=1)
+
+    res = attack(ctx, target, generals=[99057, 99056], origin_id=21936)
+    assert res == "attacked"
+    assert len(calls) == 1
+    payload = calls[0][2]
+    assert payload["lDestID"] == str(mid_from_coords(268, 251))
+    assert payload["lType"] == "1"
+    assert payload["lGeneralID1"] == "99057"
+    assert payload["lGeneralID2"] == "99056"
+    assert payload["lGeneralID3"] == "0"
+    assert payload["lBout"] == "-1"
+    assert payload["lTarget1GID"] == "0"
+    assert payload["lTarget2GID"] == "0"
+    assert payload["lTarget3GID"] == "0"
+    assert payload["lPlusFuncID"] == "0"
+    assert payload["lPlusDestID"] == "0"
+    assert payload["tid"] == "21936"
+
+
+

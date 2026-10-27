@@ -529,4 +529,136 @@ def test_troop_from_raw_common_monsters_not_identified_as_boss():
     assert not t3.is_boss, f"Ác bá (pos {t3.position}, flag {t3.flag}) không được là BOSS"
 
 
+def test_track_battle_switches_formation_immediately_inside_window_even_when_target_id_zero():
+    """Khi vào chiến trường ở cuối hiệp (bout_left <= window) và OPT.ashx?id=54 bị từ chối
+    (tướng không có mưu sĩ đi kèm -> target_id vẫn bằng 0), động cơ chiến trường vẫn phải
+    đổi sang trận hình khắc chế ngay trước khi sleep và bảo toàn tỷ lệ tác chiến từ Common.ashx?id=12.
+    """
+    mock_gateway = MagicMock()
+    mock_gateway.base_url = "http://sg53.dipan.com"
+    mock_gateway._headers.return_value = {}
+
+    events: list[tuple[str, object]] = []
+
+    def side_effect(url, data=None, headers=None, timeout=None):
+        resp = MagicMock()
+        resp.status_code = 200
+        payload = dict(data or {})
+        hdrs = dict(headers or {})
+        events.append((url, (payload, hdrs)))
+
+        if "OPT.ashx?id=24" in url:
+            b24_calls = sum(1 for u, _ in events if "OPT.ashx?id=24" in u)
+            if b24_calls == 1:
+                resp.json.return_value = {
+                    "ret": 0,
+                    "site": "倭国部队",
+                    "mapid": 1002,
+                    "bout": 1,
+                    "bout_left": 12,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "quilia", 738816, "TP1", 99056, "", 21936, 0, 1, 100, 0, 0, 8395, 8395, 0, 0, 0, 0, "", 1],
+                        [11, "", 0, "倭国部队", 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", 16],
+                    ],
+                }
+            else:
+                resp.json.return_value = {"ret": 13, "troops": []}
+            return resp
+
+        if "OPT.ashx?id=54" in url:
+            # Mô phỏng server từ chối đổi mục tiêu/chiêu thức -> our.target_id giữ nguyên 0
+            resp.json.return_value = {"ret": 40}
+            return resp
+
+        if "Common.ashx?id=12" in url:
+            resp.json.return_value = {
+                "ret": 0,
+                "battle_array": 1,
+                "ratio_attack": 80,
+                "ratio_PK": 10,
+                "ratio_stratagem": 10,
+                "withdraw_loss": 15,
+                "withdraw_morale": 20,
+            }
+            return resp
+
+        resp.json.return_value = {"ret": 0, "last_tips_id": 0, "tips": []}
+        return resp
+
+    mock_gateway.session.post.side_effect = side_effect
+
+    def record_sleep(sec: float) -> None:
+        events.append(("SLEEP", sec))
+
+    ctrl = BattleController(mock_gateway)
+    ctrl.track_battle(battle_id=1002, auto_counter=True, sleep_fn=record_sleep)
+
+    opt57_indices = [i for i, (u, _) in enumerate(events) if "OPT.ashx?id=57" in str(u)]
+    sleep_indices = [i for i, (u, _) in enumerate(events) if u == "SLEEP"]
+
+    assert len(opt57_indices) == 1, "Phải gửi OPT.ashx?id=57 đổi trận dù our.target_id == 0"
+    assert sleep_indices and opt57_indices[0] < sleep_indices[0], (
+        "Khi bout_left (12s) <= formation_window_seconds (15s), phải đổi trận ngay trước khi sleep"
+    )
+
+    opt57_payload, opt57_headers = events[opt57_indices[0]][1]
+    assert opt57_payload["lGeneralID"] == "99056"
+    assert opt57_payload["lBattleArray"] == "2"  # Câu hình (2) khắc Hạc dực (4)
+    assert opt57_payload["lRatioAttack"] == "80"
+    assert opt57_payload["lRatioPK"] == "10"
+    assert opt57_payload["lRatioStra"] == "10"
+    assert opt57_payload["lWithdrawLoss"] == "15"
+    assert opt57_payload["lWithdrawMorale"] == "20"
+    assert opt57_headers.get("Referer") == "http://sg53.dipan.com/battle/1002"
+
+
+def test_assign_combat_orders_falls_back_to_normal_attack_when_unit_skill_rejected():
+    """Tướng không có mưu sĩ đi kèm (tactician_id=0) khi gọi chiêu thức binh chủng (10..14)
+    bị server từ chối thì phải tự động lùi về Tấn công phổ thông (action=1) để khóa mục tiêu.
+    """
+    mock_gateway = MagicMock()
+    mock_gateway.base_url = "http://sg53.dipan.com"
+    mock_gateway._headers.return_value = {}
+
+    sent_actions: list[str] = []
+
+    def side_effect(url, data=None, headers=None, timeout=None):
+        resp = MagicMock()
+        resp.status_code = 200
+        act = str((data or {}).get("action", ""))
+        sent_actions.append(act)
+        if act == "10":
+            resp.json.return_value = {"ret": 40}  # Từ chối Đột kích vì không có mưu sĩ
+        else:
+            resp.json.return_value = {"ret": 0}
+        return resp
+
+    mock_gateway.session.post.side_effect = side_effect
+
+    our = BattleTroop(
+        position=1, player_name="quilia", user_id=738816, general_name="TP1",
+        general_id=99056, city_id=21936, formation_id=1, morale=100, soldiers=8395,
+        initial_soldiers=8395, flag=1, cavalry=8395, tactician_id=0,
+    )
+    enemy = BattleTroop(
+        position=11, player_name="", user_id=0, general_name="倭国部队",
+        general_id=0, city_id=0, formation_id=4, morale=100, soldiers=5000,
+        initial_soldiers=5000, flag=16,
+    )
+    state = BattleState(
+        ret=0, site="倭国部队", map_id=1002, bout=1, bout_left=30,
+        attack_total=1, defend_total=1, our_troops=[our], enemy_troops=[enemy],
+    )
+
+    engine = BattleController(mock_gateway)
+    engine.assign_combat_orders(state, battle_id=1002)
+
+    assert sent_actions == ["10", "1"]
+    assert our.target_id == 11
+    assert our.attack_action == 1
+
+
+
 

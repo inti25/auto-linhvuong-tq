@@ -17,12 +17,23 @@ Reverse engineered chính xác từ ZMan.exe:
 """
 
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
+from ..battle import BattleEngine, BattleReport, BattleState, CombatConfig
 from ..coords import coords_from_mid, mid_from_coords
 from ..locks import LockReason
+from ..roster import Army, fetch_roster
 from ..scan import Target
-from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired, TaskContext, attack
+from ..troops import ArmyProvisioner, TargetArmy
+from .base import (
+    RET_CAPTCHA_REQUIRED,
+    RET_OK,
+    WORLD_ACTIVE_STATUSES,
+    CaptchaRequired,
+    TaskContext,
+    attack,
+    inspect_general_statuses,
+)
 
 VONG_LINH = 301
 VONG_LINH_TALISMAN_ID = 268
@@ -45,6 +56,15 @@ class GoiDan:
         auto_recover: bool = False,
         sleep_fn: Callable[[float], None] = time.sleep,
         check_idle: bool = True,
+        combat_config: Optional[CombatConfig] = None,
+        stop_event: Optional[Any] = None,
+        on_battle_found: Optional[Callable[[int], None]] = None,
+        on_battle_state: Optional[Callable[[BattleState], None]] = None,
+        target_army: Optional[TargetArmy] = None,
+        auto_recruit: bool = True,
+        auto_morale: bool = True,
+        min_morale: int = 95,
+        provisioner: Optional[ArmyProvisioner] = None,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -63,6 +83,15 @@ class GoiDan:
         self.auto_recover = auto_recover
         self.sleep_fn = sleep_fn
         self.check_idle = check_idle
+        self.combat_config = combat_config
+        self.stop_event = stop_event
+        self.on_battle_found = on_battle_found
+        self.on_battle_state = on_battle_state
+        self.target_army = target_army
+        self.auto_recruit = auto_recruit
+        self.auto_morale = auto_morale
+        self.min_morale = min_morale
+        self.provisioner = provisioner or ArmyProvisioner(ctx.gateway, sleep_fn=sleep_fn)
 
         # Tự động suy ra mode từ target_type nếu mode chưa được chỉ định
         if mode:
@@ -164,15 +193,28 @@ class GoiDan:
 
     def recover_generals(self) -> None:
         """Thực hiện chu trình hồi phục sau chiến đấu: trị thương và bổ sung tân binh."""
+        roster = None
+        if self.target_army and self.target_army.total > 0 and self.auto_recruit and self.city_id:
+            try:
+                roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.city_id])
+            except Exception:
+                roster = None
+
         for gid in self.generals:
-            # 1. Trị thương (OPT.ashx?id=31)
-            self.ctx.gateway.call(
-                "OPT.ashx",
-                31,
-                {"lCityTentID": str(self.city_id), "lGeneralID": str(gid), "_": ""},
-            )
-            # 2. Bù lính nếu có cấu hình số lượng (OPT.ashx?id=6)
-            if self.refill_amount > 0:
+            # 1. Trị thương
+            self.provisioner.heal_general(self.city_id, gid)
+            # 2. Bù lính theo TargetArmy hoặc cấu hình legacy
+            if self.target_army and self.target_army.total > 0 and self.auto_recruit and self.city_id:
+                cur_army = roster.army_of(gid) if roster else None
+                self.provisioner.adjust_troops(
+                    base_id=self.city_id,
+                    general_id=gid,
+                    current_army=cur_army,
+                    target_army=self.target_army,
+                    auto_recruit=True,
+                    on_log=self.ctx.notify,
+                )
+            elif self.refill_amount > 0 and self.city_id:
                 self.ctx.gateway.call(
                     "OPT.ashx",
                     6,
@@ -187,34 +229,79 @@ class GoiDan:
 
     def check_generals_idle(self) -> bool:
         """Kiểm tra toàn bộ võ tướng có đang rảnh rỗi (status == 0) hay không."""
-        if not self.generals:
-            return True
-        resp = self.ctx.gateway.call("Common.ashx", 32, {"type": "2", "_": ""}) or {}
-        if not resp or "list" not in resp:
-            return True
+        statuses = inspect_general_statuses(self.ctx.gateway, self.generals)
+        return all(st == 0 for st in statuses.values())
 
-        for entry in resp.get("list", []):
-            g_entries = entry[4] if len(entry) > 4 else []
-            for g in g_entries:
-                try:
-                    gid = int(g[0])
-                except (ValueError, IndexError, TypeError):
-                    continue
-                if gid in self.generals:
-                    status = int(g[5]) if len(g) > 5 else 0
-                    if status != 0:
-                        return False
-        return True
+    def _track_active_battle(self) -> Optional[BattleReport]:
+        """Tự động dò chiến trường thế giới đang diễn ra (hoặc đang hành quân tới) và vào điều khiển."""
+        engine = BattleEngine(self.ctx.gateway, config=self.combat_config)
+        return engine.wait_and_track_world_battle(
+            generals=self.generals,
+            origin_id=int(self.city_id or 0),
+            on_log=self.ctx.notify,
+            on_boss_alert=self.ctx.notify,
+            on_battle_found=self.on_battle_found,
+            on_state=self.on_battle_state,
+            stop_event=self.stop_event,
+            sleep_fn=self.sleep_fn,
+            config=self.combat_config,
+        )
 
     def run_once(self) -> str:
         # 0. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle
         if self.check_idle and self.city_id:
-            if not self.check_generals_idle():
+            statuses = inspect_general_statuses(self.ctx.gateway, self.generals)
+            if any(st != 0 for st in statuses.values()):
+                if any(st in WORLD_ACTIVE_STATUSES for st in statuses.values()):
+                    report = self._track_active_battle()
+                    if report is not None:
+                        if self.auto_recover:
+                            self.recover_generals()
+                        return "battle_tracked"
                 if self.ctx.notify:
                     self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
                 return "generals_busy"
 
-        # 1. Tìm mục tiêu có sẵn quanh thành trước
+        # 1. Chuẩn bị quân lực & Luyện sĩ khí trước khi gọi/xuất quân
+        if self.city_id and self.target_army is not None and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale):
+            try:
+                roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.city_id])
+                city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
+            except Exception:
+                roster = None
+                city_gens = {}
+
+            # Trị thương & Bổ sung lính
+            for gid in self.generals:
+                self.provisioner.heal_general(self.city_id, gid)
+                if self.auto_recruit and self.target_army and self.target_army.total > 0 and roster:
+                    cur_army = roster.army_of(gid)
+                    self.provisioner.adjust_troops(
+                        base_id=self.city_id,
+                        general_id=gid,
+                        current_army=cur_army,
+                        target_army=self.target_army,
+                        auto_recruit=True,
+                        on_log=self.ctx.notify,
+                    )
+
+            # Luyện sĩ khí và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu
+            if self.auto_morale and city_gens:
+                for gid in self.generals:
+                    g = city_gens.get(gid)
+                    cur_m = g.morale if g else 0
+                    up_t = g.upgrading_time if g else 0
+                    if cur_m < self.min_morale or up_t > 0:
+                        if up_t == 0:
+                            self.provisioner.adjust_morale(self.city_id, gid, cur_m, self.min_morale)
+                            if self.ctx.notify:
+                                self.ctx.notify(f"⏳ Tướng {gid} (sĩ khí {cur_m}/{self.min_morale}) bắt đầu nâng sĩ khí...")
+                        else:
+                            if self.ctx.notify:
+                                self.ctx.notify(f"⏳ Tướng {gid} đang đếm ngược nâng sĩ khí ({up_t}s)...")
+                        return "waiting_morale"
+
+        # 2. Tìm mục tiêu có sẵn quanh thành trước
         target = self.ctx.scanner.find_nearest(
             *self.origin,
             self.radius,
@@ -222,7 +309,15 @@ class GoiDan:
             skip_capital_radius=self.skip_capital_radius,
         )
         if target is not None:
-            result = attack(self.ctx, target, self.generals, sleep_fn=self.sleep_fn)
+            result = attack(
+                self.ctx,
+                target,
+                self.generals,
+                sleep_fn=self.sleep_fn,
+                origin_id=int(self.city_id or 0),
+            )
+            if result == "attacked" and self.city_id:
+                self._track_active_battle()
             if self.auto_recover:
                 self.recover_generals()
             return result
@@ -235,7 +330,15 @@ class GoiDan:
             return "no_target"
 
         self.ctx.locks.try_lock(target.target_id, LockReason.CLAIMED)
-        result = attack(self.ctx, target, self.generals, sleep_fn=self.sleep_fn)
+        result = attack(
+            self.ctx,
+            target,
+            self.generals,
+            sleep_fn=self.sleep_fn,
+            origin_id=int(self.city_id or 0),
+        )
+        if result == "attacked" and self.city_id:
+            self._track_active_battle()
         if self.auto_recover:
             self.recover_generals()
         return "called_and_attacked" if result == "attacked" else result

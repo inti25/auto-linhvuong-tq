@@ -172,3 +172,60 @@ def test_profile_binh_man_and_goi_man_generals_roundtrip():
     assert d["goi_dan"]["generals"] == [417506, 417513]
 
 
+def test_profile_binh_man_and_goi_man_army_provisioning_fields():
+    # Kiểm tra giá trị mặc định chuẩn: 0 / 0 / 0
+    prof = Profile()
+    assert prof.binh_man.target_infantry == "0"
+    assert prof.binh_man.target_cavalry == "0"
+    assert prof.binh_man.target_archers == "0"
+    assert prof.binh_man.auto_recruit is True
+    assert prof.binh_man.auto_morale is True
+    assert prof.binh_man.min_morale == "95"
+
+    assert prof.goi_dan.target_infantry == "0"
+    assert prof.goi_dan.target_cavalry == "0"
+    assert prof.goi_dan.target_archers == "0"
+    assert prof.goi_dan.auto_recruit is True
+    assert prof.goi_dan.auto_morale is True
+    assert prof.goi_dan.min_morale == "95"
+
+    # Kiểm tra roundtrip to_dict và from_dict
+    data = {
+        "binh_man": {
+            "target_infantry": "3000",
+            "target_cavalry": "1000",
+            "target_archers": "500",
+            "auto_recruit": False,
+            "auto_morale": True,
+            "min_morale": "90",
+        },
+        "goi_dan": {
+            "target_infantry": "1500",
+            "target_cavalry": "2500",
+            "target_archers": "0",
+            "auto_recruit": True,
+            "auto_morale": False,
+            "min_morale": "85",
+        },
+    }
+    loaded = Profile.from_dict(data)
+    assert loaded.binh_man.target_infantry == "3000"
+    assert loaded.binh_man.target_cavalry == "1000"
+    assert loaded.binh_man.target_archers == "500"
+    assert loaded.binh_man.auto_recruit is False
+    assert loaded.binh_man.auto_morale is True
+    assert loaded.binh_man.min_morale == "90"
+
+    assert loaded.goi_dan.target_infantry == "1500"
+    assert loaded.goi_dan.target_cavalry == "2500"
+    assert loaded.goi_dan.target_archers == "0"
+    assert loaded.goi_dan.auto_recruit is True
+    assert loaded.goi_dan.auto_morale is False
+    assert loaded.goi_dan.min_morale == "85"
+
+    d = loaded.to_dict()
+    assert d["binh_man"]["target_infantry"] == "3000"
+    assert d["goi_dan"]["target_cavalry"] == "2500"
+
+
+

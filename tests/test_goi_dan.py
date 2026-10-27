@@ -298,3 +298,161 @@ def test_goi_dan_attacks_multiple_batches_for_more_than_3_generals():
     assert any("Đợt 2/2" in a for a in alerts)
 
 
+def test_goi_dan_enters_active_battle_and_switches_formation_when_generals_in_battlefield():
+    """Khi tướng Gọi Man đã ở trong chiến trường (status=16), GoiDan.run_once() tự động vào
+    chiến trường điều khiển và đổi trận hình khắc chế thay vì bỏ qua với generals_busy.
+    """
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [123, "City", 2, 2, [[50, "Gen 50", "", 2, 0, 16]]],
+                ],
+            },
+            "Common.ashx?id=40": {
+                "ret": 0,
+                "come": [],
+                "goto": [],
+                "battle": [[1002, 888, "亡灵部队", 2, 2, 8]],
+            },
+            "Common.ashx?id=4": {
+                "ret": 0,
+                "battle_id": 777001,
+                "next_left": 8,
+                "atside": 1,
+                "city": [888, "亡灵部队", 2, 2],
+                "myside": [[1, 123, "City", 2, 2, 100, "Player", "Gen 50", 0, 5000, 0, 0, 100, 50]],
+                "enemy": [],
+            },
+            "OPT.ashx?id=24": [
+                {
+                    "ret": 0,
+                    "site": "亡灵部队",
+                    "mapid": 888,
+                    "bout": 1,
+                    "bout_left": 8,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "Player", 100, "Gen 50", 50, "", 123, 0, 1, 100, 0, 0, 5000, 5000, 0, 0, 0, 0, "", 1],
+                        [11, "", 0, "亡灵部队", 0, "", 0, 0, 4, 100, 0, 3000, 0, 3000, 0, 0, 0, 0, "", 16],
+                    ],
+                },
+                {"ret": 13, "troops": []},
+            ],
+            "OPT.ashx?id=54": {"ret": 0},
+            "OPT.ashx?id=57": {"ret": 0},
+            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
+        }
+    )
+    server.cookies = {"uid": "100"}
+    ctx, _ = ctx_for(server)
+    task = GoiDan(
+        ctx,
+        generals=[50],
+        origin=(2, 2),
+        radius=5,
+        city_id=123,
+        check_idle=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "battle_tracked"
+    opt57_calls = [d for k, d in server.calls if k == "OPT.ashx?id=57"]
+    assert len(opt57_calls) == 1
+    assert opt57_calls[0]["lGeneralID"] == "50"
+    assert opt57_calls[0]["lBattleArray"] == "2"
+
+
+def test_goi_dan_target_army_provisioning_and_morale_waiting():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(2, 2)
+    # Giả lập:
+    # 1. Common.ashx?id=32: Tướng rảnh rỗi (status=0), morale=80, upgrading_time=0
+    # 2. Common.ashx?id=76: Tướng có 200 lính bộ
+    # 3. Server handlers cho OPT.ashx:
+    #    id=31: trị thương
+    #    id=41: chiêu mộ tân binh
+    #    id=6: biên chế lính
+    #    id=47: nâng sĩ khí
+    #    id=69: gọi quái
+    #    id=53: xuất quân
+    c32 = {
+        "ret": 0,
+        "list": [
+            [123, "City", 0, 0, [[50, "Gen 50", "", 2, 0, 0, 4, 80, 240, 240, 0]]]
+        ],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [
+            [123, "City", [[50, "Gen 50", 0, "", 0, 200, 0, 0, 0, 80, 0, 200]]]
+        ],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": []}},
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "Common.ashx?id=27": {"ret": 0, "list": [[123, "City", 10000]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(2, 2, 999, VONG_LINH)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(
+        ctx,
+        generals=[50],
+        origin=(2, 2),
+        radius=5,
+        city_id=123,
+        target_army=TargetArmy(infantry=1000, cavalry=0, archers=0),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    # Lần chạy 1: Morale hiện tại là 80 < 95 -> Bổ sung quân (+800), kích hoạt nâng sĩ khí (+10), trả về waiting_morale và CHƯA xuất quân
+    out1 = task.run_once()
+    assert out1 == "waiting_morale"
+
+    # Kiểm tra đã trị thương (id=31)
+    assert any(k == "OPT.ashx?id=31" for k, d in server.calls)
+    # Kiểm tra đã biên chế +800 lính bộ (id=6)
+    opt6_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(opt6_calls) == 1
+    assert opt6_calls[0]["lAmount"] == "800"
+    assert opt6_calls[0]["lSoldierType"] == "1"
+
+    # Kiểm tra đã kích hoạt nâng sĩ khí (id=47)
+    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_calls) == 1
+    assert opt47_calls[0]["lAddPoint"] == "10"
+
+    # Không được gọi quái (id=69) hay xuất quân (id=53) khi sĩ khí chưa hoàn tất
+    assert not any(k == "OPT.ashx?id=69" for k, d in server.calls)
+    assert not any(k == "OPT.ashx?id=53" for k, d in server.calls)
+
+    # Giả lập lần chạy 2: Morale đã đạt 95 và upgrading_time = 0
+    server.calls.clear()
+    c32["list"][0][4][0][7] = 95
+    c76["list"][0][2][0][5] = 1000  # Đã đủ 1000 lính bộ
+    c76["list"][0][2][0][9] = 95    # Morale đạt 95
+
+    out2 = task.run_once()
+    assert out2 in ("attacked", "called_and_attacked")
+    assert any(k == "OPT.ashx?id=69" for k, d in server.calls)
+    assert any(k == "OPT.ashx?id=53" for k, d in server.calls)
+
+
+
+

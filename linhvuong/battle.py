@@ -9,8 +9,10 @@ Hỗ trợ:
 - Ghi nhật ký chiến trường từng hiệp và tổng kết chiến quả sau trận đấu.
 """
 
+import json
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -330,6 +332,48 @@ class BattleEngine:
     def __init__(self, gateway: Any, config: Optional[CombatConfig] = None):
         self.gateway = gateway
         self.config = config or CombatConfig()
+        self._general_plan_cache: dict[int, dict[str, int]] = {}
+
+    @staticmethod
+    def _parse_resp_json(resp: Any) -> Optional[dict]:
+        try:
+            data = resp.json()
+            return data if isinstance(data, dict) else None
+        except ValueError:
+            raw = getattr(resp, "text", "") or ""
+            m = re.search(r"ret:\s*(\d+)", raw)
+            if m and "{" in raw and raw.count(":") == 1:
+                return {"ret": int(m.group(1))}
+            try:
+                fixed = re.sub(r'([{,])\s*([a-zA-Z_]\w*)\s*:', r'\1"\2":', raw)
+                parsed = json.loads(fixed)
+                return parsed if isinstance(parsed, dict) else None
+            except Exception:
+                return None
+
+    def _post_gateway(
+        self,
+        endpoint: str,
+        api_id: int,
+        payload: dict[str, Any],
+        referer_path: str = "/",
+    ) -> Optional[dict]:
+        headers = self.gateway._headers()
+        headers["Referer"] = f"{self.gateway.base_url}{referer_path}"
+        headers["Origin"] = self.gateway.base_url
+        url = f"{self.gateway.base_url}/GateWay/{endpoint}?id={api_id}"
+        max_retries = getattr(self.gateway, "max_retries", 3)
+        timeout = getattr(self.gateway, "timeout", 15)
+        for _ in range(max_retries):
+            try:
+                resp = self.gateway.session.post(
+                    url, data=payload, headers=headers, timeout=timeout
+                )
+                if resp.status_code == 200:
+                    return self._parse_resp_json(resp)
+            except Exception:
+                pass
+        return None
 
     @property
     def current_user_id(self) -> int:
@@ -465,6 +509,18 @@ class BattleEngine:
                 pass
         return False
 
+    def get_general_military_info(self, general_id: int, city_id: int = 0) -> Optional[dict]:
+        """Lấy thông tin cấu hình tác chiến của võ tướng từ Common.ashx?id=12."""
+        data = self._post_gateway(
+            "Common.ashx",
+            12,
+            {"lGeneralID": str(general_id), "lCityID": str(city_id), "_": ""},
+            referer_path="/",
+        )
+        if data and data.get("ret") == 0:
+            return data
+        return None
+
     def change_formation(
         self,
         general_id: int,
@@ -474,6 +530,7 @@ class BattleEngine:
         ratio_stra: int = 0,
         withdraw_loss: int = 0,
         withdraw_morale: int = 0,
+        battle_id: int = 0,
     ) -> bool:
         """Đổi trận hình tướng ta qua OPT.ashx?id=57 (bảo toàn tỷ lệ gốc)."""
         if ratio_attack + ratio_pk + ratio_stra != 100:
@@ -491,21 +548,62 @@ class BattleEngine:
             "lWithdrawMorale": str(withdraw_morale),
             "_": "",
         }
-        headers = self.gateway._headers()
-        headers["Referer"] = f"{self.gateway.base_url}/battle/0"
-        headers["Origin"] = self.gateway.base_url
-        url = f"{self.gateway.base_url}/GateWay/OPT.ashx?id=57"
-        max_retries = getattr(self.gateway, "max_retries", 3)
-        timeout = getattr(self.gateway, "timeout", 15)
-        for _ in range(max_retries):
-            try:
-                resp = self.gateway.session.post(url, data=payload, headers=headers, timeout=timeout)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("ret") == 0
-            except Exception:
-                pass
-        return False
+        data = self._post_gateway(
+            "OPT.ashx",
+            57,
+            payload,
+            referer_path=f"/battle/{battle_id}",
+        )
+        return bool(data and data.get("ret") == 0)
+
+    def _change_formation_preserving_plan(
+        self,
+        our: BattleTroop,
+        formation_id: int,
+        battle_id: int = 0,
+    ) -> bool:
+        """Đọc và cache tỷ lệ tác chiến gốc (Common.ashx?id=12) trước khi gửi OPT.ashx?id=57."""
+        if our.general_id <= 0:
+            return False
+
+        plan = self._general_plan_cache.get(our.general_id)
+        if plan is None:
+            info = self.get_general_military_info(our.general_id, city_id=our.city_id or 0)
+            if info:
+                r_att = int(info.get("ratio_attack", 100) or 0)
+                r_pk = int(info.get("ratio_PK", 0) or 0)
+                r_stra = int(info.get("ratio_stratagem", 0) or 0)
+                w_loss = int(info.get("withdraw_loss", 0) or 0)
+                w_morale = int(info.get("withdraw_morale", 0) or 0)
+                if r_att + r_pk + r_stra != 100:
+                    r_att, r_pk, r_stra = 100, 0, 0
+                plan = {
+                    "ratio_attack": r_att,
+                    "ratio_pk": r_pk,
+                    "ratio_stra": r_stra,
+                    "withdraw_loss": w_loss,
+                    "withdraw_morale": w_morale,
+                }
+            else:
+                plan = {
+                    "ratio_attack": 100,
+                    "ratio_pk": 0,
+                    "ratio_stra": 0,
+                    "withdraw_loss": 0,
+                    "withdraw_morale": 0,
+                }
+            self._general_plan_cache[our.general_id] = plan
+
+        return self.change_formation(
+            our.general_id,
+            formation_id,
+            ratio_attack=plan["ratio_attack"],
+            ratio_pk=plan["ratio_pk"],
+            ratio_stra=plan["ratio_stra"],
+            withdraw_loss=plan["withdraw_loss"],
+            withdraw_morale=plan["withdraw_morale"],
+            battle_id=battle_id,
+        )
 
     def pick_counter_formation(
         self,
@@ -609,6 +707,11 @@ class BattleEngine:
             # Gửi lệnh nếu mục tiêu hoặc phương thức thay đổi
             if our.target_id != target.position or our.attack_action != action:
                 ok = self.change_target_attack(battle_id, our.position, target.position, action=action)
+                if not ok and action >= 10:
+                    # Tướng không có mưu sĩ đi kèm (tactician_id == 0) không dùng được chiêu 10..14 -> lùi về Tấn công phổ thông (1)
+                    if self.change_target_attack(battle_id, our.position, target.position, action=1):
+                        ok = True
+                        action = 1
                 if ok:
                     our.target_id = target.position
                     our.attack_action = action
@@ -675,6 +778,177 @@ class BattleEngine:
 
         return logs
 
+    @staticmethod
+    def _safe_int(val: Any, default: int = 0) -> int:
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    def inspect_world_movements(
+        self,
+        generals: list[int],
+        origin_id: int = 0,
+    ) -> tuple[Optional[int], Optional[BattleState], Optional[int]]:
+        """Kiểm tra quân đội thế giới qua Common.ashx?id=40 và Common.ashx?id=4.
+
+        Trả về bộ 3:
+        - active_battle_id: Mã chiến trường thực tế (nếu tướng trong danh sách đang giao chiến).
+        - prefetched_state: Trạng thái chiến trường lấy sẵn (nếu đã gọi OPT.ashx?id=24 để xác minh).
+        - outbound_march_left: Số giây còn lại của đạo quân đang hành quân tới mục tiêu (goto), hoặc None.
+        """
+        wanted = {int(g) for g in generals if g}
+        tids_to_check = [origin_id or 0]
+        if origin_id and origin_id != 0:
+            tids_to_check.append(0)
+
+        march_left: Optional[int] = None
+
+        for idx, tid in enumerate(tids_to_check):
+            resp40 = self._post_gateway(
+                "Common.ashx", 40, {"tid": str(tid), "_": ""}, referer_path="/"
+            )
+            if not resp40 or resp40.get("ret", 0) != 0:
+                continue
+            if idx == 0 and "battle" not in resp40 and "goto" not in resp40:
+                # Server mock đơn giản không mô phỏng Common.ashx?id=40 -> thoát ngay
+                return None, None, None
+
+            battles = resp40.get("battle") or []
+            for b in battles:
+                if not isinstance(b, list) or not b:
+                    continue
+                raw_bid = self._safe_int(b[0])
+                if raw_bid <= 0:
+                    continue
+
+                c4 = self._post_gateway(
+                    "Common.ashx", 4, {"lBattleID": str(raw_bid), "_": ""}, referer_path="/"
+                )
+                real_bid = (
+                    self._safe_int(c4.get("battle_id"), raw_bid)
+                    if isinstance(c4, dict) and c4.get("battle_id")
+                    else raw_bid
+                )
+
+                myside = c4.get("myside") if isinstance(c4, dict) else None
+                if isinstance(myside, list) and myside:
+                    matched = False
+                    for row in myside:
+                        if not isinstance(row, list):
+                            continue
+                        row_gids: set[int] = set()
+                        if len(row) > 13:
+                            gid13 = self._safe_int(row[13])
+                            if gid13 > 0:
+                                row_gids.add(gid13)
+                        if len(row) > 4 and isinstance(row[1], str):
+                            gid4 = self._safe_int(row[4])
+                            if gid4 > 0:
+                                row_gids.add(gid4)
+                        if not wanted or (row_gids & wanted):
+                            matched = True
+                            break
+                    if matched:
+                        return real_bid, None, None
+                    continue
+
+                # Fallback khi myside trống: kiểm tra trực tiếp OPT.ashx?id=24
+                st = self.get_battle_info(real_bid)
+                if st and not st.is_ended:
+                    if not wanted or any(t.general_id in wanted for t in st.our_troops):
+                        return real_bid, st, None
+
+            gotos = resp40.get("goto") or []
+            for p in gotos:
+                if not isinstance(p, list) or len(p) < 8:
+                    continue
+                # Trong barracks_ot.js: p[1] == 12 là đạo quân đang triệu hồi quay về (召回)
+                if len(p) >= 14 and self._safe_int(p[1]) == 12:
+                    continue
+
+                gen_pairs = None
+                if len(p) > 8 and isinstance(p[8], list):
+                    gen_pairs = p[8]
+                elif isinstance(p[7], list):
+                    gen_pairs = p[7]
+
+                march_gids: set[int] = set()
+                if gen_pairs is not None:
+                    for pair in gen_pairs:
+                        if isinstance(pair, list) and pair:
+                            gid = self._safe_int(pair[0])
+                            if gid > 0:
+                                march_gids.add(gid)
+
+                if not wanted or (march_gids & wanted):
+                    rem = (
+                        self._safe_int(p[13], 3)
+                        if len(p) > 13
+                        else (self._safe_int(p[12], 3) if len(p) > 12 else 3)
+                    )
+                    rem = max(0, rem)
+                    if march_left is None or rem < march_left:
+                        march_left = rem
+
+            if march_left is not None:
+                break
+
+        return None, None, march_left
+
+    def wait_and_track_world_battle(
+        self,
+        generals: list[int],
+        origin_id: int = 0,
+        on_log: Optional[Callable[[str], None]] = None,
+        on_boss_alert: Optional[Callable[[str], None]] = None,
+        on_battle_found: Optional[Callable[[int], None]] = None,
+        on_state: Optional[Callable[[BattleState], None]] = None,
+        stop_event: Optional[Any] = None,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        config: Optional[CombatConfig] = None,
+        max_wait_polls: int = 120,
+    ) -> Optional[BattleReport]:
+        """Tự động phát hiện chiến trường thế giới (hoặc chờ hành quân goto tới nơi) rồi vào điều khiển."""
+        cfg = config or self.config
+        polls = 0
+        while polls < max_wait_polls:
+            if stop_event and stop_event.is_set():
+                return None
+
+            bid, prefetched_state, march_left = self.inspect_world_movements(
+                generals=generals, origin_id=origin_id
+            )
+            if bid is not None:
+                if on_battle_found:
+                    on_battle_found(bid)
+                if on_log:
+                    on_log(
+                        f"⚔️ Phát hiện chiến trường đang diễn ra (ID: {bid}), tự động vào chỉ huy & chỉnh trận hình..."
+                    )
+                return self.track_battle(
+                    battle_id=bid,
+                    on_log=on_log,
+                    on_boss_alert=on_boss_alert,
+                    auto_counter=cfg.auto_counter_formation,
+                    leave_boss_last=cfg.leave_boss_last,
+                    stop_event=stop_event,
+                    sleep_fn=sleep_fn,
+                    config=cfg,
+                    initial_state=prefetched_state,
+                    on_state=on_state,
+                )
+
+            if march_left is not None:
+                if on_log:
+                    on_log(f"⏳ Quân ta đang hành quân tới mục tiêu (còn ~{march_left}s)...")
+                sleep_fn(min(5.0, max(1.0, float(march_left))))
+                polls += 1
+                continue
+
+            return None
+        return None
+
     def track_battle(
         self,
         battle_id: int = 0,
@@ -686,6 +960,8 @@ class BattleEngine:
         stop_event: Optional[Any] = None,
         sleep_fn: Callable[[float], None] = time.sleep,
         config: Optional[CombatConfig] = None,
+        initial_state: Optional[BattleState] = None,
+        on_state: Optional[Callable[[BattleState], None]] = None,
     ) -> BattleReport:
         """Theo dõi diễn biến trận đánh qua từng hiệp và chỉ huy tác chiến toàn diện."""
         cfg = config or self.config
@@ -723,13 +999,18 @@ class BattleEngine:
             logs.append(msg)
 
         bouts_attempted = 0
+        pending_initial_state = initial_state
         while bouts_attempted < max_bouts:
             if stop_event and stop_event.is_set():
                 break
 
-            state = self.get_battle_info(battle_id)
+            if pending_initial_state is not None:
+                state = pending_initial_state
+                pending_initial_state = None
+            else:
+                state = self.get_battle_info(battle_id)
             if state is None or state.is_ended:
-                if bouts_count == 0 and initial_check_attempts < 10:
+                if battle_id == 0 and bouts_count == 0 and initial_check_attempts < 10:
                     campaign = self.get_campaign_status()
                     if campaign:
                         c_status = campaign.get("status", 0)
@@ -745,7 +1026,7 @@ class BattleEngine:
                             sleep_fn(2.0)
                             initial_check_attempts += 1
                             continue
-                elif bouts_count > 0 and transition_retries < 3:
+                elif battle_id == 0 and bouts_count > 0 and transition_retries < 3:
                     campaign = self.get_campaign_status()
                     if campaign and campaign.get("status") == 2:
                         transition_retries += 1
@@ -809,6 +1090,9 @@ class BattleEngine:
                 # 2. Phân bổ mục tiêu và phương án tấn công (OPT 54)
                 self.assign_combat_orders(state, battle_id, cfg, _log)
 
+                if on_state:
+                    on_state(state)
+
                 # 3. Ghi log diễn biến hiệp đấu
                 enemy_killed = max(0, initial_enemy_soldiers - curr_enemy_soldiers)
                 gens_detail = []
@@ -859,6 +1143,35 @@ class BattleEngine:
             wait_time = state.bout_left if (state.bout_left and 0 < state.bout_left < 180) else 5
             _log(f"      ⏳ Đếm ngược kết thúc hiệp {state.bout}: còn ~{wait_time}s...")
 
+            def _try_switch_formations(curr_left: int) -> None:
+                nonlocal formation_switched_this_bout
+                if (
+                    cfg.auto_counter_formation
+                    and not formation_switched_this_bout
+                    and curr_left <= cfg.formation_window_seconds
+                ):
+                    formation_switched_this_bout = True
+                    for our in state.our_troops:
+                        opt_fid, desc = self.pick_counter_formation(
+                            our, state.enemy_troops, leave_boss_last=cfg.leave_boss_last
+                        )
+                        if opt_fid and opt_fid != our.formation_id:
+                            ok = self._change_formation_preserving_plan(
+                                our, opt_fid, battle_id=battle_id
+                            )
+                            if ok:
+                                _log(
+                                    f"   🔄 [Cửa sổ cuối hiệp {state.bout} (~{curr_left}s)] Tướng [{our.general_name}] "
+                                    f"đổi sang {FORMATION_NAMES.get(opt_fid, opt_fid)} ({desc})"
+                                )
+                                our.formation_id = opt_fid
+                                last_formation_map[our.general_id] = opt_fid
+                    if on_state:
+                        on_state(state)
+
+            # Nếu vào trận khi thời gian còn lại đã nằm trong cửa sổ cuối hiệp -> đổi trận ngay lập tức
+            _try_switch_formations(wait_time)
+
             # Vòng lặp đếm ngược và kiểm tra Cửa Sổ Đổi Trận Cuối Hiệp
             elapsed = 0.0
             step = 3.0 if wait_time > 10 else 1.5
@@ -872,25 +1185,7 @@ class BattleEngine:
                 curr_left = max(0, wait_time - int(elapsed))
 
                 # Đổi trận hình ở cửa sổ cuối hiệp (bout_left <= formation_window_seconds)
-                if (
-                    cfg.auto_counter_formation
-                    and not formation_switched_this_bout
-                    and curr_left <= cfg.formation_window_seconds
-                ):
-                    formation_switched_this_bout = True
-                    for our in state.our_troops:
-                        opt_fid, desc = self.pick_counter_formation(
-                            our, state.enemy_troops, leave_boss_last=cfg.leave_boss_last
-                        )
-                        if opt_fid and opt_fid != our.formation_id and our.target_id != 0:
-                            ok = self.change_formation(our.general_id, opt_fid)
-                            if ok:
-                                _log(
-                                    f"   🔄 [Cửa sổ cuối hiệp {state.bout} (~{curr_left}s)] Tướng [{our.general_name}] "
-                                    f"đổi sang {FORMATION_NAMES.get(opt_fid, opt_fid)} ({desc})"
-                                )
-                                our.formation_id = opt_fid
-                                last_formation_map[our.general_id] = opt_fid
+                _try_switch_formations(curr_left)
 
                 if elapsed < wait_time:
                     last_tips_id, new_tips = self.get_battle_tips(battle_id, last_tips_id)

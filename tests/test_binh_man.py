@@ -359,3 +359,291 @@ def test_binh_man_mode_camp_idle_check_blocks_when_generals_busy():
     assert any("đang bận" in a for a in alerts)
 
 
+def test_binh_man_enters_active_battle_and_switches_formation_when_generals_already_in_battlefield():
+    """Khi quân đội đã vào chiến trường (status=16 trong Common.ashx?id=32 và có battle trong Common.ashx?id=40),
+    BinhMan.run_once() không được bỏ qua với generals_busy mà phải tự vào chiến trường chỉnh trận hình khắc chế.
+    """
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [21936, "ThienCo", 280, 237, [[99057, "TP3", "", 2, 0, 16, 31, 100, 363, 410]]],
+                ],
+            },
+            "Common.ashx?id=40": {
+                "ret": 0,
+                "come": [],
+                "goto": [],
+                "battle": [[1002, 1002, "倭国部队", 268, 251, 5]],
+            },
+            "Common.ashx?id=4": {
+                "ret": 0,
+                "battle_id": 39304906,
+                "next_left": 12,
+                "atside": 1,
+                "city": [1002, "倭国部队", 268, 251],
+                "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TP3", 0, 8919, 0, 0, 100, 99057]],
+                "enemy": [],
+            },
+            "OPT.ashx?id=24": [
+                {
+                    "ret": 0,
+                    "site": "倭国部队",
+                    "mapid": 1002,
+                    "bout": 1,
+                    "bout_left": 12,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "quilia", 738816, "TP3", 99057, "", 21936, 0, 1, 100, 0, 0, 8919, 8919, 0, 0, 0, 98396, "QV42", 1],
+                        [11, "", 0, "倭国部队", 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", 16],
+                    ],
+                },
+                {"ret": 13, "troops": []},
+            ],
+            "Common.ashx?id=12": {
+                "ret": 0,
+                "battle_array": 1,
+                "ratio_attack": 100,
+                "ratio_PK": 0,
+                "ratio_stratagem": 0,
+                "withdraw_loss": 0,
+                "withdraw_morale": 0,
+            },
+            "OPT.ashx?id=54": {"ret": 0},
+            "OPT.ashx?id=57": {"ret": 0},
+            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
+        }
+    )
+    server.cookies = {"uid": "738816"}
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[99057],
+        origin=(280, 237),
+        radius=20,
+        man_types=[1],
+        mode=2,
+        city_id=21936,
+        check_idle=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "battle_tracked"
+
+    opt24_calls = [d for k, d in server.calls if k == "OPT.ashx?id=24"]
+    opt57_calls = [d for k, d in server.calls if k == "OPT.ashx?id=57"]
+    assert len(opt24_calls) >= 1
+    assert opt24_calls[0]["battleid"] == "39304906"
+    assert len(opt57_calls) == 1
+    assert opt57_calls[0]["lGeneralID"] == "99057"
+    assert opt57_calls[0]["lBattleArray"] == "2"  # Câu hình (2) khắc Hạc dực (4)
+
+
+def test_binh_man_waits_for_march_and_tracks_battle_after_attack():
+    """Sau khi xuất quân tấn công (OPT.ashx?id=53), BinhMan phải chờ đạo quân hành quân (goto)
+    tới nơi rồi tự động vào chiến trường điều khiển và đổi trận hình khắc chế.
+    """
+    target_mid = mid_from_coords(281, 237)
+    server = FakeServer(
+        map_views={
+            mid_from_coords(280, 237): {"npc_tent": [man(281, 237, 555, 1)]},
+            target_mid: {"npc_tent": [man(281, 237, 555, 1)]},
+        },
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [21936, "ThienCo", 280, 237, [[99057, "TP3", "", 2, 0, 0, 31, 100, 363, 410]]],
+                ],
+            },
+            "OPT.ashx?id=53": {"ret": 0},
+            "Common.ashx?id=40": [
+                {
+                    "ret": 0,
+                    "come": [],
+                    "goto": [
+                        [7001, 1, 0, "", 555, "倭国部队", 281, 237, [[99057, "TP3"]], 0, 8919, 0, 0, 3, 1]
+                    ],
+                    "battle": [],
+                },
+                {
+                    "ret": 0,
+                    "come": [],
+                    "goto": [],
+                    "battle": [[1002, 555, "倭国部队", 281, 237, 10]],
+                },
+            ],
+            "Common.ashx?id=4": {
+                "ret": 0,
+                "battle_id": 39304999,
+                "next_left": 10,
+                "atside": 1,
+                "city": [555, "倭国部队", 281, 237],
+                "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TP3", 0, 8919, 0, 0, 100, 99057]],
+                "enemy": [],
+            },
+            "OPT.ashx?id=24": [
+                {
+                    "ret": 0,
+                    "site": "倭国部队",
+                    "mapid": 555,
+                    "bout": 1,
+                    "bout_left": 10,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "quilia", 738816, "TP3", 99057, "", 21936, 0, 1, 100, 0, 0, 8919, 8919, 0, 0, 0, 0, "", 1],
+                        [11, "", 0, "倭国部队", 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", 16],
+                    ],
+                },
+                {"ret": 13, "troops": []},
+            ],
+            "OPT.ashx?id=54": {"ret": 0},
+            "OPT.ashx?id=57": {"ret": 0},
+            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
+        },
+    )
+    server.cookies = {"uid": "738816"}
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[99057],
+        origin=(280, 237),
+        radius=5,
+        man_types=[1],
+        mode=2,
+        city_id=21936,
+        check_idle=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "attacked"
+
+    opt57_calls = [d for k, d in server.calls if k == "OPT.ashx?id=57"]
+    assert len(opt57_calls) == 1
+    assert opt57_calls[0]["lGeneralID"] == "99057"
+    assert opt57_calls[0]["lBattleArray"] == "2"
+
+
+def test_binh_man_mode_city_provisioning_and_morale_waiting():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    c32 = {
+        "ret": 0,
+        "list": [
+            [1001, "Thành", 0, 0, [[10, "Triệu Vân", "", 2, 0, 0, 4, 85, 240, 240, 0]]]
+        ],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [
+            [1001, "Thành", [[10, "Triệu Vân", 0, "", 0, 100, 0, 0, 0, 85, 0, 100]]]
+        ],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
+        handlers={
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "Common.ashx?id=27": {"ret": 0, "list": [[1001, "Thành", 5000]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(infantry=1000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "waiting_morale"
+    # Đã trị thương
+    assert any(k == "OPT.ashx?id=31" for k, d in server.calls)
+    # Đã bổ sung +900 lính bộ tại thành
+    opt6_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(opt6_calls) == 1
+    assert opt6_calls[0]["lAmount"] == "900"
+    assert opt6_calls[0]["tid"] == "1001"
+    # Đã kích hoạt nâng sĩ khí
+    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_calls) == 1
+    assert opt47_calls[0]["lAddPoint"] == "10"
+    # Chưa xuất quân khi chưa đủ sĩ khí
+    assert not any(k == "OPT.ashx?id=53" for k, d in server.calls)
+
+
+def test_binh_man_mode_camp_provisioning_from_garrison_only():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(20, 20)
+    c32 = {
+        "ret": 0,
+        "list": [
+            [-501, "Trại", 0, 0, [[20, "Quan Vũ", "", 2, 0, 0, 4, 100, 240, 240, 0]]]
+        ],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [
+            [-501, "Trại", [[20, "Quan Vũ", 0, "", 0, 500, 0, 0, 0, 100, 0, 500]]]
+        ],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(20, 21, 505, 8)]}},
+        handlers={
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[20],
+        origin=(20, 20),
+        radius=5,
+        man_types=[8],
+        mode=1,
+        camp_id=-501,
+        parent_city_id=1001,
+        target_army=TargetArmy(infantry=1000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "attacked"
+    # Gọi OPT.ashx?id=6 với tid=-501 (Trại)
+    opt6_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(opt6_calls) == 1
+    assert opt6_calls[0]["tid"] == "-501"
+    assert opt6_calls[0]["lAmount"] == "500"
+    # KHÔNG gọi chiêu mộ (id=41) tại Trại
+    assert not any(k == "OPT.ashx?id=41" for k, d in server.calls)
+
+
+
+
