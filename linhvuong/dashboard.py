@@ -5465,7 +5465,6 @@ class Dashboard(tk.Tk):
                 results = trainer.train_multiple_generals(
                     targets=targets,
                     target_morale=target_morale,
-                    max_workers=3,
                     stop_event=self._morale_stop_event,
                     on_progress=_on_prog,
                     on_step=_on_step,

@@ -250,6 +250,9 @@ def test_train_multiple_generals_tick_scheduler_with_server_upgrading_time():
                 [gid, f"Gen_{gid}", 0, "", 0, 100, 0, 0, 0, d["morale"], d["up_t"], 500]
                 for gid, d in city_data.items()
             ]
+            # Giả lập thời gian đếm ngược máy chủ trôi qua mỗi lần query
+            for d in city_data.values():
+                d["up_t"] = max(0, d["up_t"] - 1)
             return MagicMock(status_code=200, json=lambda: {
                 "ret": 0,
                 "list": [[21936, "Thành", generals_list]]
