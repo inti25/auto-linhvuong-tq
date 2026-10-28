@@ -77,11 +77,13 @@ class MoraleTrainer:
         target_morale: int = 100,
         stop_event: Optional[threading.Event] = None,
         on_step: Optional[Callable[..., None]] = None,
+        travel_time: float = 0.0,
     ) -> tuple[bool, int, str]:
         """Luyện sĩ khí cho một tướng đơn lẻ từ current_morale đến target_morale.
 
         - Tự động kiểm tra thời gian nâng dở dang (upgrading_time > 0) từ máy chủ.
         - Nếu tướng đang luyện dở, chờ cho đợt luyện hoàn tất rồi cập nhật sĩ khí thực tế.
+        - Hỗ trợ travel_time > 0 cho cơ chế Xuất Quân Sớm Theo Sĩ Khí (Early March).
         - Gọi API OPT.ashx?id=47 từng nhịp tối đa 10 điểm cho đến khi chạm đích target_morale.
         - Trả về (success, final_morale, message).
         """
@@ -101,8 +103,17 @@ class MoraleTrainer:
             if cur_m is not None:
                 curr = cur_m
 
-            if curr >= target_morale:
-                msg = f"Sĩ khí đã đạt mục tiêu ({curr}/{target_morale})"
+            is_ready_by_travel = (
+                travel_time > 0
+                and (curr + 10 >= target_morale or curr >= target_morale)
+                and 0 < up_t <= travel_time
+            )
+
+            if curr >= target_morale or is_ready_by_travel:
+                if curr >= target_morale:
+                    msg = f"Sĩ khí đã đạt mục tiêu ({curr}/{target_morale})"
+                else:
+                    msg = f"Sĩ khí đang nâng ({curr} -> {min(100, curr + 10)}) còn {up_t}s <= hành quân {travel_time}s (Sẵn sàng xuất quân)"
                 _dispatch_on_step(on_step, curr, target_morale, f"✅ {msg}")
                 return True, curr, msg
 
@@ -146,6 +157,22 @@ class MoraleTrainer:
                             curr,
                             f"Đã luyện thành công sau {step_count} đợt ({curr}/{target_morale})",
                         )
+                else:
+                    cur_m, up_t = self.get_general_morale_info(city_id, general_id)
+                    if cur_m is not None:
+                        curr = cur_m
+                    is_ready_by_travel = (
+                        travel_time > 0
+                        and (curr + 10 >= target_morale or curr >= target_morale)
+                        and 0 < up_t <= travel_time
+                    )
+                    if curr >= target_morale or is_ready_by_travel:
+                        if curr >= target_morale:
+                            msg = f"Đã luyện thành công sau {step_count} đợt ({curr}/{target_morale})"
+                        else:
+                            msg = f"Sĩ khí đang nâng ({curr} -> {min(100, curr + 10)}) còn {up_t}s <= hành quân {travel_time}s (Sẵn sàng xuất quân)"
+                        _dispatch_on_step(on_step, curr, target_morale, f"✅ {msg}")
+                        return True, curr, msg
 
                 # Chờ 1 nhịp ngắn để máy chủ cập nhật timer
                 wait_step = min(1.0, self.poll_interval)
@@ -161,6 +188,8 @@ class MoraleTrainer:
                     continue
 
                 err_msg = f"Máy chủ phản hồi mã lỗi {ret}"
+                if ret == 15:
+                    err_msg = "Máy chủ phản hồi mã lỗi 15: Thiếu tài nguyên (lúa/vàng)"
                 logger.warning(
                     f"Luyện sĩ khí tướng {general_id} tại thành {city_id} thất bại: {err_msg}"
                 )
@@ -175,6 +204,7 @@ class MoraleTrainer:
         stop_event: Optional[threading.Event] = None,
         on_progress: Optional[Callable[[int, int, dict], None]] = None,
         on_step: Optional[Callable[[int, int, int, str], None]] = None,
+        travel_time: float = 0.0,
     ) -> dict[int, dict]:
         """Luyện sĩ khí đồng loạt cho danh sách tướng đa thành theo cơ chế Tick Scheduler (Phương án 2).
 
@@ -184,6 +214,7 @@ class MoraleTrainer:
         targets: list các dict: {"city_id": int, "general_id": int, "current_morale": int, "name": str}
         on_step: callback nhận (general_id, current_morale, target_morale, step_msg)
         on_progress: callback nhận (completed_count, total, result_dict)
+        travel_time: thời gian hành quân dự kiến (s). Nếu > 0, hỗ trợ xuất quân sớm khi đợt nâng cuối cùng có up_t <= travel_time.
         Trả về kết quả theo từng tướng: {general_id: {"general_id": int, "city_id": int, "name": str, "success": bool, "final_morale": int, "message": str}}
         """
         if not targets:
@@ -260,8 +291,22 @@ class MoraleTrainer:
 
         # Kiểm tra trước những tướng đã đạt mục tiêu ngay từ đầu
         for gid, st in list(states.items()):
-            if st["current_morale"] >= target_morale:
-                _finish_general(gid, True, st["current_morale"], f"Sĩ khí đã đạt mục tiêu ({st['current_morale']}/{target_morale})")
+            cur_val = st["current_morale"]
+            up_val = st["upgrading_time"]
+            is_ready_by_travel = (
+                travel_time > 0
+                and (cur_val + 10 >= target_morale or cur_val >= target_morale)
+                and 0 < up_val <= travel_time
+            )
+            if cur_val >= target_morale:
+                _finish_general(gid, True, cur_val, f"Sĩ khí đã đạt mục tiêu ({cur_val}/{target_morale})")
+            elif is_ready_by_travel:
+                _finish_general(
+                    gid,
+                    True,
+                    cur_val,
+                    f"Sĩ khí đang nâng ({cur_val} -> {min(100, cur_val + 10)}) còn {up_val}s <= hành quân {travel_time}s (Sẵn sàng xuất quân)",
+                )
 
         last_city_sync: dict[int, float] = {}
 
@@ -313,9 +358,23 @@ class MoraleTrainer:
                 curr = st["current_morale"]
                 up_t = st["upgrading_time"]
 
-                # 2.1. Đã đạt mục tiêu
-                if curr >= target_morale:
-                    _finish_general(gid, True, curr, f"Sĩ khí đã đạt mục tiêu ({curr}/{target_morale})")
+                is_ready_by_travel = (
+                    travel_time > 0
+                    and (curr + 10 >= target_morale or curr >= target_morale)
+                    and 0 < up_t <= travel_time
+                )
+
+                # 2.1. Đã đạt mục tiêu hoặc đủ điều kiện xuất quân sớm
+                if curr >= target_morale or is_ready_by_travel:
+                    if curr >= target_morale:
+                        _finish_general(gid, True, curr, f"Sĩ khí đã đạt mục tiêu ({curr}/{target_morale})")
+                    else:
+                        _finish_general(
+                            gid,
+                            True,
+                            curr,
+                            f"Sĩ khí đang nâng ({curr} -> {min(100, curr + 10)}) còn {up_t}s <= hành quân {travel_time}s (Sẵn sàng xuất quân)",
+                        )
                     continue
 
                 # 2.2. Đang trong thời gian đếm ngược (upgrading_time > 0)
@@ -365,13 +424,17 @@ class MoraleTrainer:
                     else:
                         st["current_morale"] = cur_m
                         st["upgrading_time"] = new_up_t or 1
-                        if cur_m >= target_morale:
-                            _finish_general(
-                                gid,
-                                True,
-                                cur_m,
-                                f"Đã luyện thành công sau {st['step_count']} đợt ({cur_m}/{target_morale})",
-                            )
+                        is_ready_by_travel = (
+                            travel_time > 0
+                            and (cur_m + 10 >= target_morale or cur_m >= target_morale)
+                            and 0 < st["upgrading_time"] <= travel_time
+                        )
+                        if cur_m >= target_morale or is_ready_by_travel:
+                            if cur_m >= target_morale:
+                                msg = f"Đã luyện thành công sau {st['step_count']} đợt ({cur_m}/{target_morale})"
+                            else:
+                                msg = f"Sĩ khí đang nâng ({cur_m} -> {min(100, cur_m + 10)}) còn {st['upgrading_time']}s <= hành quân {travel_time}s (Sẵn sàng xuất quân)"
+                            _finish_general(gid, True, cur_m, msg)
                         else:
                             if on_step:
                                 _dispatch_on_step(
@@ -380,11 +443,12 @@ class MoraleTrainer:
                                     target_morale,
                                     f"Đã kích hoạt +{add_point} ({cur_m}/{target_morale})",
                                 )
-                    # Giãn cách vi mô 50ms giữa các request kích hoạt để bảo vệ socket
+                    # Giãn cách vi mô ngẫu nhiên 100ms - 250ms giữa các request kích hoạt để bảo vệ socket và chống bot
                     if self.poll_interval >= 0.1:
-                        time.sleep(0.05)
+                        import random
+                        time.sleep(random.uniform(0.1, 0.25))
                 else:
-                    # Kiểm tra lại xem có phải do đang bận luyện dở chưa kịp cập nhật
+                    # Kiểm tra lại xem có phải do đang bận luyện dở chưa kịp cập nhật (tránh mã lỗi 40 lặp lại)
                     cur_m, new_up_t = self.get_general_morale_info(cid, gid)
                     if new_up_t > 0:
                         st["upgrading_time"] = new_up_t
@@ -393,6 +457,8 @@ class MoraleTrainer:
                         continue
 
                     err_msg = f"Máy chủ phản hồi mã lỗi {ret}"
+                    if ret == 15:
+                        err_msg = "Máy chủ phản hồi mã lỗi 15: Thiếu tài nguyên (lúa/vàng)"
                     logger.warning(
                         f"Luyện sĩ khí tướng {gid} tại thành {cid} thất bại: {err_msg}"
                     )
@@ -429,3 +495,85 @@ class MoraleTrainer:
             }
             for gid, s in states.items()
         }
+
+    def adjust_squad_morale(
+        self,
+        base_id: int,
+        general_ids: list[int],
+        target_morale: int = 100,
+        base_gens: Optional[dict[int, Any]] = None,
+        on_notify: Optional[Callable[[str], None]] = None,
+        stop_event: Optional[threading.Event] = None,
+    ) -> tuple[bool, list[str]]:
+        """Kiểm tra và kích hoạt nâng sĩ khí đồng loạt cho toàn bộ đạo quân trong 1 bước chu kỳ (run_once).
+
+        - Kích hoạt song song OPT.ashx?id=47 cho TẤT CẢ võ tướng có upgrading_time == 0 và current_morale < target_morale.
+        - Giữa các lượt gọi lệnh kích hoạt có khoảng trễ vi mô ngẫu nhiên 100ms - 250ms chống bot.
+        - Tuyệt đối không gửi lệnh nếu tướng đang có upgrading_time > 0 (chặn đứng mã lỗi 40).
+        - Trả về (is_all_ready, wait_reasons).
+        """
+        if not general_ids:
+            return True, []
+
+        target_morale = min(100, max(1, target_morale))
+        wait_reasons: list[str] = []
+
+        # Nếu không truyền base_gens từ ngoài vào, đọc trực tiếp từ API 76
+        gens_morale_info = self.get_city_generals_morale_info(base_id) if base_id else {}
+
+        import random
+
+        for gid in general_ids:
+            if stop_event and stop_event.is_set():
+                return False, ["Đã bị dừng bởi người dùng"]
+
+            g = base_gens.get(gid) if base_gens else None
+            gname = getattr(g, "name", str(gid)) if g else str(gid)
+
+            # Ưu tiên thông tin từ API 76 vừa đọc, fallback sang base_gens
+            if gid in gens_morale_info:
+                cur_m, up_t = gens_morale_info[gid]
+            else:
+                cur_m = getattr(g, "morale", 0) if g else 0
+                up_t = getattr(g, "upgrading_time", 0) if g else 0
+
+            if cur_m >= target_morale and up_t == 0:
+                continue
+
+            if up_t > 0:
+                msg = f"Tướng {gname} đang đếm ngược nâng sĩ khí ({up_t}s)"
+                wait_reasons.append(msg)
+                if on_notify:
+                    on_notify(f"⏳ {msg}...")
+                continue
+
+            # up_t == 0 và cur_m < target_morale -> kích hoạt nâng sĩ khí (+10 điểm)
+            add_point = min(10, target_morale - cur_m)
+            payload = {
+                "lAddPoint": str(add_point),
+                "lGeneralID": str(gid),
+                "tid": str(base_id),
+                "_": "",
+            }
+            resp = self.gateway.call("OPT.ashx", 47, payload) or {}
+            ret = resp.get("ret", -1)
+
+            if ret == 0:
+                msg = f"Tướng {gname} (sĩ khí {cur_m}/{target_morale}) bắt đầu nâng sĩ khí (+{add_point})"
+                wait_reasons.append(msg)
+                if on_notify:
+                    on_notify(f"⏳ [Sĩ khí] {msg}...")
+                # Giãn cách vi mô ngẫu nhiên 100ms - 250ms giữa các request
+                if self.poll_interval >= 0.1:
+                    time.sleep(random.uniform(0.1, 0.25))
+            else:
+                err_msg = f"Máy chủ phản hồi mã lỗi {ret}"
+                if ret == 15:
+                    err_msg = "Mã lỗi 15: Thiếu tài nguyên (lúa/vàng)"
+                msg = f"Tướng {gname} nâng sĩ khí thất bại ({err_msg})"
+                wait_reasons.append(msg)
+                if on_notify:
+                    on_notify(f"❌ [Sĩ khí] {msg}")
+
+        is_all_ready = (len(wait_reasons) == 0)
+        return is_all_ready, wait_reasons

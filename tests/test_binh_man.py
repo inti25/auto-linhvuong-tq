@@ -766,6 +766,89 @@ def test_binh_man_non_blocking_relocate():
     assert res2 == "camp_frozen"
 
 
+def test_binh_man_concurrent_morale_training_all_generals():
+    """Kiểm tra Bình Man kích hoạt nâng sĩ khí ĐỒNG THỜI cho toàn bộ tướng trong đạo (ADR-0032):
+    - Đạo quân gồm 3 tướng [10, 11, 12], cả 3 đều có morale < 95 và up_t = 0.
+    - Trong 1 chu kỳ run_once(), cả 3 tướng ĐỀU được gửi lệnh OPT.ashx?id=47 song song (không bị return sớm ở tướng 1).
+    - Trả về 'waiting_morale' và chưa xuất quân.
+    """
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    c32 = {
+        "ret": 0,
+        "list": [
+            [
+                1001,
+                "Thành",
+                0,
+                0,
+                [
+                    [10, "Tướng 1", "", 2, 0, 0, 4, 80, 240, 240],
+                    [11, "Tướng 2", "", 2, 0, 0, 4, 85, 240, 240],
+                    [12, "Tướng 3", "", 2, 0, 0, 4, 75, 240, 240],
+                ],
+            ]
+        ],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [
+            [
+                1001,
+                "Thành",
+                [
+                    [10, "Tướng 1", 0, "", 0, 100, 0, 0, 0, 80, 0, 500],
+                    [11, "Tướng 2", 0, "", 0, 100, 0, 0, 0, 85, 0, 500],
+                    [12, "Tướng 3", 0, "", 0, 100, 0, 0, 0, 75, 0, 500],
+                ],
+            ]
+        ],
+    }
+
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(11, 10, 100, 7)]}},
+        handlers={
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "Common.ashx?id=27": {"ret": 0, "list": [[1001, "Thành", 5000]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[10, 11, 12],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(infantry=100),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "waiting_morale"
+
+    # Kiểm tra: CẢ 3 TƯỚNG đều được gửi lệnh nâng sĩ khí OPT 47 trong cùng chu kỳ!
+    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_calls) == 3
+    called_gids = {int(d["lGeneralID"]) for d in opt47_calls}
+    assert called_gids == {10, 11, 12}
+
+    # Chưa được xuất quân (OPT 53) khi đang chờ sĩ khí
+    assert not any(k == "OPT.ashx?id=53" for k, d in server.calls)
+
+
+
 
 
 

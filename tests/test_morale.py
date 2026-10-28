@@ -316,3 +316,117 @@ def test_train_multiple_generals_tick_scheduler_handles_stop_event():
     assert any("dừng" in r["message"].lower() for r in results.values())
 
 
+def test_train_multiple_generals_with_travel_time_early_march():
+    """Kiểm tra tính năng Xuất Quân Sớm Theo Sĩ Khí (travel_time > 0):
+    - Tướng có morale 90, target 95, travel_time 300s.
+    - API 76 trả về upgrading_time = 120s (120s <= 300s, 90+10=100 >= 95).
+    - MoraleTrainer coi tướng là sẵn sàng xuất quân ngay và không chờ hết 120s.
+    """
+    server = FakeServer(step_callback=lambda ep, d: MagicMock(
+        status_code=200,
+        json=lambda: {
+            "ret": 0,
+            "list": [[100, "Thành", [[501, "Triệu Vân", 0, "", 0, 100, 0, 0, 0, 90, 120, 500]]]]
+        }
+    ))
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    trainer = MoraleTrainer(gw, poll_interval=0.001)
+
+    targets = [{"city_id": 100, "general_id": 501, "current_morale": 90, "name": "Triệu Vân"}]
+    results = trainer.train_multiple_generals(
+        targets=targets,
+        target_morale=95,
+        travel_time=300.0,
+    )
+
+    assert results[501]["success"] is True
+    assert "Sẵn sàng xuất quân" in results[501]["message"]
+    # Không cần gọi thêm lệnh OPT 47 nào vì tướng đang đếm ngược và sẽ đủ khi tới ải
+    opt_calls = [c for c in server.calls if "OPT.ashx" in c[0]]
+    assert len(opt_calls) == 0
+
+
+def test_adjust_squad_morale_concurrent_trigger_and_anti_ret_40():
+    """Kiểm tra adjust_squad_morale:
+    - Kích hoạt đồng thời tất cả các tướng thiếu sĩ khí và up_t == 0.
+    - Tướng đang có up_t > 0 tuyệt đối KHÔNG được gửi OPT.ashx?id=47 (ngăn lỗi 40).
+    - Trả về ready=False và danh sách lý do chờ.
+    """
+    opt_calls = []
+
+    def mock_cb(ep, d):
+        if "OPT.ashx" in ep:
+            opt_calls.append(d)
+        return MagicMock(status_code=200, json=lambda: {"ret": 0})
+
+    server = FakeServer(step_callback=mock_cb)
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    trainer = MoraleTrainer(gw, poll_interval=0.001)
+
+    # 3 tướng:
+    # - Tướng 1: 80/95, up_t = 0 -> PHẢI kích hoạt
+    # - Tướng 2: 70/95, up_t = 60 -> ĐANG ĐẾM NGƯỢC, CẤM gửi API 47
+    # - Tướng 3: 85/95, up_t = 0 -> PHẢI kích hoạt
+    class MockGen:
+        def __init__(self, gid, name, morale, up_t):
+            self.id = gid
+            self.name = name
+            self.morale = morale
+            self.upgrading_time = up_t
+
+    base_gens = {
+        101: MockGen(101, "G1", 80, 0),
+        102: MockGen(102, "G2", 70, 60),
+        103: MockGen(103, "G3", 85, 0),
+    }
+
+    logs = []
+    ready, wait_reasons = trainer.adjust_squad_morale(
+        base_id=1001,
+        general_ids=[101, 102, 103],
+        target_morale=95,
+        base_gens=base_gens,
+        on_notify=logs.append,
+    )
+
+    assert ready is False
+    assert len(wait_reasons) == 3
+    # Phải gọi OPT 47 cho đúng tướng 101 và 103 (2 tướng up_t == 0)
+    assert len(opt_calls) == 2
+    called_gids = {int(c["lGeneralID"]) for c in opt_calls}
+    assert called_gids == {101, 103}
+    assert 102 not in called_gids  # Tướng 102 đang đếm ngược nên không bị spam lệnh
+
+
+def test_adjust_squad_morale_resource_shortage_error_15():
+    """Kiểm tra xử lý an toàn khi máy chủ báo lỗi 15 (thiếu lương thảo)."""
+    server = FakeServer(step_callback=lambda ep, d: MagicMock(
+        status_code=200,
+        json=lambda: {"ret": 15}
+    ))
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    trainer = MoraleTrainer(gw, poll_interval=0.001)
+
+    class MockGen:
+        def __init__(self, gid, name, morale, up_t):
+            self.id = gid
+            self.name = name
+            self.morale = morale
+            self.upgrading_time = up_t
+
+    base_gens = {201: MockGen(201, "Quan Vũ", 70, 0)}
+    logs = []
+    ready, wait_reasons = trainer.adjust_squad_morale(
+        base_id=1001,
+        general_ids=[201],
+        target_morale=95,
+        base_gens=base_gens,
+        on_notify=logs.append,
+    )
+
+    assert ready is False
+    assert any("Thiếu tài nguyên" in r for r in wait_reasons)
+    assert any("Mã lỗi 15" in l for l in logs)
+
+
+

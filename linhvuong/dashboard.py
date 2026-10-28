@@ -2768,21 +2768,20 @@ class Dashboard(tk.Tk):
                         else:
                             self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
 
-                # 3. Luyện sĩ khí
+                # 3. Luyện sĩ khí đồng loạt bằng MoraleTrainer (ADR-0032)
                 if auto_morale:
                     fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
                     city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
-                    for gid in sel_gens:
-                        g = city_gens.get(gid)
-                        gname = g.name if g else str(gid)
-                        cur_m = g.morale if g else 0
-                        if cur_m < min_morale:
-                            m_succ, m_ret = prov.adjust_morale(city_id, gid, cur_m, min_morale)
-                            if m_succ:
-                                self.after(0, self._append_gd_log, f"   [Sĩ khí] Tướng {gname}: ✅ Bắt đầu nâng sĩ khí (+10)!")
-                            else:
-                                err_desc = ERROR_MESSAGES.get(m_ret, f"Mã lỗi: {m_ret}")
-                                self.after(0, self._append_gd_log, f"   [Sĩ khí] Tướng {gname}: ❌ Nâng thất bại ({err_desc})")
+                    trainer = MoraleTrainer(self.gateway)
+                    def _on_notify_gd(msg):
+                        self.after(0, self._append_gd_log, f"   {msg}")
+                    trainer.adjust_squad_morale(
+                        base_id=city_id,
+                        general_ids=sel_gens,
+                        target_morale=min_morale,
+                        base_gens=city_gens,
+                        on_notify=_on_notify_gd,
+                    )
 
                 self.after(0, self._append_gd_log, "🏁 Hoàn tất tiến trình biên chế Gọi Man!")
                 new_roster = fetch_roster(self.gateway)
@@ -3797,14 +3796,16 @@ class Dashboard(tk.Tk):
             if auto_morale:
                 fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
                 city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
-                for gid in sel_gens:
-                    g = city_gens.get(gid)
-                    gname = g.name if g else str(gid)
-                    cur_m = g.morale if g else 0
-                    if cur_m < min_morale:
-                        m_succ, _ = prov.adjust_morale(city_id, gid, cur_m, min_morale)
-                        if m_succ:
-                            self.after(0, self._append_bm_log, f"   {prefix}[Sĩ khí] Tướng {gname}: ✅ Đã nâng sĩ khí!")
+                trainer = MoraleTrainer(self.gateway)
+                def _on_notify_bm_city(msg):
+                    self.after(0, self._append_bm_log, f"   {prefix}{msg}")
+                trainer.adjust_squad_morale(
+                    base_id=city_id,
+                    general_ids=sel_gens,
+                    target_morale=min_morale,
+                    base_gens=city_gens,
+                    on_notify=_on_notify_bm_city,
+                )
         else:
             camp_id = base_id
             for gid in sel_gens:
@@ -3850,12 +3851,16 @@ class Dashboard(tk.Tk):
             if auto_morale:
                 fresh_roster = fetch_roster(self.gateway, only_base_ids=[camp_id])
                 camp_gens = {g.id: g for g in fresh_roster.generals_of(camp_id)}
-                for gid in sel_gens:
-                    g = camp_gens.get(gid)
-                    gname = g.name if g else str(gid)
-                    cur_m = g.morale if g else 0
-                    if cur_m < min_morale:
-                        prov.adjust_morale(camp_id, gid, cur_m, min_morale)
+                trainer = MoraleTrainer(self.gateway)
+                def _on_notify_bm_camp(msg):
+                    self.after(0, self._append_bm_log, f"   {prefix}{msg}")
+                trainer.adjust_squad_morale(
+                    base_id=camp_id,
+                    general_ids=sel_gens,
+                    target_morale=min_morale,
+                    base_gens=camp_gens,
+                    on_notify=_on_notify_bm_camp,
+                )
 
     def _manual_adjust_bm_troops(self):
         self._save_bm_current_base_config()

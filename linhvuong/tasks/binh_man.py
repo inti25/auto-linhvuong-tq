@@ -35,6 +35,7 @@ from .base import (
     inspect_general_statuses,
 )
 from .di_trai import DiTrai, chebyshev_distance
+from .morale import MoraleTrainer
 
 
 MODE_CAMP = 1  # Chế độ 1: Sử dụng Doanh trại di chuyển đến cạnh Man
@@ -308,11 +309,7 @@ class BinhMan:
                     },
                 )
 
-            # 4. Luyện sĩ khí nếu bật auto_morale
-            if self.auto_morale:
-                self.provisioner.adjust_morale(self.parent_city_id, gid, current_morale=0, min_morale=self.min_morale)
-
-            # 5. Tái phái tướng trở lại Trại (OPT.ashx?id=50)
+            # 4. Tái phái tướng trở lại Trại (OPT.ashx?id=50) - Sĩ khí sẽ luyện tại Trại theo ADR-0032
             self.ctx.gateway.call(
                 "OPT.ashx",
                 50,
@@ -358,10 +355,6 @@ class BinhMan:
                         "_": "",
                     },
                 )
-
-            # 3. Luyện sĩ khí nếu bật auto_morale
-            if self.auto_morale:
-                self.provisioner.adjust_morale(cid, gid, current_morale=0, min_morale=self.min_morale)
 
     def run_once(self, remaining_percent: Optional[float] = None) -> str:
         # 0. Nếu Doanh trại đang trong thời gian đóng băng (frozen_time) từ bước dời trước
@@ -414,19 +407,17 @@ class BinhMan:
                     )
 
             if self.auto_morale and base_gens:
-                for gid in self.generals:
-                    g = base_gens.get(gid)
-                    cur_m = g.morale if g else 0
-                    up_t = g.upgrading_time if g else 0
-                    if cur_m < self.min_morale or up_t > 0:
-                        if up_t == 0:
-                            self.provisioner.adjust_morale(self.origin_id, gid, cur_m, self.min_morale)
-                            if self.ctx.notify:
-                                self.ctx.notify(f"⏳ Tướng {gid} (sĩ khí {cur_m}/{self.min_morale}) bắt đầu nâng sĩ khí...")
-                        else:
-                            if self.ctx.notify:
-                                self.ctx.notify(f"⏳ Tướng {gid} đang đếm ngược nâng sĩ khí ({up_t}s)...")
-                        return "waiting_morale"
+                trainer = MoraleTrainer(self.ctx.gateway)
+                ready, wait_reasons = trainer.adjust_squad_morale(
+                    base_id=self.origin_id,
+                    general_ids=self.generals,
+                    target_morale=self.min_morale,
+                    base_gens=base_gens,
+                    on_notify=self.ctx.notify,
+                    stop_event=getattr(self.ctx, "stop_event", None),
+                )
+                if not ready:
+                    return "waiting_morale"
 
         # 4. Quét tìm Man mục tiêu (áp dụng Quy Tắc Ưu Tiên Căn Cứ Gần Nhất - ADR-0029)
         active_peers = self.peers_fn() if self.peers_fn else self.peers

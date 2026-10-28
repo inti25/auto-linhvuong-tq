@@ -34,6 +34,7 @@ from .base import (
     attack,
     inspect_general_statuses,
 )
+from .morale import MoraleTrainer
 
 VONG_LINH = 301
 VONG_LINH_TALISMAN_ID = 268
@@ -285,21 +286,19 @@ class GoiDan:
                         on_log=self.ctx.notify,
                     )
 
-            # Luyện sĩ khí và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu
+            # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
             if self.auto_morale and city_gens:
-                for gid in self.generals:
-                    g = city_gens.get(gid)
-                    cur_m = g.morale if g else 0
-                    up_t = g.upgrading_time if g else 0
-                    if cur_m < self.min_morale or up_t > 0:
-                        if up_t == 0:
-                            self.provisioner.adjust_morale(self.city_id, gid, cur_m, self.min_morale)
-                            if self.ctx.notify:
-                                self.ctx.notify(f"⏳ Tướng {gid} (sĩ khí {cur_m}/{self.min_morale}) bắt đầu nâng sĩ khí...")
-                        else:
-                            if self.ctx.notify:
-                                self.ctx.notify(f"⏳ Tướng {gid} đang đếm ngược nâng sĩ khí ({up_t}s)...")
-                        return "waiting_morale"
+                trainer = MoraleTrainer(self.ctx.gateway)
+                ready, wait_reasons = trainer.adjust_squad_morale(
+                    base_id=self.city_id,
+                    general_ids=self.generals,
+                    target_morale=self.min_morale,
+                    base_gens=city_gens,
+                    on_notify=self.ctx.notify,
+                    stop_event=getattr(self.ctx, "stop_event", None),
+                )
+                if not ready:
+                    return "waiting_morale"
 
         # 2. Tìm mục tiêu có sẵn quanh thành trước
         target = self.ctx.scanner.find_nearest(

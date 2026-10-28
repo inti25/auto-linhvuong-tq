@@ -23,6 +23,7 @@ from ..gateway import GatewayClient
 from ..roster import Army, fetch_roster
 from ..troops import ArmyProvisioner, ERROR_MESSAGES, TargetArmy
 from .base import TaskContext, attack
+from .morale import MoraleTrainer
 
 # Bản đồ nhiệm vụ chuẩn từ ZMan.exe
 # travel_time: Thời gian di chuyển 1 chiều (giây). Tổng thời gian khứ hồi = travel_time * 2 + thời gian chiến đấu.
@@ -422,6 +423,7 @@ class ThaoPhatAutoRunner:
                 #   bắt buộc phải chờ đợt nâng này kết thúc hoàn toàn (up_t về 0) rồi nâng tiếp lần 2.
                 # - Khi lần nâng đảm bảo đủ sĩ khí theo cấu hình (ví dụ cur = 94 nâng lên 100 >= 95):
                 #   chỉ cần thời gian nâng còn lại up_t <= travel_time là có thể xuất phát.
+                # - Giữa các lượt gọi nâng sĩ khí cho nhiều tướng có khoảng nghỉ vi mô ngẫu nhiên 100-250ms (ADR-0032).
                 # -------------------------------------------------------------
                 first_morale_check = True
                 last_logged_morale_wait = None
@@ -471,9 +473,14 @@ class ThaoPhatAutoRunner:
                                 self.log(f"   [Sĩ khí] Tướng {gname}: ✅ Bắt đầu nâng thành công!")
                                 wait_needed.append((gname, 5.0, "vừa bắt đầu nâng"))
                             else:
-                                err_desc = ERROR_MESSAGES.get(m_ret, f"Mã lỗi: {m_ret}")
+                                err_desc = "Thiếu tài nguyên (lúa/vàng)" if m_ret == 15 else ERROR_MESSAGES.get(m_ret, f"Mã lỗi: {m_ret}")
                                 self.log(f"   [Sĩ khí] Tướng {gname}: ❌ Nâng thất bại ({err_desc})")
                                 wait_needed.append((gname, 10.0, f"thử lại ({err_desc})"))
+
+                            # Giãn cách vi mô 100ms - 250ms giữa các request kích hoạt nhiều tướng chống bot
+                            if self.check_interval >= 0.1:
+                                import random
+                                time.sleep(random.uniform(0.1, 0.25))
                         else:
                             if not is_final_upgrade:
                                 all_morale_ready = False

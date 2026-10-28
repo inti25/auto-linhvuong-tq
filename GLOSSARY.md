@@ -140,6 +140,18 @@ _Avoid_: Nâng sĩ khí, tăng morale, buff sĩ khí
 Tính năng điều phối luyện sĩ khí đồng loạt cho tất cả tướng có quân đội đồn trú tại các Thành và Doanh trại khác nhau theo cơ chế vòng lặp chu kỳ (Tick Scheduler), tự động kích hoạt song song và lặp các nhịp 10 điểm cho đến khi chạm Sĩ Khí Mục Tiêu mà không bị giới hạn số luồng worker.
 _Avoid_: Buff morale hàng loạt, train sĩ khí đa thành, nâng sĩ khí hàng loạt
 
+**Đếm Ngược Luyện Sĩ Khí**:
+Khoảng thời gian (tính bằng giây) một Võ tướng đang trong tiến trình nâng sĩ khí máy chủ (`upgrading_time > 0`); trong thời gian này cấm gửi thêm lệnh nâng để tránh phát sinh mã lỗi 40 hoặc bị hệ thống máy chủ nhận diện tự động hóa.
+_Avoid_: Timer sĩ khí, thời gian nâng dở
+
+**Giãn Cách Vi Mô**:
+Khoảng trễ ngẫu nhiên (100ms - 250ms) chèn giữa các lệnh `OPT.ashx?id=47` gửi lên máy chủ trong cùng một nhịp kích hoạt đồng loạt nhằm phân tán gói tin và bảo vệ tài khoản khỏi cơ chế phát hiện bot theo tần suất.
+_Avoid_: Sleep cứng, spam request
+
+**Xuất Quân Sớm Theo Sĩ Khí**:
+Cơ chế trong Thảo Phạt cho phép đạo quân xuất kích ngay khi lượt nâng sĩ khí cuối cùng đảm bảo đạt ngưỡng tối thiểu và thời gian đếm ngược còn lại nhỏ hơn hoặc bằng thời gian hành quân ($up\_t \le travel\_time$).
+_Avoid_: Đi sớm, bỏ qua sĩ khí
+
 **Định Mức Biên Chế**:
 Quân số mục tiêu theo từng binh chủng (Bộ binh, Kỵ binh, Cung thủ) áp dụng chung cho các Võ tướng xuất kích của từng phân hệ; hệ thống chỉ bù phần quân số thiếu hụt và giữ nguyên nếu tướng đang mang nhiều quân hơn định mức.
 _Avoid_: Mức lính mục tiêu, target army, biên chế cố định

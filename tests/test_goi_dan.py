@@ -454,5 +454,84 @@ def test_goi_dan_target_army_provisioning_and_morale_waiting():
     assert any(k == "OPT.ashx?id=53" for k, d in server.calls)
 
 
+def test_goi_dan_concurrent_morale_training_all_generals():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(2, 2)
+    # Giả lập 3 tướng trong đội Gọi Dân/Gọi Man đều có sĩ khí thấp (80, 85, 75 < 95)
+    c32 = {
+        "ret": 0,
+        "list": [
+            [
+                123,
+                "City",
+                0,
+                0,
+                [
+                    [50, "Gen 50", "", 2, 0, 0, 4, 80, 240, 240, 0],
+                    [51, "Gen 51", "", 2, 0, 0, 4, 85, 240, 240, 0],
+                    [52, "Gen 52", "", 2, 0, 0, 4, 75, 240, 240, 0],
+                ],
+            ]
+        ],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [
+            [
+                123,
+                "City",
+                [
+                    [50, "Gen 50", 0, "", 0, 1000, 0, 0, 0, 80, 0, 200],
+                    [51, "Gen 51", 0, "", 0, 1000, 0, 0, 0, 85, 0, 200],
+                    [52, "Gen 52", 0, "", 0, 1000, 0, 0, 0, 75, 0, 200],
+                ],
+            ]
+        ],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": []}},
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "Common.ashx?id=27": {"ret": 0, "list": [[123, "City", 10000]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(2, 2, 999, VONG_LINH)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(
+        ctx,
+        generals=[50, 51, 52],
+        origin=(2, 2),
+        radius=5,
+        city_id=123,
+        target_army=TargetArmy(infantry=1000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "waiting_morale"
+
+    # Kiểm tra: CẢ 3 TƯỚNG đều được gửi lệnh nâng sĩ khí OPT 47 trong cùng chu kỳ!
+    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_calls) == 3
+    called_gids = {int(d["lGeneralID"]) for d in opt47_calls}
+    assert called_gids == {50, 51, 52}
+
+    # Chưa được gọi quái (id=69) hay xuất quân (id=53) khi đang chờ sĩ khí
+    assert not any(k == "OPT.ashx?id=69" for k, d in server.calls)
+    assert not any(k == "OPT.ashx?id=53" for k, d in server.calls)
+
+
+
 
 

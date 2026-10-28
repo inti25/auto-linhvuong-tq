@@ -270,12 +270,7 @@ class ArmyProvisioner:
                     on_log=on_log,
                 )
 
-            # 4. Nâng sĩ khí
-            cur_m = current_morales.get(gid, 0)
-            if cur_m < min_morale:
-                self.adjust_morale(parent_city_id, gid, cur_m, min_morale)
-
-            # 5. Tái phái tướng ra Trại
+            # 4. Tái phái tướng ra Trại (sĩ khí sẽ luyện tại Doanh trại theo ADR-0032)
             if on_log:
                 on_log(f"⛺ Phái tướng {gid} từ Thành mẹ {parent_city_id} trở lại Doanh trại {camp_id}...")
             self.gateway.call(
