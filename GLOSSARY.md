@@ -222,6 +222,14 @@ _Avoid_: File log thô, console output
 Cơ chế tự động giải phóng bộ nhớ bằng cách xóa một khối dòng nhật ký cũ nhất (batch pruning) trên giao diện khi đạt ngưỡng tối đa, và xoay vòng hoặc thanh lý các tệp log đã cũ trên ổ đĩa nhằm chống tràn RAM và làm chậm ứng dụng khi chạy dài hạn.
 _Avoid_: Xóa log thủ công, purge log, trim log lẻ tẻ
 
+**Quân Giới**:
+Hệ thống trang thiết bị và khí giới quân sự gồm Binh khí (Đao, Thương, Cung, Kiếm, Kích), Khôi giáp (Giáp da, Giáp sắt, Chiến giáp), Chiến mã (Tuấn mã, Thiết kỵ) và Xe ném đá phục vụ việc chiêu mộ binh sĩ và gia tăng sức mạnh tác chiến của quân đội.
+_Avoid_: Đồ lính, vũ khí thô, trang bị lính
+
+**Chế Tạo Quân Giới**:
+Tiến trình tự động điều phối lệnh sản xuất trang thiết bị quân sự định kỳ tại các công xưởng chuyên trách trong thành trì (Xưởng Binh Khí, Xưởng Khôi Giáp, Xưởng Ngựa) theo chỉ định về chủng loại, số lượng mẻ và chu kỳ lặp lại.
+_Avoid_: Rèn vũ khí, đúc kiếm, mua đồ quân sự
+
 **Ngưỡng Nhật Ký**:
 Giới hạn số dòng tối đa trên khung hiển thị giao diện (mặc định 500 dòng cho tác vụ thường, 300 dòng cho chiến trường) hoặc dung lượng tệp log trên ổ đĩa (mặc định 2MB/tệp, giữ 3 bản sao và lưu giữ tối đa 7 ngày) trước khi kích hoạt Cắt Tỉa Nhật Ký.
 _Avoid_: Max lines, log limit, dung lượng tối đa

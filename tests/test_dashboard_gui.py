@@ -6,6 +6,7 @@ import pytest
 
 from linhvuong.dashboard import Dashboard
 from linhvuong.gateway import GatewayClient
+from linhvuong.profile import CityCraftConfig
 from linhvuong.roster import Army, City, General, Roster
 
 try:
@@ -2400,6 +2401,168 @@ def test_dashboard_combat_log_and_manual_clear_buttons():
         assert dash.bt_log_text.get("1.0", "end-1c") == ""
     finally:
         dash.destroy()
+
+
+def test_dashboard_crafting_ui_and_actions():
+    """Kiểm tra điều khiển Chế Tạo Quân Giới trên Tab Tổng quan (ADR-0031)."""
+    dash = safe_dashboard()
+    try:
+        dash._loaded(dummy_roster())
+        assert hasattr(dash, "craft_city_combo")
+        assert hasattr(dash, "craft_weapon_combo")
+        assert hasattr(dash, "craft_amount_var")
+        assert hasattr(dash, "craft_interval_var")
+        assert hasattr(dash, "craft_enable_var")
+        assert hasattr(dash, "craft_tree")
+
+        # Kiểm tra danh sách vũ khí trong dropdown có 67 loại
+        vals = dash.craft_weapon_combo["values"]
+        assert len(vals) == 67
+        assert "101. Thấu giáp thương (Binh khí)" in vals[0]
+
+        # Kiểm tra bảng danh sách thành
+        children = dash.craft_tree.get_children()
+        assert len(children) >= 1
+
+        # Chọn thành đầu tiên
+        first_cid = int(children[0])
+        dash._select_craft_city_by_id(first_cid)
+
+        # Chỉnh cấu hình: chọn Cung nỗ (201), số lượng 2000, chu kỳ 45s, bật
+        for idx, item in enumerate(dash.craft_weapon_combo["values"]):
+            if item.startswith("201."):
+                dash.craft_weapon_combo.current(idx)
+                break
+        dash.craft_amount_var.set("2000")
+        dash.craft_interval_var.set("45")
+        dash.craft_enable_var.set(True)
+        dash._save_current_craft_form_to_config()
+
+        assert first_cid in dash.craft_configs
+        cfg = dash.craft_configs[first_cid]
+        assert cfg.weapon_id == 201
+        assert cfg.amount == "2000"
+        assert cfg.interval == "45"
+        assert cfg.enabled is True
+
+        # Kiểm tra hiển thị trên treeview
+        row_vals = dash.craft_tree.item(str(first_cid), "values")
+        assert row_vals[0] == "☑"
+        assert "Thiết thai cung" in row_vals[2]
+        assert row_vals[3] == "2000"
+        assert row_vals[4] == "45"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_crafting_profile_sync(tmp_path):
+    """Kiểm tra nạp và lưu cấu hình Chế Tạo Quân Giới qua Unified Profile (ADR-0031)."""
+    dash = safe_dashboard()
+    try:
+        dash._loaded(dummy_roster())
+        # Giả lập cấu hình chế tạo cho 2 thành
+        c1_id = 15230
+        c2_id = 15237
+        dash.craft_configs[c1_id] = CityCraftConfig(
+            city_id=c1_id,
+            weapon_id=301,  # Ngư lân giáp
+            amount="5000",
+            interval="120",
+            enabled=True,
+        )
+        dash.craft_configs[c2_id] = CityCraftConfig(
+            city_id=c2_id,
+            weapon_id=401,  # Tuyệt địa mã
+            amount="3000",
+            interval="90",
+            enabled=False,
+        )
+        dash._sync_craft_ui_from_current_city()
+
+        prof_dict = dash._collect_unified_profile()
+        assert "crafting" in prof_dict
+        assert "cities" in prof_dict["crafting"]
+        assert str(c1_id) in prof_dict["crafting"]["cities"]
+        assert prof_dict["crafting"]["cities"][str(c1_id)]["weapon_id"] == 301
+        assert prof_dict["crafting"]["cities"][str(c1_id)]["enabled"] is True
+
+        # Xóa cấu hình hiện tại và test nạp lại
+        dash.craft_configs.clear()
+        sections = dash._apply_unified_profile(prof_dict)
+        assert "Chế Tạo Quân Giới" in sections
+        assert c1_id in dash.craft_configs
+        assert dash.craft_configs[c1_id].weapon_id == 301
+        assert dash.craft_configs[c1_id].amount == "5000"
+        assert dash.craft_configs[c1_id].enabled is True
+
+        assert c2_id in dash.craft_configs
+        assert dash.craft_configs[c2_id].weapon_id == 401
+        assert dash.craft_configs[c2_id].enabled is False
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_overview_two_columns_and_multi_crafting():
+    """Kiểm tra chia 2 cột (Luyện sĩ khí & Chế tạo quân giới) và chọn nhiều loại quân giới cùng lúc."""
+    dash = safe_dashboard()
+    try:
+        dash._loaded(dummy_roster())
+
+        # 1. Kiểm tra layout 2 cột: mo_tree và craft_tree nằm trong 2 Frame thuộc layout grid
+        mo_frame = dash.mo_tree.master.master
+        craft_frame = dash.craft_tree.master.master
+        assert mo_frame.master == craft_frame.master
+        mo_grid = mo_frame.grid_info()
+        craft_grid = craft_frame.grid_info()
+        assert int(mo_grid["column"]) == 0
+        assert int(craft_grid["column"]) == 1
+
+        # 2. Kiểm tra MultiSelectDropdown cho quân giới
+        assert hasattr(dash, "craft_weapon_dropdown")
+        # Chọn nhiều loại vũ khí: 101 (Thấu giáp thương), 201 (Thiết thai cung), 301 (Ngư lân giáp)
+        dash.craft_weapon_dropdown.set_selected([101, 201, 301])
+        selected = dash.craft_weapon_dropdown.get_selected()
+        assert selected == [101, 201, 301]
+
+        # Lưu cấu hình và kiểm tra CityCraftConfig lưu đủ 3 loại
+        dash._save_current_craft_form_to_config()
+        cid = dash._get_current_craft_city_id()
+        assert cid in dash.craft_configs
+        cfg = dash.craft_configs[cid]
+        assert cfg.weapon_ids == [101, 201, 301]
+        assert cfg.weapon_id == 101
+
+        # Kiểm tra hiển thị Treeview: báo '3 loại'
+        row_vals = dash.craft_tree.item(str(cid), "values")
+        assert "3 loại" in row_vals[2]
+
+        # 3. Kiểm tra export Unified Profile lưu danh sách weapon_ids
+        prof = dash._collect_unified_profile()
+        assert prof["crafting"]["cities"][str(cid)]["weapon_ids"] == [101, 201, 301]
+
+        # 4. Kiểm tra nạp lại Unified Profile
+        dash.craft_configs.clear()
+        dash._apply_unified_profile(prof)
+        assert dash.craft_configs[cid].weapon_ids == [101, 201, 301]
+        assert dash.craft_weapon_dropdown.get_selected() == [101, 201, 301]
+
+        # 5. Kiểm tra thực thi chế tạo nhiều loại qua _do_craft_now
+        with patch("linhvuong.dashboard.WeaponCrafter") as mock_crafter_cls:
+            mock_crafter = mock_crafter_cls.return_value
+            mock_crafter.craft_once.return_value = (True, 0, "Chế tạo thành công")
+            dash._do_craft_now()
+
+            # Chờ worker thread kết thúc
+            import time
+            time.sleep(0.15)
+
+            # Phải gọi craft_once cho cả 3 loại quân giới
+            assert mock_crafter.craft_once.call_count == 3
+            called_wids = [call[0][1] for call in mock_crafter.craft_once.call_args_list]
+            assert called_wids == [101, 201, 301]
+    finally:
+        dash.destroy()
+
 
 
 

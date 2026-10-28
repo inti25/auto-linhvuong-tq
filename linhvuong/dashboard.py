@@ -34,7 +34,7 @@ from .gateway import GatewayClient
 from .engine import AutomationEngine, TaskStatus
 from .locks import TargetLocks
 from .logger import open_logs_directory, setup_logger
-from .profile import BaseBinhManConfig, Profile, ProfileStore
+from .profile import BaseBinhManConfig, CityCraftConfig, CraftProfile, Profile, ProfileStore
 from .gui import set_app_icon
 
 logger = logging.getLogger("linhvuong.dashboard")
@@ -42,6 +42,7 @@ from .roster import Army, City, General, Roster, fetch_roster
 from .scan import BasePeer, Scanner
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import MAN_TARGET_OPTIONS, MODE_CAMP, MODE_CITY, BinhMan
+from .tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
 from .tasks.di_trai import DiTrai
 from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask, parse_boost_remaining_time
 from .tasks.goi_dan import GoiDan, VONG_LINH
@@ -76,7 +77,7 @@ COMBAT_TRIM_LINES = 60  # Số dòng cắt tỉa theo khối cho tab Chiến Tr�
 
 
 class MultiSelectDropdown(ttk.Menubutton):
-    """Dropdown chọn nhiều loại Man với checkboxes trong tk.Menu."""
+    """Dropdown chọn nhiều lựa chọn với checkboxes trong tk.Menu."""
 
     def __init__(
         self,
@@ -85,11 +86,13 @@ class MultiSelectDropdown(ttk.Menubutton):
         default_selected: Optional[list[int]] = None,
         width: int = 22,
         command: Optional[Callable[[list[int]], None]] = None,
+        categories: Optional[dict[str, list[int]]] = None,
         **kwargs,
     ):
         super().__init__(parent, width=width, **kwargs)
         self.options = list(options)
         self.command = command
+        self.categories = categories
         default_set = set(default_selected if default_selected is not None else [opt[0] for opt in self.options])
         self.vars: dict[int, tk.BooleanVar] = {
             val: tk.BooleanVar(value=(val in default_set)) for val, _ in self.options
@@ -102,14 +105,42 @@ class MultiSelectDropdown(ttk.Menubutton):
         self.menu.add_command(label="❌ Bỏ chọn tất cả", command=self.deselect_all)
         self.menu.add_separator()
 
-        for val, label in self.options:
-            self.menu.add_checkbutton(
-                label=label,
-                variable=self.vars[val],
-                onvalue=True,
-                offvalue=False,
-                command=self._on_toggle,
-            )
+        if categories:
+            opt_map = dict(self.options)
+            for cat_name, item_ids in categories.items():
+                sub = tk.Menu(self.menu, tearoff=False)
+
+                def _make_cat_toggle(ids, select: bool):
+                    def _fn():
+                        for iid in ids:
+                            if iid in self.vars:
+                                self.vars[iid].set(select)
+                        self._on_toggle()
+                    return _fn
+
+                sub.add_command(label=f"✅ Chọn tất cả ({len(item_ids)})", command=_make_cat_toggle(item_ids, True))
+                sub.add_command(label=f"❌ Bỏ chọn nhóm", command=_make_cat_toggle(item_ids, False))
+                sub.add_separator()
+
+                for val in item_ids:
+                    if val in opt_map:
+                        sub.add_checkbutton(
+                            label=opt_map[val],
+                            variable=self.vars[val],
+                            onvalue=True,
+                            offvalue=False,
+                            command=self._on_toggle,
+                        )
+                self.menu.add_cascade(label=f"{cat_name} ({len(item_ids)}) ‣", menu=sub)
+        else:
+            for val, label in self.options:
+                self.menu.add_checkbutton(
+                    label=label,
+                    variable=self.vars[val],
+                    onvalue=True,
+                    offvalue=False,
+                    command=self._on_toggle,
+                )
 
         self._update_label()
 
@@ -120,7 +151,7 @@ class MultiSelectDropdown(ttk.Menubutton):
             self.config(text=f"Tất cả ({total}) ▾")
         elif not selected:
             self.config(text="Chưa chọn ▾")
-        elif len(selected) <= 3:
+        elif len(selected) <= 2:
             labels = []
             opt_map = dict(self.options)
             for val in selected:
@@ -128,7 +159,10 @@ class MultiSelectDropdown(ttk.Menubutton):
                 if " - " in raw_lbl:
                     labels.append(raw_lbl.split(" - ")[0])
                 elif " (" in raw_lbl:
-                    labels.append(raw_lbl.split(" (")[0])
+                    cleaned = raw_lbl.split(" (")[0]
+                    if ". " in cleaned:
+                        cleaned = cleaned.split(". ", 1)[-1]
+                    labels.append(cleaned)
                 else:
                     labels.append(raw_lbl)
             self.config(text=f"{', '.join(labels)} ▾")
@@ -182,7 +216,7 @@ class MultiSelectDropdown(ttk.Menubutton):
 
 
 class _LegacyComboAdapter:
-    """Bộ chuyển đổi tương thích ngược cho code cũ hoặc test truy cập gd_mode_combo."""
+    """Bộ chuyển đổi tương thích ngược cho code cũ hoặc test truy cập combobox."""
 
     def __init__(self, dropdown: MultiSelectDropdown):
         self._dropdown = dropdown
@@ -200,6 +234,16 @@ class _LegacyComboAdapter:
         if 0 <= idx < len(self._dropdown.options):
             val = self._dropdown.options[idx][0]
             self._dropdown.set_selected([val])
+
+    def get(self) -> str:
+        sel = self._dropdown.get_selected()
+        if not sel:
+            return ""
+        opt_dict = dict(self._dropdown.options)
+        return opt_dict.get(sel[0], str(sel[0]))
+
+    def bind(self, sequence, func, add=None):
+        pass
 
     def __getitem__(self, item):
         if item == "values":
@@ -599,6 +643,14 @@ class Dashboard(tk.Tk):
         self.dt_dest_x_var = tk.StringVar(value="")
         self.dt_dest_y_var = tk.StringVar(value="")
 
+        # Cấu hình Chế Tạo Quân Giới (ADR-0031)
+        self.craft_configs: dict[int, CityCraftConfig] = {}
+        self._craft_running: bool = False
+        self._craft_stop_event = threading.Event()
+        self._craft_thread: Optional[threading.Thread] = None
+        self._craft_last_run: dict[int, float] = {}
+        self._craft_statuses: dict[int, str] = {}
+
         # Widget log đệm
         self.bld_log_text = tk.Text(self)
         self.logis_log_text = tk.Text(self)
@@ -844,65 +896,451 @@ class Dashboard(tk.Tk):
 
         ttk.Label(details, textvariable=self.total_var, font=("Segoe UI", 11, "bold"), foreground=ACCENT).pack(anchor="w", pady=(16, 0))
 
-        # Tầng dưới: Luyện Sĩ Khí Quân Đội (Đa Thành)
-        f_morale = ttk.LabelFrame(parent, text="⚔️ Luyện Sĩ Khí Quân Đội (Đa Thành)", style="Card.TLabelframe")
-        f_morale.pack(fill="both", expand=True, pady=(2, 4))
+        # Tầng dưới: Khung 2 cột (Cột 1: Luyện Sĩ Khí, Cột 2: Chế Tạo Quân Giới)
+        bottom_body = tk.Frame(parent, bg=BG)
+        bottom_body.pack(fill="both", expand=True, pady=(2, 4))
+        bottom_body.columnconfigure(0, weight=1)
+        bottom_body.columnconfigure(1, weight=1)
+        bottom_body.rowconfigure(0, weight=1)
 
-        ctrl_bar = tk.Frame(f_morale, bg=CARD)
-        ctrl_bar.pack(fill="x", padx=6, pady=4)
+        # Cột 1: Luyện Sĩ Khí Quân Đội (Đa Thành)
+        f_morale = ttk.LabelFrame(bottom_body, text="⚔️ Luyện Sĩ Khí Quân Đội (Đa Thành)", style="Card.TLabelframe")
+        f_morale.grid(row=0, column=0, sticky="nsew", padx=(0, 3))
 
-        tk.Label(ctrl_bar, text="Thành:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(6, 4))
-        self.mo_city_combo = ttk.Combobox(ctrl_bar, state="readonly", width=25)
+        mo_ctrl_f = tk.Frame(f_morale, bg=CARD)
+        mo_ctrl_f.pack(fill="x", padx=6, pady=4)
+
+        mo_row1 = tk.Frame(mo_ctrl_f, bg=CARD)
+        mo_row1.pack(fill="x", pady=(0, 2))
+
+        tk.Label(mo_row1, text="Thành:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 4))
+        self.mo_city_combo = ttk.Combobox(mo_row1, state="readonly", width=16)
         self.mo_city_combo.pack(side="left", padx=(0, 6))
         self.mo_city_combo.bind("<<ComboboxSelected>>", self._on_mo_city_selected)
 
-        ttk.Button(ctrl_bar, text="☑ Chọn tất cả", style="Action.TButton", command=self._select_all_morale_generals).pack(side="left", padx=3)
-        ttk.Button(ctrl_bar, text="☐ Bỏ chọn", style="Action.TButton", command=self._deselect_all_morale_generals).pack(side="left", padx=3)
-
-        tk.Label(ctrl_bar, text="Sĩ khí đích:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(10, 4))
-        self.mo_target_morale_combo = ttk.Combobox(ctrl_bar, state="readonly", width=5, values=["100", "95", "90", "85"])
+        tk.Label(mo_row1, text="Đích:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(4, 2))
+        self.mo_target_morale_combo = ttk.Combobox(mo_row1, state="readonly", width=4, values=["100", "95", "90", "85"])
         self.mo_target_morale_combo.set("100")
-        self.mo_target_morale_combo.pack(side="left", padx=(0, 8))
+        self.mo_target_morale_combo.pack(side="left", padx=(0, 6))
 
-        self.mo_start_btn = ttk.Button(ctrl_bar, text="⚔️ Luyện Sĩ Khí", style="Action.TButton", command=self._start_morale_training)
-        self.mo_start_btn.pack(side="left", padx=3)
+        ttk.Button(mo_row1, text="☑ Tất cả", style="Action.TButton", command=self._select_all_morale_generals).pack(side="left", padx=2)
+        ttk.Button(mo_row1, text="☐ Bỏ chọn", style="Action.TButton", command=self._deselect_all_morale_generals).pack(side="left", padx=2)
 
-        self.mo_stop_btn = ttk.Button(ctrl_bar, text="⏹️ Dừng", style="Danger.TButton", command=self._stop_morale_training, state="disabled")
+        mo_row2 = tk.Frame(mo_ctrl_f, bg=CARD)
+        mo_row2.pack(fill="x", pady=(2, 0))
+
+        self.mo_start_btn = ttk.Button(mo_row2, text="⚔️ Luyện Sĩ Khí", style="Action.TButton", command=self._start_morale_training)
+        self.mo_start_btn.pack(side="left", padx=(2, 3))
+
+        self.mo_stop_btn = ttk.Button(mo_row2, text="⏹️ Dừng", style="Danger.TButton", command=self._stop_morale_training, state="disabled")
         self.mo_stop_btn.pack(side="left", padx=3)
 
-        self.mo_status_lbl = tk.Label(ctrl_bar, text="", bg=CARD, fg=MUTED, font=("Segoe UI", 9))
-        self.mo_status_lbl.pack(side="left", padx=(10, 4))
+        self.mo_status_lbl = tk.Label(mo_row2, text="", bg=CARD, fg=MUTED, font=("Segoe UI", 9))
+        self.mo_status_lbl.pack(side="left", padx=(6, 4))
 
         # Bảng tướng có quân đội
-        table_frame = tk.Frame(f_morale, bg=CARD)
-        table_frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        mo_table_f = tk.Frame(f_morale, bg=CARD)
+        mo_table_f.pack(fill="both", expand=True, padx=6, pady=(0, 6))
 
         columns = ("sel", "name", "city", "morale", "army", "troops", "status")
-        self.mo_tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+        self.mo_tree = ttk.Treeview(mo_table_f, columns=columns, show="headings", selectmode="browse")
 
         self.mo_tree.heading("sel", text="Chọn")
         self.mo_tree.heading("name", text="Tên tướng")
-        self.mo_tree.heading("city", text="Thành đồn trú")
+        self.mo_tree.heading("city", text="Thành")
         self.mo_tree.heading("morale", text="Sĩ khí")
         self.mo_tree.heading("army", text="Quân số")
-        self.mo_tree.heading("troops", text="Chi tiết (B / K / C)")
-        self.mo_tree.heading("status", text="Trạng thái luyện")
+        self.mo_tree.heading("troops", text="Chi tiết")
+        self.mo_tree.heading("status", text="Trạng thái")
 
-        self.mo_tree.column("sel", width=50, anchor="center")
-        self.mo_tree.column("name", width=120, anchor="w")
-        self.mo_tree.column("city", width=140, anchor="w")
-        self.mo_tree.column("morale", width=70, anchor="center")
-        self.mo_tree.column("army", width=80, anchor="e")
-        self.mo_tree.column("troops", width=180, anchor="w")
-        self.mo_tree.column("status", width=220, anchor="w")
+        self.mo_tree.column("sel", width=40, anchor="center")
+        self.mo_tree.column("name", width=95, anchor="w")
+        self.mo_tree.column("city", width=105, anchor="w")
+        self.mo_tree.column("morale", width=55, anchor="center")
+        self.mo_tree.column("army", width=70, anchor="e")
+        self.mo_tree.column("troops", width=110, anchor="w")
+        self.mo_tree.column("status", width=120, anchor="w")
 
-        mo_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.mo_tree.yview)
+        mo_scroll = ttk.Scrollbar(mo_table_f, orient="vertical", command=self.mo_tree.yview)
         self.mo_tree.configure(yscrollcommand=mo_scroll.set)
         mo_scroll.pack(side="right", fill="y")
         self.mo_tree.pack(side="left", fill="both", expand=True)
 
         self.mo_tree.bind("<ButtonRelease-1>", self._on_mo_tree_click)
         self.mo_tree.bind("<space>", self._on_mo_tree_space)
+
+        # Cột 2: Chế Tạo Quân Giới (Đa Thành) - ADR-0031
+        f_craft = ttk.LabelFrame(bottom_body, text="🛠️ Chế Tạo Quân Giới (Đa Thành)", style="Card.TLabelframe")
+        f_craft.grid(row=0, column=1, sticky="nsew", padx=(3, 0))
+
+        craft_ctrl_f = tk.Frame(f_craft, bg=CARD)
+        craft_ctrl_f.pack(fill="x", padx=6, pady=4)
+
+        cr_row1 = tk.Frame(craft_ctrl_f, bg=CARD)
+        cr_row1.pack(fill="x", pady=(0, 2))
+
+        tk.Label(cr_row1, text="Thành:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 4))
+        self.craft_city_combo = ttk.Combobox(cr_row1, state="readonly", width=16)
+        self.craft_city_combo.pack(side="left", padx=(0, 6))
+        self.craft_city_combo.bind("<<ComboboxSelected>>", self._on_craft_city_selected)
+
+        tk.Label(cr_row1, text="Quân giới:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(4, 4))
+        weapon_options = [(wid, f"{wid}. {wname} ({wcat})") for wid, (wname, wcat) in sorted(WEAPONS_DATA.items())]
+        weapon_categories = {
+            "🗡️ Binh khí": [wid for wid, (_, cat) in sorted(WEAPONS_DATA.items()) if cat == "Binh khí"],
+            "🏹 Cung nỗ": [wid for wid, (_, cat) in sorted(WEAPONS_DATA.items()) if cat == "Cung nỗ"],
+            "🛡️ Khôi giáp": [wid for wid, (_, cat) in sorted(WEAPONS_DATA.items()) if cat == "Khôi giáp"],
+            "🐎 Chiến mã": [wid for wid, (_, cat) in sorted(WEAPONS_DATA.items()) if cat == "Chiến mã"],
+            "🚜 Xe ném đá": [wid for wid, (_, cat) in sorted(WEAPONS_DATA.items()) if cat == "Xe ném đá"],
+        }
+        self.craft_weapon_dropdown = MultiSelectDropdown(
+            cr_row1,
+            options=weapon_options,
+            default_selected=[101],
+            width=22,
+            categories=weapon_categories,
+            command=self._on_craft_weapon_dropdown_changed,
+        )
+        self.craft_weapon_dropdown.pack(side="left", padx=(0, 6))
+        self.craft_weapon_combo = _LegacyComboAdapter(self.craft_weapon_dropdown)
+
+        cr_row2 = tk.Frame(craft_ctrl_f, bg=CARD)
+        cr_row2.pack(fill="x", pady=(2, 2))
+
+        tk.Label(cr_row2, text="Số lượng/mẻ:", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(2, 2))
+        self.craft_amount_var = tk.StringVar(value="1000")
+        craft_amount_entry = ttk.Entry(cr_row2, textvariable=self.craft_amount_var, width=7)
+        craft_amount_entry.pack(side="left", padx=(0, 6))
+        craft_amount_entry.bind("<FocusOut>", lambda e: self._save_current_craft_form_to_config())
+
+        tk.Label(cr_row2, text="Chu kỳ (s):", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(4, 2))
+        self.craft_interval_var = tk.StringVar(value="60")
+        craft_interval_entry = ttk.Entry(cr_row2, textvariable=self.craft_interval_var, width=5)
+        craft_interval_entry.pack(side="left", padx=(0, 6))
+        craft_interval_entry.bind("<FocusOut>", lambda e: self._save_current_craft_form_to_config())
+
+        self.craft_enable_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            cr_row2,
+            text="Bật thành này",
+            variable=self.craft_enable_var,
+            style="TCheckbutton",
+            command=self._on_craft_enable_toggled,
+        ).pack(side="left", padx=(4, 4))
+
+        cr_row3 = tk.Frame(craft_ctrl_f, bg=CARD)
+        cr_row3.pack(fill="x", pady=(2, 0))
+
+        ttk.Button(cr_row3, text="⚡ Chế tạo ngay", style="Action.TButton", command=self._do_craft_now).pack(side="left", padx=(2, 3))
+
+        self.craft_start_btn = ttk.Button(cr_row3, text="▶️ Bắt đầu", style="Success.TButton", command=self._toggle_craft_running)
+        self.craft_start_btn.pack(side="left", padx=3)
+
+        self.craft_status_lbl = tk.Label(cr_row3, text="", bg=CARD, fg=MUTED, font=("Segoe UI", 9))
+        self.craft_status_lbl.pack(side="left", padx=(6, 4))
+
+        # Bảng trạng thái chế tạo đa thành
+        craft_table_frame = tk.Frame(f_craft, bg=CARD)
+        craft_table_frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+
+        craft_columns = ("sel", "city", "weapon", "amount", "interval", "status")
+        self.craft_tree = ttk.Treeview(craft_table_frame, columns=craft_columns, show="headings", selectmode="browse")
+
+        self.craft_tree.heading("sel", text="Bật")
+        self.craft_tree.heading("city", text="Thành trì")
+        self.craft_tree.heading("weapon", text="Quân Giới")
+        self.craft_tree.heading("amount", text="Số lượng")
+        self.craft_tree.heading("interval", text="Chu kỳ")
+        self.craft_tree.heading("status", text="Trạng thái")
+
+        self.craft_tree.column("sel", width=40, anchor="center")
+        self.craft_tree.column("city", width=110, anchor="w")
+        self.craft_tree.column("weapon", width=150, anchor="w")
+        self.craft_tree.column("amount", width=75, anchor="e")
+        self.craft_tree.column("interval", width=65, anchor="center")
+        self.craft_tree.column("status", width=140, anchor="w")
+
+        craft_scroll = ttk.Scrollbar(craft_table_frame, orient="vertical", command=self.craft_tree.yview)
+        self.craft_tree.configure(yscrollcommand=craft_scroll.set)
+        craft_scroll.pack(side="right", fill="y")
+        self.craft_tree.pack(side="left", fill="both", expand=True)
+
+        self.craft_tree.bind("<ButtonRelease-1>", self._on_craft_tree_click)
+        self.craft_tree.bind("<<TreeviewSelect>>", self._on_craft_tree_select)
+
+    # -------------------------------------------------------------------------
+    # CHẾ TẠO QUÂN GIỚI ĐA THÀNH (ADR-0031)
+    # -------------------------------------------------------------------------
+    def _get_current_craft_city_id(self) -> Optional[int]:
+        if not hasattr(self, "craft_city_combo"):
+            return None
+        sel_idx = self.craft_city_combo.current()
+        cities = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
+        if 0 <= sel_idx < len(cities):
+            return cities[sel_idx].id
+        return None
+
+    def _sync_craft_ui_from_current_city(self):
+        cid = self._get_current_craft_city_id()
+        if not cid:
+            return
+        if cid not in self.craft_configs:
+            self.craft_configs[cid] = CityCraftConfig(city_id=cid, weapon_id=101, weapon_ids=[101], amount="1000", interval="60", enabled=False)
+        cfg = self.craft_configs[cid]
+        self.craft_amount_var.set(str(cfg.amount))
+        self.craft_interval_var.set(str(cfg.interval))
+        self.craft_enable_var.set(bool(cfg.enabled))
+
+        wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
+        if hasattr(self, "craft_weapon_dropdown"):
+            self.craft_weapon_dropdown.set_selected(wids)
+
+    def _save_current_craft_form_to_config(self):
+        cid = self._get_current_craft_city_id()
+        if not cid:
+            return
+        if hasattr(self, "craft_weapon_dropdown"):
+            wids = self.craft_weapon_dropdown.get_selected()
+        elif hasattr(self, "craft_weapon_combo"):
+            w_val = self.craft_weapon_combo.get()
+            try:
+                wid = int(w_val.split(".")[0])
+            except (ValueError, IndexError):
+                wid = 101
+            wids = [wid]
+        else:
+            wids = [101]
+
+        if not wids:
+            wids = [101]
+
+        amount = self.craft_amount_var.get() if hasattr(self, "craft_amount_var") else "1000"
+        interval = self.craft_interval_var.get() if hasattr(self, "craft_interval_var") else "60"
+        enabled = self.craft_enable_var.get() if hasattr(self, "craft_enable_var") else False
+
+        self.craft_configs[cid] = CityCraftConfig(
+            city_id=cid,
+            weapon_id=wids[0],
+            weapon_ids=wids,
+            amount=str(amount),
+            interval=str(interval),
+            enabled=bool(enabled),
+        )
+        self._refresh_craft_tree()
+
+    def _on_craft_city_selected(self, _event=None):
+        self._sync_craft_ui_from_current_city()
+
+    def _on_craft_weapon_dropdown_changed(self, _selected_ids=None):
+        self._save_current_craft_form_to_config()
+
+    def _on_craft_weapon_selected(self, _event=None):
+        self._save_current_craft_form_to_config()
+
+    def _on_craft_enable_toggled(self):
+        self._save_current_craft_form_to_config()
+
+    def _refresh_craft_tree(self):
+        if not hasattr(self, "craft_tree"):
+            return
+        cities = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
+        for c in cities:
+            cid_str = str(c.id)
+            cfg = self.craft_configs.get(c.id, CityCraftConfig(city_id=c.id, enabled=False))
+            check = "☑" if cfg.enabled else "☐"
+            wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
+            if len(wids) == 1:
+                w_display = f"{wids[0]}. {get_weapon_name(wids[0])}"
+            elif len(wids) > 1:
+                first_name = get_weapon_name(wids[0])
+                w_display = f"{len(wids)} loại ({first_name}, ...)"
+            else:
+                w_display = "Chưa chọn"
+            status = self._craft_statuses.get(c.id, "Sẵn sàng" if cfg.enabled else "Chưa kích hoạt")
+            vals = (check, f"{c.name} ({c.id})", w_display, cfg.amount, cfg.interval, status)
+
+            if self.craft_tree.exists(cid_str):
+                self.craft_tree.item(cid_str, values=vals)
+            else:
+                self.craft_tree.insert("", "end", iid=cid_str, values=vals)
+
+    def _on_craft_tree_click(self, event):
+        region = self.craft_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        col = self.craft_tree.identify_column(event.x)
+        row_id = self.craft_tree.identify_row(event.y)
+        if not row_id:
+            return
+        try:
+            cid = int(row_id)
+        except ValueError:
+            return
+
+        if col == "#1":  # Bấm vào cột checkbox
+            cfg = self.craft_configs.get(cid, CityCraftConfig(city_id=cid, enabled=False))
+            cfg.enabled = not cfg.enabled
+            self.craft_configs[cid] = cfg
+            if cid == self._get_current_craft_city_id():
+                self.craft_enable_var.set(cfg.enabled)
+            self._refresh_craft_tree()
+        else:
+            self._select_craft_city_by_id(cid)
+
+    def _on_craft_tree_select(self, _event=None):
+        sel = self.craft_tree.selection()
+        if not sel:
+            return
+        try:
+            cid = int(sel[0])
+            self._select_craft_city_by_id(cid)
+        except ValueError:
+            pass
+
+    def _select_craft_city_by_id(self, target_cid: int):
+        if not hasattr(self, "craft_city_combo"):
+            return
+        cities = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
+        for idx, c in enumerate(cities):
+            if c.id == target_cid:
+                self.craft_city_combo.current(idx)
+                self._sync_craft_ui_from_current_city()
+                break
+
+    def _do_craft_now(self):
+        self._save_current_craft_form_to_config()
+        cid = self._get_current_craft_city_id()
+        if not cid:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành trì cần chế tạo quân giới!")
+            return
+        cfg = self.craft_configs.get(cid)
+        if not cfg:
+            return
+
+        wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
+        if not wids:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 loại quân giới để chế tạo!")
+            return
+
+        amount = int(cfg.amount) if str(cfg.amount).isdigit() else 1000
+        names = [get_weapon_name(wid) for wid in wids]
+        names_str = ", ".join(names[:2]) + (f" (+{len(names)-2})" if len(names) > 2 else "")
+
+        self.craft_status_lbl.config(text=f"Đang gửi lệnh chế tạo {amount}x [{names_str}]...")
+
+        def _worker():
+            crafter = WeaponCrafter(self.gateway)
+            success_count = 0
+            err_msg = ""
+            for wid in wids:
+                success, ret, msg = crafter.craft_once(
+                    cid,
+                    wid,
+                    amount,
+                    notify=lambda m: self._log_global(m),
+                )
+                if success:
+                    success_count += 1
+                else:
+                    err_msg = msg
+                    if ret == 32:  # Thiếu tài nguyên
+                        break
+
+            def _update_ui():
+                if success_count == len(wids):
+                    res_txt = f"Hoàn thành {success_count}/{len(wids)} loại ({time.strftime('%H:%M:%S')})"
+                else:
+                    res_txt = f"Chế tạo {success_count}/{len(wids)} loại. {err_msg}"
+                self.craft_status_lbl.config(text=res_txt)
+                self._craft_statuses[cid] = f"OK {success_count}/{len(wids)} ({time.strftime('%H:%M:%S')})" if success_count > 0 else (err_msg or "Lỗi")
+                self._refresh_craft_tree()
+
+            try:
+                self.after(0, _update_ui)
+            except (RuntimeError, tk.TclError):
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _toggle_craft_running(self):
+        if not self._craft_running:
+            self._save_current_craft_form_to_config()
+            enabled_count = sum(1 for cfg in self.craft_configs.values() if cfg.enabled)
+            if enabled_count == 0:
+                messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 thành cần chế tạo quân giới!")
+                return
+            self._craft_running = True
+            self._craft_stop_event.clear()
+            self.craft_start_btn.configure(text="⏹️ Dừng", style="Danger.TButton")
+            self.craft_status_lbl.config(text=f"Đang chạy chế tạo tự động cho {enabled_count} thành...")
+            self._craft_thread = threading.Thread(target=self._craft_worker_loop, daemon=True)
+            self._craft_thread.start()
+        else:
+            self._craft_running = False
+            self._craft_stop_event.set()
+            self.craft_start_btn.configure(text="▶️ Bắt đầu", style="Success.TButton")
+            self.craft_status_lbl.config(text="Đã dừng chế tạo tự động.")
+
+    def _craft_worker_loop(self):
+        crafter = WeaponCrafter(self.gateway)
+        while self._craft_running and not self._craft_stop_event.is_set():
+            now = time.time()
+            for cid, cfg in list(self.craft_configs.items()):
+                if self._craft_stop_event.is_set():
+                    break
+                if not cfg.enabled:
+                    continue
+                last = self._craft_last_run.get(cid, 0)
+                interval = float(cfg.interval) if str(cfg.interval).isdigit() else 60.0
+                if now - last >= interval:
+                    amount = int(cfg.amount) if str(cfg.amount).isdigit() else 1000
+                    wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
+                    if not wids:
+                        continue
+
+                    def _set_pending(city_id=cid, count=len(wids)):
+                        self._craft_statuses[city_id] = f"Đang chế tạo {count} loại quân giới..."
+                        self._refresh_craft_tree()
+                    try:
+                        self.after(0, _set_pending)
+                    except (RuntimeError, tk.TclError):
+                        pass
+
+                    succ_cnt = 0
+                    last_ret = 0
+                    for wid in wids:
+                        if self._craft_stop_event.is_set():
+                            break
+                        succ, ret, msg = crafter.craft_once(
+                            cid,
+                            wid,
+                            amount,
+                            notify=lambda m: self._log_global(m),
+                        )
+                        last_ret = ret
+                        if succ:
+                            succ_cnt += 1
+                        elif ret == 32:
+                            # Hết tài nguyên trong thành, dừng các loại còn lại trong chu kỳ này
+                            break
+
+                    self._craft_last_run[cid] = time.time()
+                    if succ_cnt == len(wids):
+                        res_status = f"OK {succ_cnt}/{len(wids)} ({time.strftime('%H:%M:%S')})"
+                    elif succ_cnt > 0:
+                        res_status = f"Một phần ({succ_cnt}/{len(wids)})"
+                    else:
+                        res_status = f"Thất bại (ret={last_ret})"
+
+                    def _set_done(city_id=cid, status_str=res_status):
+                        self._craft_statuses[city_id] = status_str
+                        self._refresh_craft_tree()
+                    try:
+                        self.after(0, _set_done)
+                    except (RuntimeError, tk.TclError):
+                        pass
+
+            self._craft_stop_event.wait(1.0)
 
     # -------------------------------------------------------------------------
     # HỒ SƠ CẤU HÌNH TỔNG HỢP (UNIFIED PROFILE CONFIGURATION)
@@ -1054,6 +1492,22 @@ class Dashboard(tk.Tk):
                         "name": name,
                         "enabled": vals[0] == "☑",
                     })
+
+        # Thu thập Chế Tạo Quân Giới (ADR-0031)
+        if hasattr(self, "_save_current_craft_form_to_config"):
+            self._save_current_craft_form_to_config()
+        craft_cities = {}
+        for cid, cfg in getattr(self, "craft_configs", {}).items():
+            wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
+            craft_cities[str(cid)] = {
+                "city_id": cid,
+                "weapon_id": cfg.weapon_id,
+                "weapon_ids": list(wids),
+                "amount": str(cfg.amount),
+                "interval": str(cfg.interval),
+                "enabled": bool(cfg.enabled),
+            }
+        profile["crafting"] = {"cities": craft_cities}
 
         return profile
 
@@ -1474,6 +1928,24 @@ class Dashboard(tk.Tk):
                 except Exception:
                     pass
             loaded_sections.append("Chiến Trường")
+
+        # 9. Chế Tạo Quân Giới (ADR-0031)
+        craft_raw = data.get("crafting") or data.get("weapon_crafting")
+        if craft_raw and isinstance(craft_raw, dict):
+            raw_cities = craft_raw.get("cities")
+            if isinstance(raw_cities, dict):
+                for cid_str, cinfo in raw_cities.items():
+                    if isinstance(cinfo, dict):
+                        try:
+                            cid = int(cinfo.get("city_id") or cid_str)
+                            self.craft_configs[cid] = CityCraftConfig.from_dict(cinfo)
+                        except Exception:
+                            pass
+                if hasattr(self, "_sync_craft_ui_from_current_city"):
+                    self._sync_craft_ui_from_current_city()
+                if hasattr(self, "_refresh_craft_tree"):
+                    self._refresh_craft_tree()
+                loaded_sections.append("Chế Tạo Quân Giới")
 
         return loaded_sections
 
@@ -5819,6 +6291,16 @@ class Dashboard(tk.Tk):
                 self.mo_city_combo.current(0)
             self._refresh_morale_generals()
 
+        if hasattr(self, "craft_city_combo"):
+            self.craft_city_combo["values"] = city_items
+            if not self.craft_city_combo.get() or self.craft_city_combo.get() not in city_items:
+                if city_items:
+                    self.craft_city_combo.current(0)
+            if hasattr(self, "_sync_craft_ui_from_current_city"):
+                self._sync_craft_ui_from_current_city()
+            if hasattr(self, "_refresh_craft_tree"):
+                self._refresh_craft_tree()
+
         if all_base_items:
             self._on_tp_city_selected()
         if city_items:
@@ -6492,6 +6974,9 @@ class Dashboard(tk.Tk):
         try:
             if hasattr(self, "_morale_stop_event") and self._morale_stop_event:
                 self._morale_stop_event.set()
+            if hasattr(self, "_craft_stop_event") and self._craft_stop_event:
+                self._craft_stop_event.set()
+                self._craft_running = False
         except Exception:
             pass
         self._res_monitor_running = False

@@ -422,6 +422,67 @@ class CombatProfile:
 
 
 @dataclass
+class CityCraftConfig:
+    city_id: int = 0
+    weapon_id: int = 101  # Tương thích ngược: quân giới đầu tiên
+    weapon_ids: list[int] = field(default_factory=lambda: [101])  # Danh sách quân giới được chọn chế tạo
+    amount: str = "1000"
+    interval: str = "60"
+    enabled: bool = False
+
+    def __post_init__(self):
+        # Đồng bộ giữa weapon_id và weapon_ids
+        if not self.weapon_ids and self.weapon_id:
+            self.weapon_ids = [self.weapon_id]
+        elif self.weapon_ids:
+            if self.weapon_id != 101 and self.weapon_id not in self.weapon_ids and self.weapon_ids == [101]:
+                self.weapon_ids = [self.weapon_id]
+            else:
+                self.weapon_id = self.weapon_ids[0]
+        elif not self.weapon_ids:
+            self.weapon_ids = [101]
+            self.weapon_id = 101
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CityCraftConfig":
+        if not isinstance(data, dict):
+            return cls()
+        raw_wids = data.get("weapon_ids")
+        if raw_wids and isinstance(raw_wids, list):
+            wids = [int(x) for x in raw_wids if str(x).isdigit()]
+            wid = wids[0] if wids else int(data.get("weapon_id", 101))
+            if not wids:
+                wids = [wid]
+        else:
+            wid = int(data.get("weapon_id", 101))
+            wids = [wid]
+        return cls(
+            city_id=int(data.get("city_id", 0)),
+            weapon_id=wid,
+            weapon_ids=wids,
+            amount=str(data.get("amount", "1000")),
+            interval=str(data.get("interval", "60")),
+            enabled=bool(data.get("enabled", False)),
+        )
+
+
+@dataclass
+class CraftProfile:
+    cities: dict[str, CityCraftConfig] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CraftProfile":
+        if not isinstance(data, dict):
+            return cls()
+        cities_map = {}
+        raw_cities = data.get("cities")
+        if isinstance(raw_cities, dict):
+            for cid_str, cinfo in raw_cities.items():
+                cities_map[str(cid_str)] = CityCraftConfig.from_dict(cinfo)
+        return cls(cities=cities_map)
+
+
+@dataclass
 class Profile:
     version: int = 1
     building: BuildingProfile = field(default_factory=BuildingProfile)
@@ -433,6 +494,7 @@ class Profile:
     logistics: LogisticsProfile = field(default_factory=LogisticsProfile)
     ditrai: DiTraiProfile = field(default_factory=DiTraiProfile)
     combat: CombatProfile = field(default_factory=CombatProfile)
+    crafting: CraftProfile = field(default_factory=CraftProfile)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -447,6 +509,12 @@ class Profile:
             data["binh_man"]["bases"] = {
                 k: asdict(v) if not isinstance(v, dict) else v
                 for k, v in self.binh_man.bases.items()
+            }
+        # Chuyển cities của crafting thành dict thuần
+        if "crafting" in data and "cities" in data["crafting"]:
+            data["crafting"]["cities"] = {
+                k: asdict(v) if not isinstance(v, dict) else v
+                for k, v in self.crafting.cities.items()
             }
         return data
 
@@ -466,6 +534,8 @@ class Profile:
         if "techs" in data and "techs" not in res_raw:
             res_raw["techs"] = data["techs"]
 
+        craft_raw = data.get("crafting") or data.get("weapon_crafting") or {}
+
         return cls(
             version=int(data.get("version", 1)),
             building=BuildingProfile.from_dict(bld_raw),
@@ -477,6 +547,7 @@ class Profile:
             logistics=LogisticsProfile.from_dict(data.get("logistics", {})),
             ditrai=DiTraiProfile.from_dict(data.get("ditrai", {})),
             combat=CombatProfile.from_dict(data.get("combat", {})),
+            crafting=CraftProfile.from_dict(craft_raw),
         )
 
 
