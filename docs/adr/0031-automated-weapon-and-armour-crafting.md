@@ -39,7 +39,7 @@ Trong [`linhvuong/profile.py`](../../linhvuong/profile.py) và [`linhvuong/dashb
   - `weapon_ids`: Danh sách các mã quân giới được chọn chế tạo đồng thời tại thành này (hỗ trợ chọn nhiều loại qua `MultiSelectDropdown` có phân nhóm danh mục: Binh khí, Cung nỗ, Khôi giáp, Chiến mã, Xe ném đá).
   - `weapon_id`: Mã quân giới đầu tiên (giữ tính tương thích ngược tuyệt đối).
   - `amount`: Số lượng chế tạo mỗi mẻ.
-  - `interval`: Chu kỳ lặp lại (giây).
+  - `interval`: Chu kỳ lặp lại (phút).
   - `enabled`: Trạng thái kích hoạt.
 - Tích hợp trực quan tại tầng dưới của Tab Tổng quan (Tab 5):
   - Bố cục **2 cột song song**:

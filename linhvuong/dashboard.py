@@ -1013,8 +1013,8 @@ class Dashboard(tk.Tk):
         craft_amount_entry.pack(side="left", padx=(0, 6))
         craft_amount_entry.bind("<FocusOut>", lambda e: self._save_current_craft_form_to_config())
 
-        tk.Label(cr_row2, text="Chu kỳ (s):", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(4, 2))
-        self.craft_interval_var = tk.StringVar(value="60")
+        tk.Label(cr_row2, text="Chu kỳ (phút):", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(4, 2))
+        self.craft_interval_var = tk.StringVar(value="5")
         craft_interval_entry = ttk.Entry(cr_row2, textvariable=self.craft_interval_var, width=5)
         craft_interval_entry.pack(side="left", padx=(0, 6))
         craft_interval_entry.bind("<FocusOut>", lambda e: self._save_current_craft_form_to_config())
@@ -1050,14 +1050,14 @@ class Dashboard(tk.Tk):
         self.craft_tree.heading("city", text="Thành trì")
         self.craft_tree.heading("weapon", text="Quân Giới")
         self.craft_tree.heading("amount", text="Số lượng")
-        self.craft_tree.heading("interval", text="Chu kỳ")
+        self.craft_tree.heading("interval", text="Chu kỳ (phút)")
         self.craft_tree.heading("status", text="Trạng thái")
 
         self.craft_tree.column("sel", width=40, anchor="center")
         self.craft_tree.column("city", width=110, anchor="w")
         self.craft_tree.column("weapon", width=150, anchor="w")
         self.craft_tree.column("amount", width=75, anchor="e")
-        self.craft_tree.column("interval", width=65, anchor="center")
+        self.craft_tree.column("interval", width=80, anchor="center")
         self.craft_tree.column("status", width=140, anchor="w")
 
         craft_scroll = ttk.Scrollbar(craft_table_frame, orient="vertical", command=self.craft_tree.yview)
@@ -1085,7 +1085,7 @@ class Dashboard(tk.Tk):
         if not cid:
             return
         if cid not in self.craft_configs:
-            self.craft_configs[cid] = CityCraftConfig(city_id=cid, weapon_id=101, weapon_ids=[101], amount="1000", interval="60", enabled=False)
+            self.craft_configs[cid] = CityCraftConfig(city_id=cid, weapon_id=101, weapon_ids=[101], amount="1000", interval="5", enabled=False)
         cfg = self.craft_configs[cid]
         self.craft_amount_var.set(str(cfg.amount))
         self.craft_interval_var.set(str(cfg.interval))
@@ -1115,7 +1115,7 @@ class Dashboard(tk.Tk):
             wids = [101]
 
         amount = self.craft_amount_var.get() if hasattr(self, "craft_amount_var") else "1000"
-        interval = self.craft_interval_var.get() if hasattr(self, "craft_interval_var") else "60"
+        interval = self.craft_interval_var.get() if hasattr(self, "craft_interval_var") else "5"
         enabled = self.craft_enable_var.get() if hasattr(self, "craft_enable_var") else False
 
         self.craft_configs[cid] = CityCraftConfig(
@@ -1291,8 +1291,11 @@ class Dashboard(tk.Tk):
                 if not cfg.enabled:
                     continue
                 last = self._craft_last_run.get(cid, 0)
-                interval = float(cfg.interval) if str(cfg.interval).isdigit() else 60.0
-                if now - last >= interval:
+                try:
+                    interval_sec = float(cfg.interval) * 60.0
+                except (ValueError, TypeError):
+                    interval_sec = 300.0
+                if now - last >= interval_sec:
                     amount = int(cfg.amount) if str(cfg.amount).isdigit() else 1000
                     wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
                     if not wids:

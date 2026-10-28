@@ -2412,8 +2412,10 @@ def test_dashboard_crafting_ui_and_actions():
         assert hasattr(dash, "craft_weapon_combo")
         assert hasattr(dash, "craft_amount_var")
         assert hasattr(dash, "craft_interval_var")
+        assert dash.craft_interval_var.get() == "5"
         assert hasattr(dash, "craft_enable_var")
         assert hasattr(dash, "craft_tree")
+        assert dash.craft_tree.heading("interval")["text"] == "Chu kỳ (phút)"
 
         # Kiểm tra danh sách vũ khí trong dropdown có 67 loại
         vals = dash.craft_weapon_combo["values"]
@@ -2428,13 +2430,13 @@ def test_dashboard_crafting_ui_and_actions():
         first_cid = int(children[0])
         dash._select_craft_city_by_id(first_cid)
 
-        # Chỉnh cấu hình: chọn Cung nỗ (201), số lượng 2000, chu kỳ 45s, bật
+        # Chỉnh cấu hình: chọn Cung nỗ (201), số lượng 2000, chu kỳ 15 phút, bật
         for idx, item in enumerate(dash.craft_weapon_combo["values"]):
             if item.startswith("201."):
                 dash.craft_weapon_combo.current(idx)
                 break
         dash.craft_amount_var.set("2000")
-        dash.craft_interval_var.set("45")
+        dash.craft_interval_var.set("15")
         dash.craft_enable_var.set(True)
         dash._save_current_craft_form_to_config()
 
@@ -2442,7 +2444,7 @@ def test_dashboard_crafting_ui_and_actions():
         cfg = dash.craft_configs[first_cid]
         assert cfg.weapon_id == 201
         assert cfg.amount == "2000"
-        assert cfg.interval == "45"
+        assert cfg.interval == "15"
         assert cfg.enabled is True
 
         # Kiểm tra hiển thị trên treeview
@@ -2450,7 +2452,7 @@ def test_dashboard_crafting_ui_and_actions():
         assert row_vals[0] == "☑"
         assert "Thiết thai cung" in row_vals[2]
         assert row_vals[3] == "2000"
-        assert row_vals[4] == "45"
+        assert row_vals[4] == "15"
     finally:
         dash.destroy()
 

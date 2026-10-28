@@ -427,7 +427,7 @@ class CityCraftConfig:
     weapon_id: int = 101  # Tương thích ngược: quân giới đầu tiên
     weapon_ids: list[int] = field(default_factory=lambda: [101])  # Danh sách quân giới được chọn chế tạo
     amount: str = "1000"
-    interval: str = "60"
+    interval: str = "5"  # Chu kỳ lặp lại (phút)
     enabled: bool = False
 
     def __post_init__(self):
@@ -461,7 +461,7 @@ class CityCraftConfig:
             weapon_id=wid,
             weapon_ids=wids,
             amount=str(data.get("amount", "1000")),
-            interval=str(data.get("interval", "60")),
+            interval=str(data.get("interval", "5")),
             enabled=bool(data.get("enabled", False)),
         )
 
