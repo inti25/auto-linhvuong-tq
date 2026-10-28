@@ -68,6 +68,12 @@ BG, CARD, FG, MUTED, ACCENT, SUCCESS, DANGER = (
 )
 ROLE_TEXT = {"van": "Văn quan", "vo": "Võ tướng"}
 
+# Cấu hình Cắt Tỉa Nhật Ký Giao Diện (ADR-0030)
+DEFAULT_MAX_LOG_LINES = 500  # Ngưỡng dòng tối đa cho các tab tác vụ thông thường
+BATCH_TRIM_LINES = 100  # Số dòng cắt tỉa theo khối khi chạm ngưỡng
+COMBAT_MAX_LOG_LINES = 300  # Ngưỡng dòng tối đa cho tab Chiến Trường
+COMBAT_TRIM_LINES = 60  # Số dòng cắt tỉa theo khối cho tab Chiến Trường
+
 
 class MultiSelectDropdown(ttk.Menubutton):
     """Dropdown chọn nhiều loại Man với checkboxes trong tk.Menu."""
@@ -1629,11 +1635,15 @@ class Dashboard(tk.Tk):
         f_bottom = ttk.LabelFrame(body, text="Nhật ký chiến dịch Thảo Phạt", style="Card.TLabelframe")
         f_bottom.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
 
+        log_bar = tk.Frame(f_bottom, bg=CARD)
+        log_bar.pack(side="top", fill="x", padx=4, pady=(2, 2))
+        ttk.Button(log_bar, text="🗑️ Xóa", style="Action.TButton", command=self._tp_clear_log).pack(side="right")
+
         log_scroll = ttk.Scrollbar(f_bottom, orient="vertical")
         self.tp_log_text = tk.Text(f_bottom, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0, yscrollcommand=log_scroll.set)
         log_scroll.config(command=self.tp_log_text.yview)
-        self.tp_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
-        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
+        self.tp_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=(0, 4))
+        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=(0, 4))
 
     def _on_tp_city_selected(self, _event=None):
         sel_idx = self.tp_city_combo.current()
@@ -1825,18 +1835,49 @@ class Dashboard(tk.Tk):
             self._tp_running = False
             self.tp_start_btn.configure(text="▶️ Bắt đầu Thảo Phạt", style="Success.TButton")
 
-    def _append_text_buffer(self, widget: tk.Text, line: str, max_lines: int = 1000):
-        """Chèn dòng mới vào widget Text và tự động cắt tỉa các dòng cũ nhất khi vượt max_lines."""
-        if not widget or not widget.winfo_exists():
+    def _append_text_buffer(
+        self,
+        widget: tk.Text,
+        line: str,
+        max_lines: int = DEFAULT_MAX_LOG_LINES,
+        trim_batch: int = BATCH_TRIM_LINES,
+    ):
+        """Chèn dòng mới vào widget Text và tự động cắt tỉa theo khối khi vượt max_lines.
+
+        Tuân thủ ADR-0030:
+        - Cắt tỉa theo khối (batch trimming) thay vì cắt từng dòng lẻ tẻ nhằm tránh làm chậm giao diện.
+        - Tự động cuộn xuống dòng cuối cùng (widget.see("end")).
+        - Đảm bảo an toàn luồng nếu được gọi từ background thread.
+        """
+        if not widget:
             return
-        widget.insert("end", line)
+
+        def _do_append():
+            if not widget.winfo_exists():
+                return
+            widget.insert("end", line)
+            try:
+                raw_idx = int(widget.index("end-1c").split(".")[0])
+                line_count = (raw_idx - 1) if widget.get("end-2c", "end-1c") == "\n" else raw_idx
+                if line_count > max_lines:
+                    target_lines = max(1, max_lines - trim_batch)
+                    lines_to_delete = line_count - target_lines
+                    widget.delete("1.0", f"{lines_to_delete + 1}.0")
+            except Exception:
+                pass
+            try:
+                widget.see("end")
+            except Exception:
+                pass
+
         try:
-            line_count = int(widget.index("end-1c").split(".")[0])
-            if line_count > max_lines:
-                diff = line_count - max_lines
-                widget.delete("1.0", f"{diff + 1}.0")
+            if threading.current_thread() is threading.main_thread():
+                _do_append()
+            else:
+                self.after(0, _do_append)
         except Exception:
-            pass
+            _do_append()
+
     def _log_global(self, msg: str):
         """Ghi thông báo hệ thống tới tất cả các tab log đang hiển thị."""
         def _do_append():
@@ -1863,6 +1904,11 @@ class Dashboard(tk.Tk):
 
     def _append_tp_log(self, msg: str):
         self._append_text_buffer(self.tp_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+
+    def _tp_clear_log(self):
+        """Xóa trắng nội dung khung nhật ký Thảo Phạt."""
+        if hasattr(self, "tp_log_text") and self.tp_log_text:
+            self.tp_log_text.delete("1.0", "end")
 
     # =========================================================================
     # TAB 3: GỌI MAN & VONG LINH
@@ -1989,11 +2035,15 @@ class Dashboard(tk.Tk):
         f_bottom = ttk.LabelFrame(body, text="Nhật ký Gọi Man & Vong Linh", style="Card.TLabelframe")
         f_bottom.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
 
+        log_bar = tk.Frame(f_bottom, bg=CARD)
+        log_bar.pack(side="top", fill="x", padx=4, pady=(2, 2))
+        ttk.Button(log_bar, text="🗑️ Xóa", style="Action.TButton", command=self._gd_clear_log).pack(side="right")
+
         log_scroll = ttk.Scrollbar(f_bottom, orient="vertical")
         self.gd_log_text = tk.Text(f_bottom, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0, yscrollcommand=log_scroll.set)
         log_scroll.config(command=self.gd_log_text.yview)
-        self.gd_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
-        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
+        self.gd_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=(0, 4))
+        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=(0, 4))
 
     def _update_gd_gen_count_label(self):
         if not hasattr(self, "gd_gen_count_lbl") or not hasattr(self, "gd_gen_tree"):
@@ -2059,6 +2109,11 @@ class Dashboard(tk.Tk):
 
     def _append_gd_log(self, msg: str):
         self._append_text_buffer(self.gd_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+
+    def _gd_clear_log(self):
+        """Xóa trắng nội dung khung nhật ký Gọi Man."""
+        if hasattr(self, "gd_log_text") and self.gd_log_text:
+            self.gd_log_text.delete("1.0", "end")
 
     def _get_gd_target_type(self) -> int:
         if hasattr(self, "gd_target_dropdown"):
@@ -2513,11 +2568,16 @@ class Dashboard(tk.Tk):
         # 3. Khung nhật ký Bình Man
         f_log = ttk.LabelFrame(col_right, text="Nhật ký Bình Man", style="Card.TLabelframe")
         f_log.grid(row=2, column=0, sticky="nsew", pady=(0, 0))
+
+        log_bar = tk.Frame(f_log, bg=CARD)
+        log_bar.pack(side="top", fill="x", padx=4, pady=(2, 2))
+        ttk.Button(log_bar, text="🗑️ Xóa", style="Action.TButton", command=self._bm_clear_log).pack(side="right")
+
         log_scroll = ttk.Scrollbar(f_log, orient="vertical")
         self.bm_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0, yscrollcommand=log_scroll.set)
         log_scroll.config(command=self.bm_log_text.yview)
-        self.bm_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
-        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
+        self.bm_log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=(0, 4))
+        log_scroll.pack(side="right", fill="y", padx=(0, 4), pady=(0, 4))
 
     def _update_bm_gen_count_label(self):
         if not hasattr(self, "bm_gen_count_lbl") or not hasattr(self, "bm_gen_tree"):
@@ -2567,6 +2627,11 @@ class Dashboard(tk.Tk):
 
     def _append_bm_log(self, msg: str):
         self._append_text_buffer(self.bm_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+
+    def _bm_clear_log(self):
+        """Xóa trắng nội dung khung nhật ký Bình Man."""
+        if hasattr(self, "bm_log_text") and self.bm_log_text:
+            self.bm_log_text.delete("1.0", "end")
 
     def _update_bm_mode_ui_states(self, mode: int):
         if mode == 2:  # Chế độ 2: Xuất quân thẳng từ Thành
@@ -3839,6 +3904,11 @@ class Dashboard(tk.Tk):
         line = f"[{time.strftime('%H:%M:%S')}] {msg}\n"
         for w in list(self._active_log_texts):
             self._append_text_buffer(w, line)
+
+    def _logis_clear_log(self):
+        """Xóa trắng nội dung khung nhật ký Hậu Cần & Điều Chuyển."""
+        if hasattr(self, "logis_log_text") and self.logis_log_text:
+            self.logis_log_text.delete("1.0", "end")
 
     def _open_log_window(self):
         if hasattr(self, "_log_win") and self._log_win and self._log_win.winfo_exists():
@@ -5252,6 +5322,9 @@ class Dashboard(tk.Tk):
         # Log chung cho Tab 6
         f_log_tab6 = tk.Frame(f_logis, bg=CARD)
         f_log_tab6.pack(fill="both", expand=True, padx=6, pady=6)
+        log_bar = tk.Frame(f_log_tab6, bg=CARD)
+        log_bar.pack(side="top", fill="x", pady=(0, 2))
+        ttk.Button(log_bar, text="🗑️ Xóa", style="Action.TButton", command=self._logis_clear_log).pack(side="right")
         self.logis_log_text = tk.Text(f_log_tab6, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0)
         self.logis_log_text.pack(fill="both", expand=True)
 
@@ -6235,10 +6308,13 @@ class Dashboard(tk.Tk):
 
     def _append_bt_log(self, msg: str):
         if hasattr(self, "bt_log_text") and self.bt_log_text:
-            def _insert():
-                self.bt_log_text.insert("end", msg + "\n")
-                self.bt_log_text.see("end")
-            self.after(0, _insert)
+            line = msg if msg.endswith("\n") else (msg + "\n")
+            self._append_text_buffer(
+                self.bt_log_text,
+                line,
+                max_lines=COMBAT_MAX_LOG_LINES,
+                trim_batch=COMBAT_TRIM_LINES,
+            )
 
     def _bt_clear_log(self):
         if hasattr(self, "bt_log_text"):

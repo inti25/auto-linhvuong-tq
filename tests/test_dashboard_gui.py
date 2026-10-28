@@ -2326,6 +2326,83 @@ def test_dashboard_multi_base_binhman_legacy_backward_compatibility(tmp_path):
         dash.destroy()
 
 
+def test_dashboard_append_text_buffer_batch_pruning():
+    """Kiểm tra cơ chế cắt tỉa theo khối (batch trimming) của _append_text_buffer (ADR-0030)."""
+    dash = safe_dashboard()
+    try:
+        txt = tk.Text(dash)
+        def _get_line_count(w):
+            raw = int(w.index("end-1c").split(".")[0])
+            return (raw - 1) if w.get("end-2c", "end-1c") == "\n" else raw
+
+        # Ngưỡng 10 dòng, mỗi lần cắt tỉa xóa 4 dòng
+        for i in range(1, 11):
+            dash._append_text_buffer(txt, f"Dòng {i}\n", max_lines=10, trim_batch=4)
+        
+        # Đang có đúng 10 dòng
+        assert _get_line_count(txt) == 10
+        assert "Dòng 1\n" in txt.get("1.0", "end")
+
+        # Thêm dòng 11 -> kích hoạt batch trim (xóa 5 dòng đầu)
+        dash._append_text_buffer(txt, "Dòng 11\n", max_lines=10, trim_batch=4)
+        assert _get_line_count(txt) == 6
+        content = txt.get("1.0", "end")
+        assert "Dòng 1\n" not in content
+        assert "Dòng 5\n" not in content
+        assert "Dòng 6\n" in content
+        assert "Dòng 11\n" in content
+
+        # Thêm 4 dòng tiếp theo (12, 13, 14, 15) -> tổng cộng 10 dòng, không bị cắt tỉa
+        for i in range(12, 16):
+            dash._append_text_buffer(txt, f"Dòng {i}\n", max_lines=10, trim_batch=4)
+        assert _get_line_count(txt) == 10
+
+        # Thêm dòng 16 -> chạm 11 dòng -> tiếp tục batch trim
+        dash._append_text_buffer(txt, "Dòng 16\n", max_lines=10, trim_batch=4)
+        assert _get_line_count(txt) == 6
+        assert "Dòng 16\n" in txt.get("1.0", "end")
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_combat_log_and_manual_clear_buttons():
+    """Kiểm tra ghi log chiến trường qua _append_text_buffer và các nút xóa trắng thủ công (ADR-0030)."""
+    dash = safe_dashboard()
+    try:
+        # Ghi log vào từng tab
+        dash._append_tp_log("Log Thảo Phạt 1")
+        dash._append_gd_log("Log Gọi Man 1")
+        dash._append_bm_log("Log Bình Man 1")
+        dash._append_logis_log("Log Hậu Cần 1")
+        dash._append_bt_log("Log Chiến Trường 1")
+
+        # Kiểm tra nội dung xuất hiện
+        assert "Log Thảo Phạt 1" in dash.tp_log_text.get("1.0", "end")
+        assert "Log Gọi Man 1" in dash.gd_log_text.get("1.0", "end")
+        assert "Log Bình Man 1" in dash.bm_log_text.get("1.0", "end")
+        assert "Log Hậu Cần 1" in dash.logis_log_text.get("1.0", "end")
+        assert "Log Chiến Trường 1" in dash.bt_log_text.get("1.0", "end")
+
+        # Thực hiện xóa trắng thủ công
+        dash._tp_clear_log()
+        assert dash.tp_log_text.get("1.0", "end-1c") == ""
+
+        dash._gd_clear_log()
+        assert dash.gd_log_text.get("1.0", "end-1c") == ""
+
+        dash._bm_clear_log()
+        assert dash.bm_log_text.get("1.0", "end-1c") == ""
+
+        dash._logis_clear_log()
+        assert dash.logis_log_text.get("1.0", "end-1c") == ""
+
+        dash._bt_clear_log()
+        assert dash.bt_log_text.get("1.0", "end-1c") == ""
+    finally:
+        dash.destroy()
+
+
+
 
 
 

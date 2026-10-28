@@ -1,15 +1,21 @@
 """Unit tests cho hệ thống logging tập trung, xoay vòng file và thu thập vết lỗi (ADR-0015)."""
 
 import logging
+import os
 from pathlib import Path
 import tempfile
+import time
 import tkinter as tk
 import unittest
 from unittest.mock import MagicMock, patch
 
 from linhvuong.gateway import GatewayClient
 from linhvuong.logger import (
+    DEFAULT_BACKUP_COUNT,
+    DEFAULT_MAX_AGE_DAYS,
+    DEFAULT_MAX_BYTES,
     SanitizingFilter,
+    clean_old_logs,
     get_log_file_path,
     get_logger,
     open_logs_directory,
@@ -150,24 +156,83 @@ class TestLogger(unittest.TestCase):
         self.assertIn("Máy chủ trả về mã lỗi ret=39", content)
         self.assertIn("OPT.ashx?id=65", content)
 
+    def test_default_rotation_parameters(self):
+        """Kiểm tra cấu hình xoay vòng mặc định 2MB và 3 bản sao theo ADR-0030."""
+        self.assertEqual(DEFAULT_MAX_BYTES, 2 * 1024 * 1024)
+        self.assertEqual(DEFAULT_BACKUP_COUNT, 3)
+        self.assertEqual(DEFAULT_MAX_AGE_DAYS, 7)
+
+        logger = setup_logger(
+            username="rot_test",
+            server_id=53,
+            log_dir=self.log_dir,
+            console=False,
+        )
+        file_handlers = [h for h in logger.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
+        self.assertEqual(len(file_handlers), 1)
+        fh = file_handlers[0]
+        self.assertEqual(fh.maxBytes, 2 * 1024 * 1024)
+        self.assertEqual(fh.backupCount, 3)
+
+    def test_clean_old_logs(self):
+        """Kiểm tra clean_old_logs chỉ xóa tệp log quá hạn và giữ lại tệp mới / tệp khác."""
+        now = time.time()
+        # 1. Tệp log cũ 10 ngày
+        old_log = self.log_dir / "bot_old_S53.log"
+        old_log.write_text("old content", encoding="utf-8")
+        os.utime(old_log, (now - 10 * 86400, now - 10 * 86400))
+
+        # 2. Tệp backup xoay vòng cũ 8 ngày
+        old_bak = self.log_dir / "bot_old_S53.log.1"
+        old_bak.write_text("old bak content", encoding="utf-8")
+        os.utime(old_bak, (now - 8 * 86400, now - 8 * 86400))
+
+        # 3. Tệp log mới 1 ngày
+        new_log = self.log_dir / "bot_new_S53.log"
+        new_log.write_text("new content", encoding="utf-8")
+        os.utime(new_log, (now - 1 * 86400, now - 1 * 86400))
+
+        # 4. Tệp không phải đuôi log (dù cũ cũng không xóa)
+        other_file = self.log_dir / "notes.txt"
+        other_file.write_text("important notes", encoding="utf-8")
+        os.utime(other_file, (now - 15 * 86400, now - 15 * 86400))
+
+        deleted = clean_old_logs(self.log_dir, max_age_days=7)
+        self.assertEqual(deleted, 2)
+        self.assertFalse(old_log.exists())
+        self.assertFalse(old_bak.exists())
+        self.assertTrue(new_log.exists())
+        self.assertTrue(other_file.exists())
+
+    def test_setup_logger_invokes_cleanup(self):
+        """Kiểm tra setup_logger tự động kích hoạt dọn dẹp log quá hạn khi khởi động."""
+        now = time.time()
+        stale_log = self.log_dir / "bot_stale_S53.log"
+        stale_log.write_text("stale", encoding="utf-8")
+        os.utime(stale_log, (now - 12 * 86400, now - 12 * 86400))
+
+        setup_logger(username="user1", server_id=53, log_dir=self.log_dir, console=False)
+        self.assertFalse(stale_log.exists())
+
     def test_text_buffer_trimming_to_max_lines(self):
         root = tk.Tk()
         root.withdraw()
         try:
             txt = tk.Text(root)
-            # Giả lập hàm _append_text_buffer
-            def append_buf(widget, line, max_lines=10):
+            # Giả lập hàm _append_text_buffer theo cơ chế batch trimming (ADR-0030)
+            def append_buf(widget, line, max_lines=10, trim_batch=4):
                 widget.insert("end", line)
                 try:
                     line_count = int(widget.index("end-1c").split(".")[0])
                     if line_count > max_lines:
-                        diff = line_count - max_lines
-                        widget.delete("1.0", f"{diff + 1}.0")
+                        target_lines = max(1, max_lines - trim_batch)
+                        lines_to_delete = line_count - target_lines
+                        widget.delete("1.0", f"{lines_to_delete + 1}.0")
                 except Exception:
                     pass
 
             for i in range(25):
-                append_buf(txt, f"Dòng thứ {i + 1}\n", max_lines=10)
+                append_buf(txt, f"Dòng thứ {i + 1}\n", max_lines=10, trim_batch=4)
 
             line_count = int(txt.index("end-1c").split(".")[0])
             self.assertLessEqual(line_count, 11)

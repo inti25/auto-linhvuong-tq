@@ -218,6 +218,14 @@ _Avoid_: Reset thứ tự, xếp lại theo server, auto-sort mặc định
 Bản ghi tuần tự các sự kiện, hành động và kết quả thực thi của các phân hệ tự động hóa (Thảo Phạt, Bình Man, Gọi Dân, Xây Dựng, Nghiên Cứu, Hậu Cần) theo mốc thời gian thực.
 _Avoid_: File log thô, console output
 
+**Cắt Tỉa Nhật Ký**:
+Cơ chế tự động giải phóng bộ nhớ bằng cách xóa một khối dòng nhật ký cũ nhất (batch pruning) trên giao diện khi đạt ngưỡng tối đa, và xoay vòng hoặc thanh lý các tệp log đã cũ trên ổ đĩa nhằm chống tràn RAM và làm chậm ứng dụng khi chạy dài hạn.
+_Avoid_: Xóa log thủ công, purge log, trim log lẻ tẻ
+
+**Ngưỡng Nhật Ký**:
+Giới hạn số dòng tối đa trên khung hiển thị giao diện (mặc định 500 dòng cho tác vụ thường, 300 dòng cho chiến trường) hoặc dung lượng tệp log trên ổ đĩa (mặc định 2MB/tệp, giữ 3 bản sao và lưu giữ tối đa 7 ngày) trước khi kích hoạt Cắt Tỉa Nhật Ký.
+_Avoid_: Max lines, log limit, dung lượng tối đa
+
 **Vết Lỗi Thực Thi**:
 Thông tin ngữ cảnh chi tiết (mã phản hồi máy chủ, tham số lệnh, vết ngăn xếp ngoại lệ) được ghi nhận khi phát sinh sự cố trong tiến trình tự động hóa nhằm phục vụ việc khoanh vùng nguyên nhân khi chạy dài hạn.
 _Avoid_: Crash dump, log lỗi

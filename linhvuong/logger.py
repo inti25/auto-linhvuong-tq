@@ -1,8 +1,9 @@
 """Module cấu hình Logging tập trung cho Linh Vương.
 
-Tuân thủ ADR-0015:
+Tuân thủ ADR-0015 và ADR-0030:
 - Lưu vết log vào thư mục logs/, phân tách theo tài khoản: logs/bot_{username}_S{server_id}.log.
-- Tự động xoay vòng với RotatingFileHandler (10MB/file, giữ 5 bản sao xoay vòng).
+- Tự động xoay vòng với RotatingFileHandler (2MB/file, giữ 3 bản sao xoay vòng, tối đa ~6MB/tài khoản).
+- Tự động thanh lý các tệp log lịch sử cũ quá 7 ngày với clean_old_logs().
 - Bộ lọc SanitizingFilter tự động che mờ mật khẩu game, mật khẩu proxy và token nhạy cảm.
 - Định dạng chuẩn thời gian YYYY-MM-DD HH:MM:SS kèm tên module và level.
 - Hàm open_logs_directory() mở thư mục log trong trình quản lý tệp tin của hệ điều hành.
@@ -15,11 +16,16 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Optional
 
 DEFAULT_LOG_DIR = Path("logs")
 LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+DEFAULT_MAX_BYTES = 2 * 1024 * 1024  # 2MB/tệp theo ADR-0030
+DEFAULT_BACKUP_COUNT = 3  # Giữ tối đa 3 bản sao (~6MB/tài khoản)
+DEFAULT_MAX_AGE_DAYS = 7  # Tự động dọn dẹp nhật ký cũ quá 7 ngày
 
 # Regex nhận diện các thông tin nhạy cảm cần che mờ
 SENSITIVE_PATTERNS = [
@@ -68,24 +74,68 @@ def get_log_file_path(username: str, server_id: int, log_dir: Optional[Path] = N
     return folder / f"bot_{clean_user}_S{server_id}.log"
 
 
+def clean_old_logs(
+    log_dir: Optional[Path] = None,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> int:
+    """Quét và xóa các tệp nhật ký đã cũ quá max_age_days trong thư mục log.
+
+    Tuân thủ ADR-0030:
+    - Quét các tệp *.log và các bản sao xoay vòng *.log.* trong thư mục log_dir.
+    - So sánh thời gian sửa đổi cuối cùng (st_mtime) với thời gian hiện tại.
+    - Xóa an toàn với try/except để tránh gián đoạn nếu tệp đang bị tiến trình khác giữ khóa.
+    - Trả về số lượng tệp đã được xóa thành công.
+    """
+    folder = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
+    if not folder.exists() or not folder.is_dir():
+        return 0
+
+    now = time.time()
+    cutoff_seconds = max_age_days * 86400
+    deleted_count = 0
+
+    try:
+        for f in folder.iterdir():
+            if not f.is_file():
+                continue
+            # Chỉ xử lý các tệp log: đuôi .log hoặc có dạng .log.1, .log.2...
+            if f.suffix == ".log" or ".log." in f.name:
+                try:
+                    if (now - f.stat().st_mtime) > cutoff_seconds:
+                        f.unlink()
+                        deleted_count += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    return deleted_count
+
+
 def setup_logger(
     username: str = "guest",
     server_id: int = 0,
     log_dir: Optional[Path] = None,
     debug: bool = False,
-    max_bytes: int = 10 * 1024 * 1024,
-    backup_count: int = 5,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+    backup_count: int = DEFAULT_BACKUP_COUNT,
     console: bool = True,
+    clean_history_days: Optional[int] = DEFAULT_MAX_AGE_DAYS,
 ) -> logging.Logger:
     """Khởi tạo cấu hình logging tập trung cho thư viện `linhvuong`.
 
+    Tuân thủ ADR-0015 và ADR-0030:
     - Tạo thư mục `logs/` nếu chưa tồn tại.
-    - Gắn RotatingFileHandler ghi vào `logs/bot_{username}_S{server_id}.log`.
+    - Tự động thanh lý các tệp nhật ký cũ hơn clean_history_days (mặc định 7 ngày).
+    - Gắn RotatingFileHandler ghi vào `logs/bot_{username}_S{server_id}.log` (2MB/tệp, 3 bản sao).
     - Gắn SanitizingFilter lên toàn bộ handler.
     - Cấu hình cấp độ ghi log (DEBUG nếu debug=True, ngược lại INFO).
     """
     target_dir = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    if clean_history_days is not None and clean_history_days > 0:
+        clean_old_logs(target_dir, max_age_days=clean_history_days)
 
     log_file = get_log_file_path(username, server_id, target_dir)
     root_logger = logging.getLogger("linhvuong")
