@@ -87,6 +87,10 @@ _Avoid_: Scan (khi nói tiếng Việt)
 Đánh dấu tạm thời một Mục tiêu đã có nhiệm vụ nhận để nhiệm vụ khác không đánh trùng.
 _Avoid_: Lock
 
+**Ưu Tiên Căn Cứ Gần Nhất**:
+Quy tắc giải quyết xung đột mục tiêu trong Bình Man Đa Căn Cứ: Khi một Mục tiêu Man nằm trong phạm vi quét của nhiều Căn Cứ cùng lúc, quyền khóa và xuất kích được ưu tiên tuyệt đối cho Căn Cứ có cự ly gần Mục tiêu nhất.
+_Avoid_: Gần nhất đánh trước, tranh mục tiêu
+
 **Trận hình**:
 Thế trận xuất binh và giao chiến của đạo quân (Trùy hình, Câu hình, Kê hình, Hạc dực, Ngư lân) quyết định hiệu quả tương khắc ngũ hành.
 _Avoid_: Đội hình
@@ -151,6 +155,14 @@ _Avoid_: Xây đa thành, multi-city queue
 **Căn Cứ Thi Công**:
 Thành hoặc Doanh trại được người chơi tích chọn tham gia tiến trình tự động nâng cấp công trình.
 _Avoid_: Thành được chọn, active base
+
+**Bình Man Đa Căn Cứ**:
+Cơ chế tự động điều phối tiến trình Bình Man qua danh sách các Căn Cứ (Thành hoặc Doanh trại) được người chơi bật chạy, luân phiên kiểm tra trạng thái võ tướng, dời trại áp sát hoặc xuất kích theo hồ sơ cấu hình độc lập của từng căn cứ.
+_Avoid_: Bình Man đa thành, multi-city binh man
+
+**Căn Cứ Bình Man**:
+Thành hoặc Doanh trại được người chơi tích chọn tham gia chiến dịch Bình Man tự động (`enabled = True`).
+_Avoid_: Thành bình man, active binh man base
 
 **Hạ Cấp Công Trình**:
 Hành động gửi lệnh giảm cấp độ công trình hoặc dỡ bỏ về cấp độ mong muốn (`OPT.ashx?id=65, type=2`).

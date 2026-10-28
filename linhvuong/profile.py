@@ -223,7 +223,9 @@ GoiManProfile = GoiDanProfile
 
 
 @dataclass
-class BinhManProfile:
+class BaseBinhManConfig:
+    name: str = ""
+    enabled: bool = False
     mode: int = 1  # 1: Di Doanh trại đến cạnh Man, 2: Xuất quân thẳng từ Thành
     radius: str = "5"
     min_army: str = "3000"
@@ -243,6 +245,73 @@ class BinhManProfile:
     auto_morale: bool = True
     min_morale: str = "95"
 
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BaseBinhManConfig":
+        if not isinstance(data, dict):
+            return cls()
+        raw_types = data.get("target_types")
+        if isinstance(raw_types, list) and raw_types:
+            t_types = [int(x) for x in raw_types]
+            mantypes = ",".join(str(x) for x in t_types)
+        elif "mantypes" in data:
+            mantypes = str(data["mantypes"])
+            t_types = [int(x.strip()) for x in mantypes.split(",") if x.strip()]
+        else:
+            mantypes = "7,8,9,10"
+            t_types = [7, 8, 9, 10]
+
+        raw_gens = data.get("generals", [])
+        gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
+
+        return cls(
+            name=str(data.get("name", "")),
+            enabled=bool(data.get("enabled", False)),
+            mode=int(data.get("mode", 1)),
+            radius=str(data.get("radius", "5")),
+            min_army=str(data.get("min_army", "3000")),
+            min_hp=str(data.get("min_hp", "50")),
+            auto_comfort=bool(data.get("auto_comfort", True)),
+            interval=str(data.get("interval", "15")),
+            camp_id=str(data.get("camp_id", "")),
+            parent_city_id=str(data.get("parent_city_id", "")),
+            threshold=str(data.get("threshold", "30")),
+            mantypes=mantypes,
+            target_types=t_types,
+            generals=gens,
+            target_infantry=str(data.get("target_infantry", "0")),
+            target_cavalry=str(data.get("target_cavalry", "0")),
+            target_archers=str(data.get("target_archers", "0")),
+            auto_recruit=bool(data.get("auto_recruit", True)),
+            auto_morale=bool(data.get("auto_morale", True)),
+            min_morale=str(data.get("min_morale", "95")),
+        )
+
+
+@dataclass
+class BinhManProfile:
+    mode: int = 1  # 1: Di Doanh trại đến cạnh Man, 2: Xuất quân thẳng từ Thành
+    radius: str = "5"
+    min_army: str = "3000"
+    min_hp: str = "50"
+    auto_comfort: bool = True
+    interval: str = "15"
+    camp_id: str = ""
+    parent_city_id: str = ""
+    threshold: str = "30"
+    mantypes: str = "7,8,9,10"
+    target_types: list[int] = field(default_factory=lambda: [7, 8, 9, 10])
+    generals: list[int] = field(default_factory=list)
+    target_infantry: str = "0"
+    target_cavalry: str = "0"
+    target_archers: str = "0"
+    auto_recruit: bool = True
+    auto_morale: bool = True
+    min_morale: str = "95"
+    bases: dict[str, BaseBinhManConfig] = field(default_factory=dict)
+
     @classmethod
     def from_dict(cls, data: dict) -> "BinhManProfile":
         if not isinstance(data, dict):
@@ -260,6 +329,12 @@ class BinhManProfile:
 
         raw_gens = data.get("generals", [])
         gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
+
+        bases_map = {}
+        raw_bases = data.get("bases")
+        if isinstance(raw_bases, dict):
+            for bid_str, binfo in raw_bases.items():
+                bases_map[str(bid_str)] = BaseBinhManConfig.from_dict(binfo)
 
         return cls(
             mode=int(data.get("mode", 1)),
@@ -280,6 +355,7 @@ class BinhManProfile:
             auto_recruit=bool(data.get("auto_recruit", True)),
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
+            bases=bases_map,
         )
 
 
@@ -365,6 +441,12 @@ class Profile:
             data["building"]["cities"] = {
                 k: asdict(v) if not isinstance(v, dict) else v
                 for k, v in self.building.cities.items()
+            }
+        # Chuyển bases của binh_man thành dict thuần
+        if "binh_man" in data and "bases" in data["binh_man"]:
+            data["binh_man"]["bases"] = {
+                k: asdict(v) if not isinstance(v, dict) else v
+                for k, v in self.binh_man.bases.items()
             }
         return data
 

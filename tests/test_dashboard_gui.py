@@ -1,3 +1,4 @@
+import json
 import tkinter as tk
 from tkinter import ttk
 from unittest.mock import MagicMock, patch
@@ -2153,6 +2154,177 @@ def test_dashboard_binhman_and_goidan_army_provisioning_controls_and_profile_syn
         assert bm_task.min_morale == 85
     finally:
         dash.destroy()
+
+
+def test_dashboard_multi_base_binhman_treeview_and_independent_configs(tmp_path):
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # 1. Kiểm tra bm_bases_tree hiển thị đủ 3 căn cứ
+        assert hasattr(dash, "bm_bases_tree")
+        children = dash.bm_bases_tree.get_children()
+        assert len(children) == 3
+        assert "15230" in children
+        assert "15237" in children
+        assert "-1085" in children
+
+        # 2. Cấu hình căn cứ 1 (ThànhChinh 15230): mode 2, radius 12, threshold 45, target_inf 5000
+        dash.bm_bases_tree.selection_set("15230")
+        dash._on_bm_bases_tree_select()
+        dash.bm_mode_var.set(2)
+        dash._on_bm_mode_changed()
+        dash.bm_radius_var.set("12")
+        dash.bm_threshold_var.set("45")
+        dash.bm_target_inf_var.set("5000")
+        dash._save_bm_current_base_config()
+
+        # 3. Chuyển sang Doanh trại (-1085): mode 1, radius 8, threshold 20, target_inf 2000
+        dash.bm_bases_tree.selection_set("-1085")
+        dash._on_bm_bases_tree_select()
+        assert dash._current_bm_base_id == -1085
+        dash.bm_mode_var.set(1)
+        dash._on_bm_mode_changed()
+        dash.bm_radius_var.set("8")
+        dash.bm_threshold_var.set("20")
+        dash.bm_target_inf_var.set("2000")
+        dash._save_bm_current_base_config()
+
+        # 4. Chuyển lại ThànhChinh (15230), cấu hình độc lập phải được giữ nguyên
+        dash.bm_bases_tree.selection_set("15230")
+        dash._on_bm_bases_tree_select()
+        assert dash._current_bm_base_id == 15230
+        assert dash.bm_mode_var.get() == 2
+        assert dash.bm_radius_var.get() == "12"
+        assert dash.bm_threshold_var.get() == "45"
+        assert dash.bm_target_inf_var.get() == "5000"
+
+        # 5. Kiểm tra nút chọn tất cả / bỏ tất cả căn cứ
+        dash._select_all_bm_bases(False)
+        for iid in children:
+            assert dash.bm_bases_tree.item(iid, "values")[0] == "☐"
+            assert dash.bm_base_configs[int(iid)].enabled is False
+
+        dash._select_all_bm_bases(True)
+        for iid in children:
+            assert dash.bm_bases_tree.item(iid, "values")[0] == "☑"
+            assert dash.bm_base_configs[int(iid)].enabled is True
+
+        # 6. Lưu profile ra file và nạp lại
+        prof_file = tmp_path / "multi_base_bm_profile.json"
+        dash._save_unified_profile(prof_file)
+
+        # Xóa cấu hình hiện tại để test nạp lại
+        dash.bm_base_configs.clear()
+        ok, _msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+        assert 15230 in dash.bm_base_configs
+        assert -1085 in dash.bm_base_configs
+        assert str(dash.bm_base_configs[15230].radius) == "12"
+        assert str(dash.bm_base_configs[15230].threshold) == "45"
+        assert str(dash.bm_base_configs[15230].target_infantry) == "5000"
+        assert str(dash.bm_base_configs[-1085].radius) == "8"
+        assert str(dash.bm_base_configs[-1085].threshold) == "20"
+        assert str(dash.bm_base_configs[-1085].target_infantry) == "2000"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_multi_base_binhman_task_creation_and_peers():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # Cấu hình 15230 và -1085 đều có tướng khả dụng (TrieuVan ở 15230, QuanVu ở -1085)
+        dash.bm_base_configs[15230].enabled = True
+        dash.bm_base_configs[15230].generals = [417506]
+        dash.bm_base_configs[-1085].enabled = True
+        dash.bm_base_configs[-1085].generals = [417520]
+        dash.bm_base_configs[15237].enabled = False  # Tắt PhanThanh
+
+        tasks = dash._create_binhman_tasks()
+        assert len(tasks) == 2
+
+        task_15230 = next(t for t in tasks if t.origin == (100, 200))
+        task_camp = next(t for t in tasks if t.origin == (110, 210))
+
+        # Kiểm tra peers được thiết lập chéo cho nhau
+        assert len(task_15230.peers) == 1
+        assert task_15230.peers[0].base_id == -1085
+
+        assert len(task_camp.peers) == 1
+        assert task_camp.peers[0].base_id == 15230
+
+        # Kiểm tra dùng chung TargetLocks
+        assert task_15230.locks is task_camp.locks
+        assert task_15230.locks is dash.shared_target_locks
+
+        # Kiểm tra non_blocking_relocate được kích hoạt
+        assert task_camp.non_blocking_relocate is True
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_multi_base_binhman_new_base_safety_defaults():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # ADR-0029 Section 5: Trạng thái thi công mặc định: enabled = False, target_army = 0/0/0
+        for b in r.bases:
+            cfg = dash.bm_base_configs[b.id]
+            assert cfg.enabled is False
+            assert cfg.target_infantry == "0"
+            assert cfg.target_cavalry == "0"
+            assert cfg.target_archers == "0"
+            # Generals: mặc định chọn tất cả võ tướng trong căn cứ đó
+            vos = [g.id for g in r.generals_of(b.id) if g.role == "vo"]
+            assert set(cfg.generals) == set(vos)
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_multi_base_binhman_legacy_backward_compatibility(tmp_path):
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # Giả lập file profile cũ không có trường 'bases'
+        old_data = {
+            "binh_man": {
+                "mode": 2,
+                "radius": "14",
+                "threshold": "55",
+                "mantypes": "7,8",
+                "generals": [417506],
+                "target_infantry": "3000",
+            }
+        }
+        prof_file = tmp_path / "old_profile.json"
+        with open(prof_file, "w", encoding="utf-8") as f:
+            json.dump(old_data, f)
+
+        # Xóa cấu hình hiện tại để test nạp profile cũ
+        dash.bm_base_configs.clear()
+        ok, _msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+
+        # Tương thích ngược: hồ sơ cũ được tự động ánh xạ vào căn cứ đang hoạt động hoặc đầu tiên (15230)
+        assert 15230 in dash.bm_base_configs
+        cfg = dash.bm_base_configs[15230]
+        assert cfg.enabled is True
+        assert cfg.mode == 2
+        assert str(cfg.radius) == "14"
+        assert str(cfg.threshold) == "55"
+        assert cfg.generals == [417506]
+        assert str(cfg.target_infantry) == "3000"
+    finally:
+        dash.destroy()
+
 
 
 

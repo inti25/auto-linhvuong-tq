@@ -66,3 +66,29 @@ def test_prune_expired_locks():
     locks.try_lock(100, LockReason.CLAIMED)
     assert len(locks._expiry) == 1
     assert 100 in locks._expiry
+
+
+def test_lock_with_owner_and_is_locked_by_other():
+    locks, clock = make()
+    # Base 101 locks target 50
+    assert locks.try_lock(50, LockReason.CLAIMED, owner=101) is True
+    # Base 101 can renew its own lock
+    assert locks.try_lock(50, LockReason.CLAIMED, owner=101) is True
+    # Base 102 fails to lock target 50
+    assert locks.try_lock(50, LockReason.CLAIMED, owner=102) is False
+
+    # Check is_locked_by_other
+    assert locks.is_locked_by_other(50, owner=101) is False
+    assert locks.is_locked_by_other(50, owner=102) is True
+    assert locks.is_locked_by_other(50, owner=None) is True
+    assert locks.is_locked_by_other(999, owner=102) is False
+
+    # Release by wrong owner fails
+    assert locks.release(50, owner=102) is False
+    assert locks.is_locked(50) is True
+
+    # Release by right owner succeeds
+    assert locks.release(50, owner=101) is True
+    assert locks.is_locked(50) is False
+    assert locks.try_lock(50, LockReason.CLAIMED, owner=102) is True
+

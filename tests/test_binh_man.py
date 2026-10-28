@@ -645,5 +645,127 @@ def test_binh_man_mode_camp_provisioning_from_garrison_only():
     assert not any(k == "OPT.ashx?id=41" for k, d in server.calls)
 
 
+def test_binh_man_nearest_base_priority_in_multi_base():
+    from linhvuong.scan import BasePeer
+    shared_locks = TargetLocks()
+    # Man 100 tại (7, 0) - Man cấp 7
+    # Man 200 tại (2, 0) - Man cấp 7
+    mid0 = mid_from_coords(0, 0)
+    server = FakeServer(
+        map_views={
+            mid0: {"npc_tent": [man(7, 0, 100, 7), man(2, 0, 200, 7)]},
+            mid_from_coords(8, 0): {"npc_tent": [man(7, 0, 100, 7)]},
+        },
+        handlers={
+            "OPT.ashx?id=53": {"ret": 0},
+            "Common.ashx?id=32": {"generals": [{"id": 1, "status": 0}, {"id": 2, "status": 0}]},
+        },
+    )
+    ctx_a, alerts_a = ctx_for(server, locks=shared_locks)
+    ctx_b, alerts_b = ctx_for(server, locks=shared_locks)
+
+    peer_b = BasePeer(base_id=200, ox=8, oy=0, radius=5, target_types=[7])
+    peer_a = BasePeer(base_id=100, ox=0, oy=0, radius=10, target_types=[7])
+
+    task_a = BinhMan(
+        ctx_a,
+        generals=[1],
+        origin=(0, 0),
+        radius=10,
+        man_types=[7],
+        mode=2,
+        city_id=100,
+        peers=[peer_b],
+    )
+
+    task_b = BinhMan(
+        ctx_b,
+        generals=[2],
+        origin=(8, 0),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=200,
+        peers=[peer_a],
+    )
+
+    # Base A quét trước: Man 100 ở gần Base B hơn nên Base A bỏ qua và đánh Man 200
+    res_a = task_a.run_once()
+    assert res_a == "attacked"
+    calls_a = [d for k, d in server.calls if k == "OPT.ashx?id=53" and d["target_id"] == "200"]
+    assert len(calls_a) == 1
+
+    # Base B quét: Base B gần Man 100 nhất nên đánh Man 100
+    res_b = task_b.run_once()
+    assert res_b == "attacked"
+    calls_b = [d for k, d in server.calls if k == "OPT.ashx?id=53" and d["target_id"] == "100"]
+    assert len(calls_b) == 1
+
+
+def test_binh_man_pre_flight_lock_check_aborts_when_claimed_by_other():
+    shared_locks = TargetLocks()
+    # Khóa mục tiêu 77 bởi Base khác (999)
+    from linhvuong.locks import LockReason
+    shared_locks.try_lock(77, LockReason.CLAIMED, owner=999)
+
+    server = FakeServer(
+        map_views={
+            mid_from_coords(0, 0): {"npc_tent": [man(1, 0, 77, 7)]},
+        },
+        handlers={
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server, locks=shared_locks)
+    task = BinhMan(
+        ctx,
+        generals=[1],
+        origin=(0, 0),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=100,
+    )
+    # Vì mục tiêu 77 đã bị khóa bởi owner=999, scanner sẽ không tìm thấy hoặc nếu bị tranh chấp, pre-flight chặn
+    res = task.run_once()
+    assert res == "no_target"
+    # Không có cuộc tấn công nào được gửi
+    assert not any(k == "OPT.ashx?id=53" for k, _ in server.calls)
+
+
+def test_binh_man_non_blocking_relocate():
+    server = FakeServer(
+        map_views={
+            mid_from_coords(0, 0): {"npc_tent": [man(6, 6, 88, 7)]},
+        },
+        handlers={
+            "Common.ashx?id=55": {"ret": 0, "frozen": 20},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[1],
+        origin=(0, 0),
+        radius=10,
+        man_types=[7],
+        mode=1,
+        camp_id=5555,
+        max_step=2,
+        non_blocking_relocate=True,
+    )
+
+    # Lượt 1: Dời 1 bước không chặn luồng, trả về camp_relocating
+    res1 = task.run_once()
+    assert res1 == "camp_relocating"
+    assert task.origin == (2, 2)
+    assert task._camp_frozen_until > 0
+
+    # Lượt 2: Chưa hết frozen_time -> trả về camp_frozen ngay lập tức
+    res2 = task.run_once()
+    assert res2 == "camp_frozen"
+
+
+
 
 

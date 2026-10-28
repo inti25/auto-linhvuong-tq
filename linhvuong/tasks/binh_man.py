@@ -21,8 +21,9 @@ import time
 from typing import Any, Callable, Optional
 
 from ..battle import BattleEngine, BattleReport, BattleState, CombatConfig
+from ..locks import TargetLocks
 from ..roster import Army, fetch_roster
-from ..scan import Target
+from ..scan import BasePeer, Target
 from ..troops import ArmyProvisioner, TargetArmy
 from .base import (
     RET_CAPTCHA_REQUIRED,
@@ -81,6 +82,10 @@ class BinhMan:
         auto_morale: bool = True,
         min_morale: int = 95,
         provisioner: Optional[ArmyProvisioner] = None,
+        peers: Optional[list[BasePeer]] = None,
+        peers_fn: Optional[Callable[[], list[BasePeer]]] = None,
+        non_blocking_relocate: bool = False,
+        base_name: str = "",
     ):
         self.ctx = ctx
         self.generals = generals
@@ -105,6 +110,11 @@ class BinhMan:
         self.auto_morale = auto_morale
         self.min_morale = min_morale
         self.provisioner = provisioner or ArmyProvisioner(ctx.gateway, sleep_fn=sleep_fn)
+        self.peers = peers
+        self.peers_fn = peers_fn
+        self.non_blocking_relocate = non_blocking_relocate
+        self.base_name = base_name
+        self._camp_frozen_until: float = 0.0
 
         # Tự động suy ra mode nếu không chỉ định: có camp_id là Chế độ 1, không có là Chế độ 2
         if mode is not None:
@@ -117,6 +127,10 @@ class BinhMan:
         if self.mode == MODE_CAMP and self.camp_id:
             return int(self.camp_id)
         return int(self.city_id or 0)
+
+    @property
+    def locks(self) -> TargetLocks:
+        return self.ctx.locks
 
     def needs_return(self, remaining_percent: Optional[float] = None) -> bool:
         """Binh lực hoặc thể lực còn lại (%) dưới ngưỡng thì cần rút về thành."""
@@ -216,6 +230,35 @@ class BinhMan:
         res = mover.advance_to_destination()
         self.origin = mover.origin
         return res in ("arrived", "stopped")
+
+    def advance_camp_one_step(self, target: Target) -> tuple[bool, int]:
+        """Dời Trại Di Chuyển 1 bước hướng tới mục tiêu mà không ngủ chờ frozen_time (non-blocking).
+        
+        Trả về: (đã_đến_cự_ly_2_ô, frozen_seconds).
+        """
+        if not self.camp_id:
+            return True, 0
+
+        dist = chebyshev_distance(self.origin[0], self.origin[1], target.x, target.y)
+        if dist <= 2:
+            return True, 0
+
+        mover = DiTrai(
+            ctx=self.ctx,
+            camp_id=self.camp_id,
+            origin=self.origin,
+            destination=(target.x, target.y),
+            max_step=self.max_step,
+            sleep_fn=lambda s: None,
+            stop_at_distance=2,
+        )
+        next_x, next_y = mover.step_towards(target.x, target.y)
+        success, frozen, reason = mover.move_step(next_x, next_y)
+        if success:
+            self.origin = mover.origin
+            new_dist = chebyshev_distance(self.origin[0], self.origin[1], target.x, target.y)
+            return new_dist <= 2, frozen
+        return False, 0
 
     def retreat_to_safety(self) -> None:
         """Hồi binh về thành mẹ để trị thương và bổ sung quân lực (Chế độ 1 - Doanh trại)."""
@@ -321,6 +364,10 @@ class BinhMan:
                 self.provisioner.adjust_morale(cid, gid, current_morale=0, min_morale=self.min_morale)
 
     def run_once(self, remaining_percent: Optional[float] = None) -> str:
+        # 0. Nếu Doanh trại đang trong thời gian đóng băng (frozen_time) từ bước dời trước
+        if self.non_blocking_relocate and time.time() < self._camp_frozen_until:
+            return "camp_frozen"
+
         # 1. Kiểm tra ngưỡng an toàn trước tiên
         if self.needs_return(remaining_percent):
             if self.mode == MODE_CAMP:
@@ -381,23 +428,39 @@ class BinhMan:
                                 self.ctx.notify(f"⏳ Tướng {gid} đang đếm ngược nâng sĩ khí ({up_t}s)...")
                         return "waiting_morale"
 
-        # 4. Quét tìm Man mục tiêu
+        # 4. Quét tìm Man mục tiêu (áp dụng Quy Tắc Ưu Tiên Căn Cứ Gần Nhất - ADR-0029)
+        active_peers = self.peers_fn() if self.peers_fn else self.peers
         target = self.ctx.scanner.find_nearest(
             *self.origin,
             self.radius,
             self.man_types,
             skip_capital_radius=self.skip_capital_radius,
+            owner_id=self.origin_id,
+            peers=active_peers,
         )
         if target is None:
             return "no_target"
 
-        # 4. Nếu ở Chế độ 1 (Doanh trại) và mục tiêu xa hơn 2 ô -> Dời trại từng bước
+        # 5. Nếu ở Chế độ 1 (Doanh trại) và mục tiêu xa hơn 2 ô -> Dời trại
         if self.mode == MODE_CAMP and self.camp_id and chebyshev_distance(self.origin[0], self.origin[1], target.x, target.y) > 2:
-            reached = self.advance_camp_to_target(target)
-            if not reached:
-                return "relocate_failed"
+            if self.non_blocking_relocate:
+                reached, frozen = self.advance_camp_one_step(target)
+                if frozen > 0:
+                    self._camp_frozen_until = time.time() + frozen
+                if not reached:
+                    return "camp_relocating"
+            else:
+                reached = self.advance_camp_to_target(target)
+                if not reached:
+                    return "relocate_failed"
 
-        # 5. Xuất quân tấn công (hỗ trợ chia nhiều đợt nếu > 3 tướng)
+        # 6. Chốt chặn kiểm tra khóa mục tiêu trước khi xuất kích (ADR-0029)
+        if self.ctx.locks.is_locked_by_other(target.target_id, owner=self.origin_id):
+            if self.ctx.notify:
+                self.ctx.notify(f"⚠️ Mục tiêu {target.target_id} đã bị căn cứ khác nhận. Hủy xuất kích và quét lại.")
+            return "target_claimed_by_other"
+
+        # 7. Xuất quân tấn công (hỗ trợ chia nhiều đợt nếu > 3 tướng)
         result = attack(
             self.ctx,
             target,

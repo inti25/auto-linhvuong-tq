@@ -228,4 +228,54 @@ def test_profile_binh_man_and_goi_man_army_provisioning_fields():
     assert d["goi_dan"]["target_cavalry"] == "2500"
 
 
+def test_binh_man_multi_base_profile():
+    from linhvuong.profile import BaseBinhManConfig
+    prof = Profile()
+    prof.binh_man.bases["101"] = BaseBinhManConfig(
+        name="Thành Chủ",
+        enabled=True,
+        mode=2,
+        radius="8",
+        target_types=[1, 2, 3],
+        generals=[10, 11, 12],
+        target_infantry="5000",
+    )
+    prof.binh_man.bases["-999"] = BaseBinhManConfig(
+        name="Doanh Trại Tiền Tuyến",
+        enabled=False,
+        mode=1,
+        radius="15",
+        camp_id="999",
+        parent_city_id="101",
+        target_types=[7, 8, 9, 10],
+        generals=[20, 21],
+        target_cavalry="8000",
+    )
+
+    d = prof.to_dict()
+    assert "101" in d["binh_man"]["bases"]
+    assert "-999" in d["binh_man"]["bases"]
+    assert d["binh_man"]["bases"]["101"]["name"] == "Thành Chủ"
+    assert d["binh_man"]["bases"]["101"]["enabled"] is True
+    assert d["binh_man"]["bases"]["101"]["mode"] == 2
+    assert d["binh_man"]["bases"]["-999"]["mode"] == 1
+    assert d["binh_man"]["bases"]["-999"]["target_cavalry"] == "8000"
+
+    loaded = Profile.from_dict(d)
+    assert len(loaded.binh_man.bases) == 2
+    b101 = loaded.binh_man.bases["101"]
+    assert b101.name == "Thành Chủ"
+    assert b101.enabled is True
+    assert b101.generals == [10, 11, 12]
+    assert b101.target_infantry == "5000"
+
+    b999 = loaded.binh_man.bases["-999"]
+    assert b999.name == "Doanh Trại Tiền Tuyến"
+    assert b999.enabled is False
+    assert b999.camp_id == "999"
+    assert b999.parent_city_id == "101"
+    assert b999.target_cavalry == "8000"
+
+
+
 

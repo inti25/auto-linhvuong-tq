@@ -135,3 +135,43 @@ def test_origin_is_clamped_to_map_bounds():
     scanner, session = make()
     scanner.find_nearest(656, 656, radius=10, target_types=[7])
     assert max(_xy(m)[0] for m in session.requested) <= 656
+
+
+def test_nearest_base_priority_skips_when_peer_is_closer():
+    from linhvuong.scan import BasePeer
+    mid0 = mid_from_coords(0, 0)
+    # Man 100 tại (7, 0)
+    # Man 200 tại (2, 0)
+    scanner, _ = make({
+        mid0: {"npc_tent": [npc_at(7, 0, 100, 7), npc_at(2, 0, 200, 7)]}
+    })
+    # Base A tại (0, 0), Base B tại (8, 0)
+    # Man 100 cách Base A là 7, cách Base B là 1. Base B gần hơn!
+    peer_b = BasePeer(base_id=202, ox=8, oy=0, radius=5, target_types=[7])
+    
+    # Khi Base A quét với peer_b: Base A phải bỏ qua Man 100 và chọn Man 200
+    target = scanner.find_nearest(
+        0, 0, radius=10, target_types=[7], owner_id=101, peers=[peer_b]
+    )
+    assert target is not None
+    assert target.target_id == 200
+
+
+def test_nearest_base_priority_claims_when_this_base_is_closer():
+    from linhvuong.scan import BasePeer
+    mid8 = mid_from_coords(8, 0)
+    # Man 100 tại (7, 0)
+    scanner, _ = make({
+        mid8: {"npc_tent": [npc_at(7, 0, 100, 7)]}
+    })
+    # Base B tại (8, 0), Base A tại (0, 0)
+    # Man 100 cách Base B là 1, cách Base A là 7. Base B gần hơn!
+    peer_a = BasePeer(base_id=101, ox=0, oy=0, radius=10, target_types=[7])
+    
+    # Khi Base B quét: Base B gần Man 100 hơn nên được quyền nhận!
+    target = scanner.find_nearest(
+        8, 0, radius=5, target_types=[7], owner_id=202, peers=[peer_a]
+    )
+    assert target is not None
+    assert target.target_id == 100
+

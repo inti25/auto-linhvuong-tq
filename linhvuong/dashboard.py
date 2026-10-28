@@ -34,12 +34,12 @@ from .gateway import GatewayClient
 from .engine import AutomationEngine, TaskStatus
 from .locks import TargetLocks
 from .logger import open_logs_directory, setup_logger
-from .profile import Profile, ProfileStore
+from .profile import BaseBinhManConfig, Profile, ProfileStore
 from .gui import set_app_icon
 
 logger = logging.getLogger("linhvuong.dashboard")
 from .roster import Army, City, General, Roster, fetch_roster
-from .scan import Scanner
+from .scan import BasePeer, Scanner
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import MAN_TARGET_OPTIONS, MODE_CAMP, MODE_CITY, BinhMan
 from .tasks.di_trai import DiTrai
@@ -279,23 +279,49 @@ class GoiDanAutoRunner(BaseTaskRunner):
 
 
 class BinhManAutoRunner(BaseTaskRunner):
-    def __init__(self, task: BinhMan, interval: float, log_cb, status_cb):
+    def __init__(self, task_or_tasks: Union[BinhMan, list[BinhMan]], interval: float, log_cb, status_cb):
         super().__init__("Bình Man", log_cb, status_cb)
-        self.task = task
+        if isinstance(task_or_tasks, list):
+            self.tasks: list[BinhMan] = task_or_tasks
+        else:
+            self.tasks: list[BinhMan] = [task_or_tasks]
         self.interval = interval
 
+    @property
+    def task(self) -> Optional[BinhMan]:
+        return self.tasks[0] if self.tasks else None
+
+    @task.setter
+    def task(self, val: BinhMan):
+        self.tasks = [val]
+
     def run(self):
-        self.task.stop_event = self.stop_event
-        if getattr(self.task, "sleep_fn", None) is time.sleep:
-            self.task.sleep_fn = lambda s: self.wait(s)
+        for t in self.tasks:
+            t.stop_event = self.stop_event
+            if getattr(t, "sleep_fn", None) is time.sleep:
+                t.sleep_fn = lambda s: self.wait(s)
         self.status_cb("Đang chạy...")
-        self.log("🚀 Bắt đầu nhiệm vụ Bình Man...")
+        num_bases = len(self.tasks)
+        if num_bases > 1:
+            self.log(f"🚀 Bắt đầu điều phối Bình Man Đa Căn Cứ cho {num_bases} căn cứ...")
+        else:
+            self.log("🚀 Bắt đầu nhiệm vụ Bình Man...")
         cycle = 0
         while not self.stop_event.is_set():
             cycle += 1
+            has_action = False
             try:
-                res = self.task.run_once()
-                self.log(f"Lượt {cycle}: Kết quả -> {res}")
+                for t in self.tasks:
+                    if self.stop_event.is_set():
+                        break
+                    base_label = getattr(t, "base_name", "") or f"Căn cứ {t.origin_id}"
+                    res = t.run_once()
+                    if num_bases > 1:
+                        self.log(f"[{base_label}] Lượt {cycle}: Kết quả -> {res}")
+                    else:
+                        self.log(f"Lượt {cycle}: Kết quả -> {res}")
+                    if res not in ("no_target", "generals_busy", "camp_frozen", "waiting_morale", "target_claimed_by_other"):
+                        has_action = True
             except CaptchaRequired:
                 self.logger.warning("Server yêu cầu Captcha! Dừng nhiệm vụ Bình Man.")
                 self.log("⚠️ Server yêu cầu Captcha! Dừng nhiệm vụ.")
@@ -305,7 +331,9 @@ class BinhManAutoRunner(BaseTaskRunner):
                 self.logger.exception(f"Lỗi ngoại lệ trong nhiệm vụ Bình Man: {e}")
                 self.log(f"❌ Lỗi ngoại lệ: {e}")
 
-            if self.wait_cycle(self.interval):
+            # Cơ chế chuyển lượt không chặn (ADR-0029): Chỉ khi toàn bộ các căn cứ đều không có hành động khả dụng mới nghỉ trọn vẹn interval giây
+            wait_time = self.interval if not has_action else 1.0
+            if self.wait_cycle(wait_time if not has_action else min(wait_time, 2.0)):
                 break
         self.status_cb("Đã dừng")
         self.log("⏹️ Nhiệm vụ Bình Man đã dừng.")
@@ -527,6 +555,9 @@ class Dashboard(tk.Tk):
         self._research_city_id: Optional[int] = None
         self._pending_gd_generals: Optional[set[int]] = None
         self._pending_bm_generals: Optional[set[int]] = None
+        self._current_bm_base_id: Optional[int] = None
+        self.bm_base_configs: dict[int, BaseBinhManConfig] = {}
+        self.shared_target_locks = TargetLocks()
         self._res_monitor_running: bool = False
         self._res_monitor_thread: Optional[threading.Thread] = None
         self._current_bld_city_id: Optional[int] = None
@@ -871,6 +902,8 @@ class Dashboard(tk.Tk):
     # HỒ SƠ CẤU HÌNH TỔNG HỢP (UNIFIED PROFILE CONFIGURATION)
     # -------------------------------------------------------------------------
     def _collect_unified_profile(self) -> dict:
+        if hasattr(self, "_save_bm_current_base_config"):
+            self._save_bm_current_base_config()
         profile = {
             "version": 1,
             "building": {
@@ -947,6 +980,7 @@ class Dashboard(tk.Tk):
                 "auto_recruit": bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True,
                 "auto_morale": bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True,
                 "min_morale": self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95",
+                "bases": {str(bid): cfg.to_dict() for bid, cfg in self.bm_base_configs.items()} if hasattr(self, "bm_base_configs") else {},
             },
             "logistics": {
                 "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
@@ -1325,6 +1359,53 @@ class Dashboard(tk.Tk):
                 self.bm_auto_morale_var.set(bool(bm_data["auto_morale"]))
             if hasattr(self, "bm_min_morale_var") and "min_morale" in bm_data:
                 self.bm_min_morale_var.set(str(bm_data["min_morale"]))
+            if "bases" in bm_data and isinstance(bm_data["bases"], dict) and bm_data["bases"]:
+                self.bm_base_configs.clear()
+                for bid_str, bcfg_raw in bm_data["bases"].items():
+                    if isinstance(bcfg_raw, dict):
+                        try:
+                            bid = int(bid_str)
+                            self.bm_base_configs[bid] = BaseBinhManConfig.from_dict(bcfg_raw)
+                        except ValueError:
+                            pass
+                if hasattr(self, "bm_bases_tree") and self.roster:
+                    self._refresh_bm_bases_tree()
+            else:
+                # Tương thích ngược tuyệt đối (ADR-0029 Section 1):
+                # Tệp hồ sơ cũ chưa có trường 'bases', tự động ánh xạ các giá trị phẳng vào căn cứ đang hoạt động hoặc căn cứ đầu tiên
+                bm_gens = [int(x) for x in bm_data.get("generals", []) if str(x).isdigit()] if "generals" in bm_data else []
+                m_types_str = str(bm_data.get("mantypes", "7,8,9,10"))
+                legacy_cfg = BaseBinhManConfig(
+                    name="",
+                    enabled=True,
+                    mode=int(bm_data.get("mode", 1)),
+                    radius=str(bm_data.get("radius", "5")),
+                    threshold=str(bm_data.get("threshold", "30")),
+                    camp_id=str(bm_data.get("camp_id", "")),
+                    parent_city_id=str(bm_data.get("parent_city_id", "")),
+                    mantypes=m_types_str,
+                    target_types=[int(x.strip()) for x in m_types_str.split(",") if x.strip().isdigit()],
+                    generals=bm_gens,
+                    target_infantry=str(bm_data.get("target_infantry", "0")),
+                    target_cavalry=str(bm_data.get("target_cavalry", "0")),
+                    target_archers=str(bm_data.get("target_archers", "0")),
+                    auto_recruit=bool(bm_data.get("auto_recruit", True)),
+                    auto_morale=bool(bm_data.get("auto_morale", True)),
+                    min_morale=str(bm_data.get("min_morale", "95")),
+                )
+                self._pending_bm_legacy_config = legacy_cfg
+                target_bid = None
+                if legacy_cfg.mode == 1 and legacy_cfg.camp_id and str(legacy_cfg.camp_id).lstrip("-").isdigit():
+                    target_bid = int(legacy_cfg.camp_id)
+                elif self._current_bm_base_id:
+                    target_bid = self._current_bm_base_id
+                elif self.roster and self.roster.bases:
+                    target_bid = self.roster.bases[0].id
+
+                if target_bid is not None:
+                    self.bm_base_configs[target_bid] = legacy_cfg
+                    if hasattr(self, "bm_bases_tree") and self.roster:
+                        self._refresh_bm_bases_tree()
             if "generals" in bm_data and isinstance(bm_data["generals"], list):
                 bm_gens = [int(x) for x in bm_data["generals"] if str(x).isdigit()]
                 self._pending_bm_generals = set(bm_gens)
@@ -2213,9 +2294,90 @@ class Dashboard(tk.Tk):
     # TAB 4: BÌNH MAN & DI TRẠI
     # =========================================================================
     def _build_binhman_tab(self, parent):
-        # 1. Khung Bình Man Tự Động
-        f_bm = ttk.LabelFrame(parent, text="🗡️ Tự Động Bình Man", style="Card.TLabelframe")
-        f_bm.pack(fill="x", padx=4, pady=4)
+        container = tk.Frame(parent, bg=BG)
+        container.pack(fill="both", expand=True, padx=4, pady=4)
+        container.columnconfigure(0, weight=0, minsize=290)
+        container.columnconfigure(1, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        col_left = tk.Frame(container, bg=BG)
+        col_left.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+
+        col_right = tk.Frame(container, bg=BG)
+        col_right.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+
+        # ---------------------------------------------------------------------
+        # CỘT TRÁI: Danh sách căn cứ & Điều khiển chạy
+        # ---------------------------------------------------------------------
+        f_bases = ttk.LabelFrame(col_left, text="🏰 Danh Sách Căn Cứ Bình Man", style="Card.TLabelframe")
+        f_bases.pack(fill="both", expand=True, padx=2, pady=(0, 4))
+
+        bar1 = tk.Frame(f_bases, bg=BG)
+        bar1.pack(fill="x", padx=4, pady=2)
+        ttk.Button(bar1, text="✅ Chọn tất cả", style="Secondary.TButton", command=lambda: self._select_all_bm_bases(True)).pack(side="left", padx=2)
+        ttk.Button(bar1, text="❌ Bỏ tất cả", style="Secondary.TButton", command=lambda: self._select_all_bm_bases(False)).pack(side="left", padx=2)
+
+        bar2 = tk.Frame(f_bases, bg=BG)
+        bar2.pack(fill="x", padx=4, pady=2)
+        ttk.Button(bar2, text="⚔️ Biên chế TẤT CẢ căn cứ", style="Action.TButton", command=self._manual_adjust_all_bm_troops).pack(side="left", fill="x", expand=True, padx=2)
+
+        tree_frame = tk.Frame(f_bases, bg=BG)
+        tree_frame.pack(fill="both", expand=True, padx=4, pady=4)
+        self.bm_bases_tree = ttk.Treeview(
+            tree_frame,
+            columns=("select", "type", "coords", "gens"),
+            show="tree headings",
+            selectmode="browse",
+        )
+        self.bm_bases_tree.heading("#0", text="Căn cứ")
+        self.bm_bases_tree.heading("select", text="Chạy")
+        self.bm_bases_tree.heading("type", text="Loại")
+        self.bm_bases_tree.heading("coords", text="Tọa độ")
+        self.bm_bases_tree.heading("gens", text="Tướng")
+
+        self.bm_bases_tree.column("#0", width=95)
+        self.bm_bases_tree.column("select", width=42, anchor="center")
+        self.bm_bases_tree.column("type", width=65, anchor="center")
+        self.bm_bases_tree.column("coords", width=65, anchor="center")
+        self.bm_bases_tree.column("gens", width=50, anchor="center")
+
+        bm_bases_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.bm_bases_tree.yview)
+        self.bm_bases_tree.configure(yscrollcommand=bm_bases_scroll.set)
+        self.bm_bases_tree.pack(side="left", fill="both", expand=True)
+        bm_bases_scroll.pack(side="right", fill="y")
+
+        self.bm_bases_tree.bind("<ButtonRelease-1>", self._on_bm_bases_tree_click)
+        self.bm_bases_tree.bind("<<TreeviewSelect>>", self._on_bm_bases_tree_select)
+
+        # Khung điều khiển tiến trình
+        f_ctrl = ttk.LabelFrame(col_left, text="Điều khiển tiến trình", style="Card.TLabelframe")
+        f_ctrl.pack(fill="x", padx=2, pady=(0, 2))
+
+        r_cycle = tk.Frame(f_ctrl, bg=BG)
+        r_cycle.pack(fill="x", padx=4, pady=2)
+        tk.Label(r_cycle, text="Chu kỳ quét (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 4))
+        self.bm_interval_var = tk.StringVar(value="15")
+        ttk.Entry(r_cycle, textvariable=self.bm_interval_var, width=6).pack(side="left")
+
+        r_btns = tk.Frame(f_ctrl, bg=BG)
+        r_btns.pack(fill="x", padx=4, pady=4)
+        self.bm_start_btn = ttk.Button(r_btns, text="▶️ Bắt đầu Bình Man", style="Success.TButton", command=self._toggle_binhman)
+        self.bm_start_btn.pack(side="left", fill="x", expand=True, padx=2)
+        self.bm_once_btn = ttk.Button(r_btns, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
+        self.bm_once_btn.pack(side="left", padx=2)
+
+        # ---------------------------------------------------------------------
+        # CỘT PHẢI: Cấu hình căn cứ hiện tại, Danh sách tướng & Log
+        # ---------------------------------------------------------------------
+        col_right.rowconfigure(0, weight=0)
+        col_right.rowconfigure(1, weight=1)
+        col_right.rowconfigure(2, weight=1)
+        col_right.columnconfigure(0, weight=1)
+
+        # 1. Cấu hình chi tiết căn cứ
+        self.bm_detail_frame = ttk.LabelFrame(col_right, text="⚙️ Cấu hình căn cứ hiện tại", style="Card.TLabelframe")
+        self.bm_detail_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
+        f_bm = self.bm_detail_frame
 
         # Chế độ tác chiến (Mode 1: Di Doanh trại, Mode 2: Xuất quân thẳng từ Thành)
         tk.Label(f_bm, text="Chế độ tác chiến:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=4, pady=4)
@@ -2269,17 +2431,13 @@ class Dashboard(tk.Tk):
         )
         self.bm_mantypes_dropdown.grid(row=3, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Chu kỳ (s):", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", padx=4, pady=4)
-        self.bm_interval_var = tk.StringVar(value="15")
-        ttk.Entry(f_bm, textvariable=self.bm_interval_var, width=8).grid(row=4, column=1, sticky="w", padx=4, pady=4)
-
-        # Row 5: Định mức quân đội (Bộ MT, Kỵ MT, Cung MT) & Nút Biên chế ngay
-        tk.Label(f_bm, text="Bộ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=5, column=0, sticky="w", padx=4, pady=4)
+        # Row 4: Định mức quân đội (Bộ MT, Kỵ MT, Cung MT) & Nút Biên chế căn cứ này
+        tk.Label(f_bm, text="Bộ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", padx=4, pady=4)
         self.bm_target_inf_var = tk.StringVar(value="0")
-        ttk.Entry(f_bm, textvariable=self.bm_target_inf_var, width=8).grid(row=5, column=1, sticky="w", padx=4, pady=4)
+        ttk.Entry(f_bm, textvariable=self.bm_target_inf_var, width=8).grid(row=4, column=1, sticky="w", padx=4, pady=4)
 
         bm_army_f = tk.Frame(f_bm, bg=BG)
-        bm_army_f.grid(row=5, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        bm_army_f.grid(row=4, column=2, columnspan=2, sticky="w", padx=4, pady=4)
         tk.Label(bm_army_f, text="Kỵ MT:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 2))
         self.bm_target_cav_var = tk.StringVar(value="0")
         ttk.Entry(bm_army_f, textvariable=self.bm_target_cav_var, width=6).pack(side="left", padx=(0, 6))
@@ -2291,40 +2449,26 @@ class Dashboard(tk.Tk):
         self.bm_adjust_troops_btn = ttk.Button(bm_army_f, text="⚔️ Biên chế ngay", style="Action.TButton", command=self._manual_adjust_bm_troops)
         self.bm_adjust_troops_btn.pack(side="left", padx=(0, 4))
 
-        # Row 6: Tự động bổ sung lính, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        # Row 5: Tự động bổ sung lính, Tự động nâng sĩ khí, Sĩ khí tối thiểu
         self.bm_auto_recruit_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             f_bm,
             text="Tự động bổ sung lính",
             variable=self.bm_auto_recruit_var,
             style="TCheckbutton",
-        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=4, pady=4)
 
         bm_mor_f = tk.Frame(f_bm, bg=BG)
-        bm_mor_f.grid(row=6, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        bm_mor_f.grid(row=5, column=2, columnspan=2, sticky="w", padx=4, pady=4)
         self.bm_auto_morale_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(bm_mor_f, text="Tự động nâng sĩ khí", variable=self.bm_auto_morale_var, style="TCheckbutton").pack(side="left", padx=(0, 8))
         tk.Label(bm_mor_f, text="Sĩ khí tối thiểu:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
         self.bm_min_morale_var = tk.StringVar(value="95")
         ttk.Entry(bm_mor_f, textvariable=self.bm_min_morale_var, width=5).pack(side="left")
 
-        ctrl_frame = tk.Frame(f_bm, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=7, padx=16)
-        self.bm_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Bình Man", style="Success.TButton", command=self._toggle_binhman)
-        self.bm_start_btn.pack(side="top", pady=2)
-        self.bm_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_binhman_once)
-        self.bm_once_btn.pack(side="top", pady=2)
-
-        # 2. Bảng tướng & Log sắp xếp theo container body
-        body = tk.Frame(parent, bg=BG)
-        body.pack(fill="both", expand=True, padx=4, pady=4)
-        body.columnconfigure(0, weight=1)
-        body.rowconfigure(0, weight=3)
-        body.rowconfigure(1, weight=2)
-
-        # Row 0: Bảng danh sách võ tướng
-        f_gens = ttk.LabelFrame(body, text="Võ tướng xuất kích", style="Card.TLabelframe")
-        f_gens.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
+        # 2. Bảng danh sách võ tướng
+        f_gens = ttk.LabelFrame(col_right, text="Võ tướng xuất kích", style="Card.TLabelframe")
+        f_gens.grid(row=1, column=0, sticky="nsew", pady=(0, 4))
 
         btn_bar = tk.Frame(f_gens, bg=BG)
         btn_bar.pack(fill="x", padx=4, pady=2)
@@ -2366,9 +2510,9 @@ class Dashboard(tk.Tk):
         gen_scroll.pack(side="right", fill="y", padx=(0, 4), pady=(0, 4))
         self.bm_gen_tree.bind("<ButtonRelease-1>", self._on_bm_gen_toggle)
 
-        # Row 1: Khung nhật ký Bình Man
-        f_log = ttk.LabelFrame(body, text="Nhật ký Bình Man", style="Card.TLabelframe")
-        f_log.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+        # 3. Khung nhật ký Bình Man
+        f_log = ttk.LabelFrame(col_right, text="Nhật ký Bình Man", style="Card.TLabelframe")
+        f_log.grid(row=2, column=0, sticky="nsew", pady=(0, 0))
         log_scroll = ttk.Scrollbar(f_log, orient="vertical")
         self.bm_log_text = tk.Text(f_log, bg=CARD, fg=FG, insertbackground=FG, font=("Consolas", 9), borderwidth=0, yscrollcommand=log_scroll.set)
         log_scroll.config(command=self.bm_log_text.yview)
@@ -2382,12 +2526,26 @@ class Dashboard(tk.Tk):
         batches = (selected_count + 2) // 3 if selected_count > 0 else 0
         self.bm_gen_count_lbl.config(text=f"Đã chọn: {selected_count} tướng ({batches} đợt xuất kích)")
 
+    def _update_bm_bases_tree_gen_count(self):
+        if not hasattr(self, "bm_bases_tree") or not hasattr(self, "bm_gen_tree") or self._current_bm_base_id is None:
+            return
+        iid = str(self._current_bm_base_id)
+        if not self.bm_bases_tree.exists(iid):
+            return
+        vals = list(self.bm_bases_tree.item(iid, "values"))
+        sel_count = sum(1 for item in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(item, "values")[0] == "☑")
+        total_count = len(self.bm_gen_tree.get_children())
+        if len(vals) > 3:
+            vals[3] = f"{sel_count}/{total_count}"
+            self.bm_bases_tree.item(iid, values=vals)
+
     def _select_all_bm_gens(self):
         for item in self.bm_gen_tree.get_children():
             vals = list(self.bm_gen_tree.item(item, "values"))
             vals[0] = "☑"
             self.bm_gen_tree.item(item, values=vals)
         self._update_bm_gen_count_label()
+        self._update_bm_bases_tree_gen_count()
 
     def _deselect_all_bm_gens(self):
         for item in self.bm_gen_tree.get_children():
@@ -2395,6 +2553,7 @@ class Dashboard(tk.Tk):
             vals[0] = "☐"
             self.bm_gen_tree.item(item, values=vals)
         self._update_bm_gen_count_label()
+        self._update_bm_bases_tree_gen_count()
 
     def _on_bm_gen_toggle(self, event):
         item = self.bm_gen_tree.identify_row(event.y)
@@ -2404,12 +2563,12 @@ class Dashboard(tk.Tk):
         vals[0] = "☑" if vals[0] == "☐" else "☐"
         self.bm_gen_tree.item(item, values=vals)
         self._update_bm_gen_count_label()
+        self._update_bm_bases_tree_gen_count()
 
     def _append_bm_log(self, msg: str):
         self._append_text_buffer(self.bm_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
 
-    def _on_bm_mode_changed(self):
-        mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
+    def _update_bm_mode_ui_states(self, mode: int):
         if mode == 2:  # Chế độ 2: Xuất quân thẳng từ Thành
             if hasattr(self, "bm_base_lbl"):
                 self.bm_base_lbl.configure(text="Thành xuất phát:")
@@ -2421,12 +2580,6 @@ class Dashboard(tk.Tk):
                 self.bm_camp_id_lbl.configure(state="disabled")
             if hasattr(self, "bm_camp_id_entry"):
                 self.bm_camp_id_entry.configure(state="disabled")
-            if hasattr(self, "roster") and self.roster.cities and hasattr(self, "bm_city_combo"):
-                cities_items = [c.display_name for c in self.roster.cities]
-                self.bm_city_combo["values"] = cities_items
-                if cities_items and (self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(cities_items)):
-                    self.bm_city_combo.current(0)
-            self._on_bm_city_selected()
         else:  # Chế độ 1: Di Doanh trại
             if hasattr(self, "bm_base_lbl"):
                 self.bm_base_lbl.configure(text="Doanh trại xuất phát:")
@@ -2438,33 +2591,260 @@ class Dashboard(tk.Tk):
                 self.bm_camp_id_lbl.configure(state="normal")
             if hasattr(self, "bm_camp_id_entry"):
                 self.bm_camp_id_entry.configure(state="normal")
-            if hasattr(self, "roster") and hasattr(self, "bm_city_combo"):
-                camps_items = [c.display_name for c in self.roster.camps] if self.roster.camps else [b.display_name for b in self.roster.bases]
-                self.bm_city_combo["values"] = camps_items
-                if camps_items and (self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(camps_items)):
+
+    def _on_bm_mode_changed(self):
+        mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
+        self._update_bm_mode_ui_states(mode)
+        if hasattr(self, "roster") and self.roster:
+            cities_items = [c.display_name for c in self.roster.cities]
+            camps_items = [c.display_name for c in self.roster.camps] if self.roster.camps else [b.display_name for b in self.roster.bases]
+            if mode == 2 and cities_items and hasattr(self, "bm_city_combo"):
+                self.bm_city_combo["values"] = cities_items
+                if self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(cities_items):
                     self.bm_city_combo.current(0)
-            self._on_bm_city_selected()
+            elif mode == 1 and camps_items and hasattr(self, "bm_city_combo"):
+                self.bm_city_combo["values"] = camps_items
+                if self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(camps_items):
+                    self.bm_city_combo.current(0)
+        self._on_bm_city_selected()
 
     def _on_bm_city_selected(self, _event=None):
         mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
-        sel_idx = self.bm_city_combo.current()
+        sel_idx = self.bm_city_combo.current() if hasattr(self, "bm_city_combo") else -1
         if mode == 2:
-            self.bm_camp_id_var.set("")
             bases = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
         else:
             bases = self.roster.camps if (self.roster and self.roster.camps) else (self.roster.bases if self.roster else [])
-            if 0 <= sel_idx < len(bases):
-                base = bases[sel_idx]
-                if base.is_camp:
-                    self.bm_camp_id_var.set(str(base.id))
-                else:
-                    self.bm_camp_id_var.set("")
 
-        if not hasattr(self, "bm_gen_tree"):
-            return
-        self.bm_gen_tree.delete(*self.bm_gen_tree.get_children())
         if 0 <= sel_idx < len(bases):
             base = bases[sel_idx]
+            if hasattr(self, "bm_bases_tree") and self.bm_bases_tree.exists(str(base.id)):
+                self.bm_bases_tree.selection_set(str(base.id))
+            self._switch_bm_base(base.id)
+
+    def _get_or_create_bm_base_config(self, base) -> BaseBinhManConfig:
+        cfg = self.bm_base_configs.get(base.id)
+        if cfg is None:
+            if getattr(self, "_pending_bm_legacy_config", None):
+                cfg = self._pending_bm_legacy_config
+                self._pending_bm_legacy_config = None
+                self.bm_base_configs[base.id] = cfg
+                return cfg
+
+            def_mode = 1 if base.is_camp else 2
+            def_camp_id = str(base.id) if base.is_camp else ""
+            vos = [g.id for g in self.roster.generals_of(base.id) if g.role == "vo"] if self.roster else []
+            t_rad = self.bm_radius_var.get() if hasattr(self, "bm_radius_var") else "10"
+            t_thresh = self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30"
+            t_min_mor = self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95"
+            t_auto_rec = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
+            t_auto_mor = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
+
+            # ADR-0029 Section 5: Bộ quy tắc an toàn mặc định cho căn cứ mới
+            # - enabled = False (chưa chọn chạy)
+            # - generals = tất cả võ tướng có trong căn cứ
+            # - Định mức lính: 0 / 0 / 0
+            cfg = BaseBinhManConfig(
+                enabled=False,
+                mode=def_mode,
+                radius=str(t_rad),
+                threshold=str(t_thresh),
+                camp_id=def_camp_id,
+                generals=vos,
+                target_infantry="0",
+                target_cavalry="0",
+                target_archers="0",
+                auto_recruit=t_auto_rec,
+                auto_morale=t_auto_mor,
+                min_morale=str(t_min_mor),
+            )
+            self.bm_base_configs[base.id] = cfg
+        return cfg
+
+    def _refresh_bm_bases_tree(self):
+        if not hasattr(self, "bm_bases_tree") or not self.roster:
+            return
+        if getattr(self, "_pending_bm_legacy_config", None) and self.roster.bases:
+            if not any(b.id in self.bm_base_configs for b in self.roster.bases):
+                target_bid = self.roster.bases[0].id
+                self.bm_base_configs[target_bid] = self._pending_bm_legacy_config
+            self._pending_bm_legacy_config = None
+
+        self.bm_bases_tree.delete(*self.bm_bases_tree.get_children())
+        for base in self.roster.bases:
+            cfg = self._get_or_create_bm_base_config(base)
+
+            is_sel = "☑" if cfg.enabled else "☐"
+            b_type = "⛺ Trại" if base.is_camp else "🏰 Thành"
+            coords = f"({base.pos_x},{base.pos_y})" if (base.pos_x or base.pos_y) else "-"
+            total_vos = len([g for g in self.roster.generals_of(base.id) if g.role == "vo"])
+            gens_text = f"{len(cfg.generals)}/{total_vos}"
+            self.bm_bases_tree.insert(
+                "",
+                "end",
+                iid=str(base.id),
+                text=base.name,
+                values=(is_sel, b_type, coords, gens_text),
+            )
+
+        if self.roster.bases:
+            target_id = self._current_bm_base_id if (self._current_bm_base_id and any(b.id == self._current_bm_base_id for b in self.roster.bases)) else self.roster.bases[0].id
+            iid = str(target_id)
+            if self.bm_bases_tree.exists(iid):
+                self.bm_bases_tree.selection_set(iid)
+                self._load_bm_base_config(target_id)
+
+    def _on_bm_bases_tree_click(self, event):
+        item = self.bm_bases_tree.identify_row(event.y)
+        col = self.bm_bases_tree.identify_column(event.x)
+        if not item or not self.bm_bases_tree.exists(item):
+            return
+        try:
+            base_id = int(item)
+        except ValueError:
+            return
+        if col == "#1":  # Column 'select'
+            vals = list(self.bm_bases_tree.item(item, "values"))
+            cfg = self.bm_base_configs.setdefault(base_id, BaseBinhManConfig())
+            if vals[0] == "☑":
+                vals[0] = "☐"
+                cfg.enabled = False
+            else:
+                vals[0] = "☑"
+                cfg.enabled = True
+            self.bm_bases_tree.item(item, values=vals)
+
+    def _on_bm_bases_tree_select(self, _event=None):
+        sel = self.bm_bases_tree.selection()
+        if not sel:
+            return
+        try:
+            base_id = int(sel[0])
+            self._switch_bm_base(base_id)
+        except ValueError:
+            pass
+
+    def _switch_bm_base(self, base_id: int):
+        if self._current_bm_base_id is not None and self._current_bm_base_id != base_id:
+            self._save_bm_current_base_config()
+        self._load_bm_base_config(base_id)
+
+    def _select_all_bm_bases(self, enabled: bool):
+        if not hasattr(self, "bm_bases_tree"):
+            return
+        for iid in self.bm_bases_tree.get_children(""):
+            vals = list(self.bm_bases_tree.item(iid, "values"))
+            vals[0] = "☑" if enabled else "☐"
+            self.bm_bases_tree.item(iid, values=vals)
+            try:
+                bid = int(iid)
+                if bid in self.bm_base_configs:
+                    self.bm_base_configs[bid].enabled = enabled
+            except ValueError:
+                pass
+
+    def _save_bm_current_base_config(self):
+        if self._current_bm_base_id is None:
+            return
+        base_id = self._current_bm_base_id
+        cfg = self.bm_base_configs.get(base_id)
+        if cfg is None:
+            cfg = BaseBinhManConfig()
+            self.bm_base_configs[base_id] = cfg
+
+        if hasattr(self, "bm_mode_var"):
+            cfg.mode = self.bm_mode_var.get()
+        if hasattr(self, "bm_radius_var"):
+            cfg.radius = str(self.bm_radius_var.get() or "10")
+        if hasattr(self, "bm_threshold_var"):
+            cfg.threshold = str(self.bm_threshold_var.get() or "30")
+        if hasattr(self, "bm_camp_id_var") and cfg.mode == 1:
+            cfg.camp_id = self.bm_camp_id_var.get().strip()
+        if hasattr(self, "bm_parent_city_combo") and self.roster and self.roster.cities:
+            pidx = self.bm_parent_city_combo.current()
+            if 0 <= pidx < len(self.roster.cities):
+                cfg.parent_city_id = str(self.roster.cities[pidx].id)
+        if hasattr(self, "bm_mantypes_dropdown"):
+            cfg.target_types = self.bm_mantypes_dropdown.get_selected()
+            cfg.mantypes = self.bm_mantypes_dropdown.get_selected_str()
+        elif hasattr(self, "bm_mantypes_var"):
+            cfg.mantypes = self.bm_mantypes_var.get()
+            cfg.target_types = [int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()]
+        if hasattr(self, "bm_gen_tree"):
+            cfg.generals = [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"]
+        if hasattr(self, "bm_target_inf_var"):
+            cfg.target_infantry = str(self.bm_target_inf_var.get() or "0")
+        if hasattr(self, "bm_target_cav_var"):
+            cfg.target_cavalry = str(self.bm_target_cav_var.get() or "0")
+        if hasattr(self, "bm_target_arc_var"):
+            cfg.target_archers = str(self.bm_target_arc_var.get() or "0")
+        if hasattr(self, "bm_auto_recruit_var"):
+            cfg.auto_recruit = bool(self.bm_auto_recruit_var.get())
+        if hasattr(self, "bm_auto_morale_var"):
+            cfg.auto_morale = bool(self.bm_auto_morale_var.get())
+        if hasattr(self, "bm_min_morale_var"):
+            cfg.min_morale = str(self.bm_min_morale_var.get() or "95")
+        self._update_bm_bases_tree_gen_count()
+
+    def _load_bm_base_config(self, base_id: int):
+        self._current_bm_base_id = base_id
+        if not self.roster:
+            return
+        base = next((b for b in self.roster.bases if b.id == base_id), None)
+        if not base:
+            return
+
+        cfg = self._get_or_create_bm_base_config(base)
+
+        if hasattr(self, "bm_detail_frame"):
+            self.bm_detail_frame.configure(text=f"⚙️ Cấu hình căn cứ: {base.name} ({base.pos_x}, {base.pos_y})")
+
+        if hasattr(self, "bm_mode_var"):
+            self.bm_mode_var.set(cfg.mode)
+        if hasattr(self, "bm_radius_var"):
+            self.bm_radius_var.set(str(cfg.radius))
+        if hasattr(self, "bm_threshold_var"):
+            self.bm_threshold_var.set(str(cfg.threshold))
+        if hasattr(self, "bm_camp_id_var"):
+            self.bm_camp_id_var.set(str(cfg.camp_id) if cfg.camp_id is not None else "")
+        if hasattr(self, "bm_parent_city_combo") and self.roster.cities:
+            if cfg.parent_city_id:
+                for idx, c in enumerate(self.roster.cities):
+                    if c.id == cfg.parent_city_id:
+                        self.bm_parent_city_combo.current(idx)
+                        break
+            elif not self.bm_parent_city_combo.get() and len(self.roster.cities) > 0:
+                self.bm_parent_city_combo.current(0)
+        if hasattr(self, "bm_mantypes_dropdown"):
+            t_types = cfg.target_types if cfg.target_types else ([int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()] if isinstance(cfg.mantypes, str) else [7, 8, 9, 10])
+            self.bm_mantypes_dropdown.set_selected(t_types)
+        if hasattr(self, "bm_mantypes_var"):
+            self.bm_mantypes_var.set(cfg.mantypes if isinstance(cfg.mantypes, str) else ",".join(str(x) for x in cfg.mantypes))
+        if hasattr(self, "bm_target_inf_var"):
+            self.bm_target_inf_var.set(str(cfg.target_infantry))
+        if hasattr(self, "bm_target_cav_var"):
+            self.bm_target_cav_var.set(str(cfg.target_cavalry))
+        if hasattr(self, "bm_target_arc_var"):
+            self.bm_target_arc_var.set(str(cfg.target_archers))
+        if hasattr(self, "bm_auto_recruit_var"):
+            self.bm_auto_recruit_var.set(cfg.auto_recruit)
+        if hasattr(self, "bm_auto_morale_var"):
+            self.bm_auto_morale_var.set(cfg.auto_morale)
+        if hasattr(self, "bm_min_morale_var"):
+            self.bm_min_morale_var.set(str(cfg.min_morale))
+
+        self._update_bm_mode_ui_states(cfg.mode)
+
+        if hasattr(self, "bm_city_combo"):
+            combo_values = list(self.bm_city_combo["values"])
+            for idx, val in enumerate(combo_values):
+                if base.name in val:
+                    self.bm_city_combo.current(idx)
+                    break
+
+        if hasattr(self, "bm_gen_tree"):
+            self.bm_gen_tree.delete(*self.bm_gen_tree.get_children())
+            sel_gens_set = set(cfg.generals) if cfg.generals is not None else set()
             pending = self._pending_bm_generals
             for g in self.roster.generals_of(base.id):
                 if g.role != "vo":
@@ -2476,8 +2856,10 @@ class Dashboard(tk.Tk):
                 total = army.total if army else 0
                 if pending is not None:
                     checked = "☑" if g.id in pending else "☐"
+                elif cfg.generals:
+                    checked = "☑" if g.id in sel_gens_set else "☐"
                 else:
-                    checked = "☑"  # Bình Man mặc định chọn TẤT CẢ tướng võ trong căn cứ
+                    checked = "☑"
                 self.bm_gen_tree.insert(
                     "",
                     "end",
@@ -2486,7 +2868,8 @@ class Dashboard(tk.Tk):
                     values=(checked, g.level, f"{g.stamina}/{g.stamina_max}", g.morale, inf, cav, arc, total),
                 )
             self._pending_bm_generals = None
-        self._update_bm_gen_count_label()
+            self._update_bm_gen_count_label()
+            self._update_bm_bases_tree_gen_count()
 
 
     def _append_dt_log(self, msg: str):
@@ -2622,25 +3005,139 @@ class Dashboard(tk.Tk):
                     self.bm_city_combo.current(bm_idx)
                     self._on_bm_city_selected()
 
-    def _create_binhman_task(self) -> Optional[BinhMan]:
+    def _create_binhman_tasks(self) -> list[BinhMan]:
+        self._save_bm_current_base_config()
+        if not self.roster or not self.roster.bases:
+            messagebox.showwarning("Cảnh báo", "Dữ liệu tướng và căn cứ chưa sẵn sàng!")
+            return []
+
+        enabled_bases = [b for b in self.roster.bases if self.bm_base_configs.get(b.id, BaseBinhManConfig()).enabled]
+        if not enabled_bases:
+            if self._current_bm_base_id:
+                curr_base = next((b for b in self.roster.bases if b.id == self._current_bm_base_id), None)
+                if curr_base:
+                    enabled_bases = [curr_base]
+            if not enabled_bases:
+                messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 căn cứ để chạy Bình Man!")
+                return []
+
+        all_peers: list[BasePeer] = []
+        for b in enabled_bases:
+            cfg = self.bm_base_configs.get(b.id)
+            if not cfg or not cfg.generals:
+                continue
+            t_types = cfg.target_types if cfg.target_types else ([int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()] if isinstance(cfg.mantypes, str) else [7, 8, 9, 10])
+            all_peers.append(
+                BasePeer(
+                    base_id=b.id,
+                    ox=b.pos_x,
+                    oy=b.pos_y,
+                    radius=int(cfg.radius) if str(cfg.radius).isdigit() else 10,
+                    target_types=t_types,
+                    origin=(b.pos_x, b.pos_y),
+                    mantypes=t_types,
+                    name=b.name,
+                )
+            )
+
+        tasks: list[BinhMan] = []
+        for b in enabled_bases:
+            cfg = self.bm_base_configs.get(b.id)
+            if not cfg:
+                continue
+            sel_gens = cfg.generals
+            if not sel_gens:
+                continue
+
+            mode = cfg.mode
+            camp_id = int(cfg.camp_id) if (mode == 1 and cfg.camp_id and str(cfg.camp_id).lstrip("-").isdigit()) else (b.id if (mode == 1 and b.is_camp) else None)
+            parent_id = int(cfg.parent_city_id) if (cfg.parent_city_id and str(cfg.parent_city_id).isdigit()) else b.id
+
+            scanner = Scanner(self.gateway, self.shared_target_locks, delay=0.0, sleep=lambda s: None)
+            ctx = TaskContext(self.gateway, scanner, self.shared_target_locks, notify=lambda m, bname=b.name: self.after(0, self._append_bm_log, f"[{bname}] {m}"))
+            peers = [p for p in all_peers if p.base_id != b.id]
+
+            t_inf = int(cfg.target_infantry) if str(cfg.target_infantry).isdigit() else 0
+            t_cav = int(cfg.target_cavalry) if str(cfg.target_cavalry).isdigit() else 0
+            t_arc = int(cfg.target_archers) if str(cfg.target_archers).isdigit() else 0
+            target_army = TargetArmy(infantry=t_inf, cavalry=t_cav, archers=t_arc)
+            rad_int = int(cfg.radius) if str(cfg.radius).isdigit() else 10
+            thresh_int = int(cfg.threshold) if str(cfg.threshold).isdigit() else 30
+            mor_int = int(cfg.min_morale) if str(cfg.min_morale).isdigit() else 95
+            b_types = cfg.target_types if cfg.target_types else ([int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()] if isinstance(cfg.mantypes, str) else [7, 8, 9, 10])
+
+            task = BinhMan(
+                ctx=ctx,
+                generals=sel_gens,
+                origin=(b.pos_x, b.pos_y),
+                radius=rad_int,
+                man_types=b_types,
+                camp_id=camp_id,
+                parent_city_id=parent_id,
+                city_id=b.id if mode == 2 else parent_id,
+                return_threshold=thresh_int,
+                mode=mode,
+                sleep_fn=time.sleep,
+                combat_config=self._build_combat_config(),
+                on_battle_found=lambda bid: self.after(
+                    0, lambda x=bid: self.bt_id_var.set(str(x)) if hasattr(self, "bt_id_var") else None
+                ),
+                on_battle_state=lambda st: self.after(
+                    0, lambda s=st: self._bt_render_state(s) if hasattr(self, "_bt_render_state") else None
+                ),
+                target_army=target_army,
+                auto_recruit=cfg.auto_recruit,
+                auto_morale=cfg.auto_morale,
+                min_morale=mor_int,
+                peers=peers,
+                non_blocking_relocate=True,
+                base_name=b.name,
+            )
+            tasks.append(task)
+
+        if not tasks:
+            messagebox.showwarning("Cảnh báo", "Không có căn cứ nào có võ tướng khả dụng được chọn!")
+        return tasks
+
+    def _create_binhman_task(self, base_id: Optional[int] = None) -> Optional[BinhMan]:
+        if base_id is not None:
+            tasks = self._create_binhman_tasks()
+            for t in tasks:
+                if getattr(t, "city_id", None) == base_id or getattr(t, "camp_id", None) == base_id:
+                    return t
+            return None
+
+        self._save_bm_current_base_config()
         mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
-        sel_idx = self.bm_city_combo.current()
+        sel_idx = self.bm_city_combo.current() if hasattr(self, "bm_city_combo") else -1
         if mode == 2:
-            bases = self.roster.cities if self.roster.cities else self.roster.bases
+            bases = self.roster.cities if (self.roster and self.roster.cities) else (self.roster.bases if self.roster else [])
         else:
-            bases = self.roster.camps if self.roster.camps else self.roster.bases
+            bases = self.roster.camps if (self.roster and self.roster.camps) else (self.roster.bases if self.roster else [])
 
         if sel_idx < 0 or sel_idx >= len(bases):
+            if self._current_bm_base_id and self.roster:
+                base = next((b for b in self.roster.bases if b.id == self._current_bm_base_id), None)
+            else:
+                base = None
+        else:
+            base = bases[sel_idx]
+
+        if not base:
             msg = "Vui lòng chọn Thành xuất phát!" if mode == 2 else "Vui lòng chọn căn cứ/doanh trại xuất phát!"
             messagebox.showwarning("Cảnh báo", msg)
             return None
-        base = bases[sel_idx]
+
         sel_gens = []
         if hasattr(self, "bm_gen_tree"):
             sel_gens = [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"]
+        if not sel_gens and self.roster:
+            cfg = self.bm_base_configs.get(base.id)
+            if cfg and cfg.generals:
+                sel_gens = cfg.generals
 
         if not sel_gens:
-            vos = [g.id for g in self.roster.generals_of(base.id) if g.role == "vo"]
+            vos = [g.id for g in self.roster.generals_of(base.id) if g.role == "vo"] if self.roster else []
             if not vos:
                 messagebox.showwarning("Cảnh báo", "Căn cứ này không có võ tướng khả dụng!")
                 return None
@@ -2648,39 +3145,41 @@ class Dashboard(tk.Tk):
             return None
 
         parent_idx = self.bm_parent_city_combo.current() if hasattr(self, "bm_parent_city_combo") else -1
-        parent_id = self.roster.cities[parent_idx].id if (parent_idx >= 0 and parent_idx < len(self.roster.cities)) else None
-        camp_id = int(self.bm_camp_id_var.get()) if (mode == 1 and self.bm_camp_id_var.get().strip()) else (base.id if (mode == 1 and base.is_camp) else None)
-        radius = int(self.bm_radius_var.get() or "10")
+        parent_id = self.roster.cities[parent_idx].id if (self.roster and self.roster.cities and 0 <= parent_idx < len(self.roster.cities)) else None
+        camp_id = int(self.bm_camp_id_var.get()) if (mode == 1 and hasattr(self, "bm_camp_id_var") and self.bm_camp_id_var.get().strip()) else (base.id if (mode == 1 and base.is_camp) else None)
+        radius = int(self.bm_radius_var.get() or "10") if hasattr(self, "bm_radius_var") else 10
         try:
-            threshold = int(self.bm_threshold_var.get() or "30")
+            threshold = int(self.bm_threshold_var.get() or "30") if hasattr(self, "bm_threshold_var") else 30
         except ValueError:
             threshold = 30
         if hasattr(self, "bm_mantypes_dropdown"):
             man_types = self.bm_mantypes_dropdown.get_selected()
-        else:
+        elif hasattr(self, "bm_mantypes_var"):
             man_types = [int(x.strip()) for x in self.bm_mantypes_var.get().split(",") if x.strip()]
+        else:
+            man_types = [7, 8, 9, 10]
         if not man_types:
             man_types = [7, 8, 9, 10]
 
-        locks = TargetLocks()
+        locks = self.shared_target_locks
         scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
         ctx = TaskContext(self.gateway, scanner, locks, notify=lambda m: self.after(0, self._append_bm_log, m))
 
         try:
             target_inf = int(self.bm_target_inf_var.get() or "0")
-        except ValueError:
+        except (ValueError, AttributeError):
             target_inf = 0
         try:
             target_cav = int(self.bm_target_cav_var.get() or "0")
-        except ValueError:
+        except (ValueError, AttributeError):
             target_cav = 0
         try:
             target_arc = int(self.bm_target_arc_var.get() or "0")
-        except ValueError:
+        except (ValueError, AttributeError):
             target_arc = 0
         try:
             min_morale = int(self.bm_min_morale_var.get() or "95")
-        except ValueError:
+        except (ValueError, AttributeError):
             min_morale = 95
 
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
@@ -2710,170 +3209,197 @@ class Dashboard(tk.Tk):
             auto_recruit=auto_recruit,
             auto_morale=auto_morale,
             min_morale=min_morale,
+            base_name=base.name,
         )
 
-    def _manual_adjust_bm_troops(self):
-        mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
-        sel_idx = self.bm_city_combo.current()
-        if mode == 2:
-            bases = self.roster.cities if self.roster.cities else self.roster.bases
-        else:
-            bases = self.roster.camps if self.roster.camps else self.roster.bases
-
-        if sel_idx < 0 or sel_idx >= len(bases):
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn căn cứ!")
-            return
-        base = bases[sel_idx]
-        sel_gens = [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"]
+    def _provision_base_troops(
+        self,
+        base_id: int,
+        base_name: str,
+        cfg: BaseBinhManConfig,
+        prov: ArmyProvisioner,
+    ):
+        sel_gens = cfg.generals
         if not sel_gens:
+            return
+
+        t_inf = int(cfg.target_infantry) if str(cfg.target_infantry).isdigit() else 0
+        t_cav = int(cfg.target_cavalry) if str(cfg.target_cavalry).isdigit() else 0
+        t_arc = int(cfg.target_archers) if str(cfg.target_archers).isdigit() else 0
+        target_army = TargetArmy(infantry=t_inf, cavalry=t_cav, archers=t_arc)
+        auto_recruit = cfg.auto_recruit
+        auto_morale = cfg.auto_morale
+        min_morale = int(cfg.min_morale) if str(cfg.min_morale).isdigit() else 95
+        mode = cfg.mode
+        parent_id = int(cfg.parent_city_id) if (cfg.parent_city_id and str(cfg.parent_city_id).isdigit()) else None
+
+        prefix = f"[{base_name}] " if base_name else ""
+        self.after(0, self._append_bm_log, f"⚔️ {prefix}Tiến hành biên chế {len(sel_gens)} tướng...")
+
+        if mode == 2:
+            city_id = base_id
+            for gid in sel_gens:
+                prov.heal_general(city_id, gid)
+
+            if target_army.total > 0 and auto_recruit:
+                fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                for gid in sel_gens:
+                    army = fresh_roster.army_of(gid)
+                    prov.adjust_troops(
+                        base_id=city_id,
+                        general_id=gid,
+                        current_army=army,
+                        target_army=target_army,
+                        auto_recruit=True,
+                        on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                    )
+
+            if auto_morale:
+                fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                for gid in sel_gens:
+                    g = city_gens.get(gid)
+                    gname = g.name if g else str(gid)
+                    cur_m = g.morale if g else 0
+                    if cur_m < min_morale:
+                        m_succ, _ = prov.adjust_morale(city_id, gid, cur_m, min_morale)
+                        if m_succ:
+                            self.after(0, self._append_bm_log, f"   {prefix}[Sĩ khí] Tướng {gname}: ✅ Đã nâng sĩ khí!")
+        else:
+            camp_id = base_id
+            for gid in sel_gens:
+                prov.heal_general(camp_id, gid)
+
+            if target_army.total > 0:
+                fresh_roster = fetch_roster(self.gateway, only_base_ids=[camp_id])
+                for gid in sel_gens:
+                    army = fresh_roster.army_of(gid)
+                    prov.adjust_troops(
+                        base_id=camp_id,
+                        general_id=gid,
+                        current_army=army,
+                        target_army=target_army,
+                        auto_recruit=False,
+                        on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                    )
+
+                rechecked = fetch_roster(self.gateway, only_base_ids=[camp_id])
+                def_gens = []
+                for gid in sel_gens:
+                    a = rechecked.army_of(gid)
+                    inf = a.infantry if a else 0
+                    cav = a.cavalry if a else 0
+                    arc = a.archers if a else 0
+                    if inf < target_army.infantry or cav < target_army.cavalry or arc < target_army.archers:
+                        def_gens.append(gid)
+
+                if def_gens:
+                    if parent_id:
+                        self.after(0, self._append_bm_log, f"⛺ {prefix}Quân đồn trú tại trại không đủ cho {len(def_gens)} tướng. Tự động điều về Thành mẹ {parent_id} bổ sung...")
+                        prov.provision_camp_generals_with_parent_city(
+                            camp_id=camp_id,
+                            parent_city_id=parent_id,
+                            general_ids=def_gens,
+                            target_army=target_army,
+                            min_morale=min_morale,
+                            on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                        )
+                    else:
+                        self.after(0, self._append_bm_log, f"⚠️ {prefix}Quân đồn trú tại trại không đủ và chưa chọn Thành mẹ! Vui lòng chọn Thành mẹ.")
+
+            if auto_morale:
+                fresh_roster = fetch_roster(self.gateway, only_base_ids=[camp_id])
+                camp_gens = {g.id: g for g in fresh_roster.generals_of(camp_id)}
+                for gid in sel_gens:
+                    g = camp_gens.get(gid)
+                    gname = g.name if g else str(gid)
+                    cur_m = g.morale if g else 0
+                    if cur_m < min_morale:
+                        prov.adjust_morale(camp_id, gid, cur_m, min_morale)
+
+    def _manual_adjust_bm_troops(self):
+        self._save_bm_current_base_config()
+        if not self.roster or not self.roster.bases:
+            messagebox.showwarning("Cảnh báo", "Dữ liệu tướng và căn cứ chưa sẵn sàng!")
+            return
+
+        base_id = self._current_bm_base_id or self.roster.bases[0].id
+        base = next((b for b in self.roster.bases if b.id == base_id), None)
+        if not base:
+            messagebox.showwarning("Cảnh báo", "Không tìm thấy căn cứ!")
+            return
+
+        cfg = self.bm_base_configs.get(base_id, BaseBinhManConfig())
+        if not cfg.generals:
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn ít nhất 1 võ tướng!")
             return
 
-        try:
-            target_inf = int(self.bm_target_inf_var.get() or "0")
-        except ValueError:
-            target_inf = 0
-        try:
-            target_cav = int(self.bm_target_cav_var.get() or "0")
-        except ValueError:
-            target_cav = 0
-        try:
-            target_arc = int(self.bm_target_arc_var.get() or "0")
-        except ValueError:
-            target_arc = 0
-        try:
-            min_morale = int(self.bm_min_morale_var.get() or "95")
-        except ValueError:
-            min_morale = 95
-
-        target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
-        auto_recruit = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
-        auto_morale = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
-
-        parent_idx = self.bm_parent_city_combo.current() if hasattr(self, "bm_parent_city_combo") else -1
-        parent_id = self.roster.cities[parent_idx].id if (parent_idx >= 0 and parent_idx < len(self.roster.cities)) else None
-
         def _worker():
             try:
-                self.after(0, self._append_bm_log, "⚔️ Bắt đầu tiến trình biên chế quân đội Bình Man...")
+                self.after(0, self._append_bm_log, f"⚔️ Bắt đầu tiến trình biên chế quân đội Bình Man cho {base.name}...")
                 prov = ArmyProvisioner(self.gateway, sleep_fn=time.sleep)
-
-                if mode == 2:
-                    # Chế độ 2: Thành
-                    city_id = base.id
-                    for gid in sel_gens:
-                        prov.heal_general(city_id, gid)
-
-                    if target_army.total > 0 and auto_recruit:
-                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
-                        for gid in sel_gens:
-                            army = fresh_roster.army_of(gid)
-                            prov.adjust_troops(
-                                base_id=city_id,
-                                general_id=gid,
-                                current_army=army,
-                                target_army=target_army,
-                                auto_recruit=True,
-                                on_log=lambda m: self.after(0, self._append_bm_log, m),
-                            )
-
-                    if auto_morale:
-                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
-                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
-                        for gid in sel_gens:
-                            g = city_gens.get(gid)
-                            gname = g.name if g else str(gid)
-                            cur_m = g.morale if g else 0
-                            if cur_m < min_morale:
-                                m_succ, m_ret = prov.adjust_morale(city_id, gid, cur_m, min_morale)
-                                if m_succ:
-                                    self.after(0, self._append_bm_log, f"   [Sĩ khí] Tướng {gname}: ✅ Bắt đầu nâng sĩ khí (+10)!")
-
-                    self.after(0, self._append_bm_log, "🏁 Hoàn tất biên chế quân đội Bình Man tại Thành!")
-                    new_roster = fetch_roster(self.gateway)
-                    self.roster = new_roster
-                    self.after(0, self._on_bm_mode_changed)
-                else:
-                    # Chế độ 1: Doanh trại
-                    # 1. Trị thương
-                    for gid in sel_gens:
-                        prov.heal_general(base.id, gid)
-
-                    # 2. Bù từ quân đồn trú tại trại trước (auto_recruit=False)
-                    if target_army.total > 0:
-                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[base.id])
-                        for gid in sel_gens:
-                            army = fresh_roster.army_of(gid)
-                            prov.adjust_troops(
-                                base_id=base.id,
-                                general_id=gid,
-                                current_army=army,
-                                target_army=target_army,
-                                auto_recruit=False,
-                                on_log=lambda m: self.after(0, self._append_bm_log, m),
-                            )
-
-                        # Kiểm tra xem có tướng nào vẫn thiếu quân so với TargetArmy
-                        rechecked_roster = fetch_roster(self.gateway, only_base_ids=[base.id])
-                        deficient_gens = []
-                        for gid in sel_gens:
-                            a = rechecked_roster.army_of(gid)
-                            inf = a.infantry if a else 0
-                            cav = a.cavalry if a else 0
-                            arc = a.archers if a else 0
-                            if inf < target_army.infantry or cav < target_army.cavalry or arc < target_army.archers:
-                                deficient_gens.append(gid)
-
-                        if deficient_gens:
-                            if parent_id:
-                                self.after(0, self._append_bm_log, f"⛺ Quân đồn trú tại trại không đủ cho {len(deficient_gens)} tướng. Tự động điều về Thành mẹ {parent_id} bổ sung...")
-                                prov.provision_camp_generals_with_parent_city(
-                                    camp_id=base.id,
-                                    parent_city_id=parent_id,
-                                    general_ids=deficient_gens,
-                                    target_army=target_army,
-                                    min_morale=min_morale,
-                                    on_log=lambda m: self.after(0, self._append_bm_log, m),
-                                )
-                            else:
-                                self.after(0, self._append_bm_log, "⚠️ Quân đồn trú tại trại không đủ và chưa chọn Thành mẹ! Vui lòng chọn Thành mẹ hoặc Chuyển quân giới ra trại.")
-
-                    if auto_morale:
-                        fresh_roster = fetch_roster(self.gateway, only_base_ids=[base.id])
-                        camp_gens = {g.id: g for g in fresh_roster.generals_of(base.id)}
-                        for gid in sel_gens:
-                            g = camp_gens.get(gid)
-                            gname = g.name if g else str(gid)
-                            cur_m = g.morale if g else 0
-                            if cur_m < min_morale:
-                                prov.adjust_morale(base.id, gid, cur_m, min_morale)
-
-                    self.after(0, self._append_bm_log, "🏁 Hoàn tất tiến trình biên chế Bình Man!")
-                    new_roster = fetch_roster(self.gateway)
-                    self.roster = new_roster
-                    self.after(0, self._on_bm_mode_changed)
+                self._provision_base_troops(base.id, base.name, cfg, prov)
+                self.after(0, self._append_bm_log, f"🏁 Hoàn tất biên chế quân đội cho căn cứ {base.name}!")
+                self.roster = fetch_roster(self.gateway)
+                self.after(0, self._load_bm_base_config, base.id)
             except Exception as e:
                 self.after(0, self._append_bm_log, f"❌ Lỗi ngoại lệ khi biên chế: {e}")
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _run_binhman_once(self):
-        task = self._create_binhman_task()
-        if not task:
+    def _manual_adjust_all_bm_troops(self):
+        self._save_bm_current_base_config()
+        if not self.roster:
+            messagebox.showwarning("Cảnh báo", "Dữ liệu chưa sẵn sàng!")
             return
-        threading.Thread(target=lambda: self.after(0, self._append_bm_log, f"⚡ Kết quả chạy 1 lượt: {task.run_once()}"), daemon=True).start()
+
+        enabled_bases = [b for b in self.roster.bases if self.bm_base_configs.get(b.id, BaseBinhManConfig()).enabled]
+        if not enabled_bases:
+            messagebox.showwarning("Cảnh báo", "Chưa chọn căn cứ nào để biên chế!")
+            return
+
+        def _worker():
+            try:
+                self.after(0, self._append_bm_log, f"⚔️ Bắt đầu biên chế hàng loạt cho {len(enabled_bases)} căn cứ...")
+                prov = ArmyProvisioner(self.gateway, sleep_fn=time.sleep)
+                for b in enabled_bases:
+                    cfg = self.bm_base_configs.get(b.id, BaseBinhManConfig())
+                    if not cfg.generals:
+                        self.after(0, self._append_bm_log, f"⏩ [{b.name}] Bỏ qua vì không có võ tướng nào được chọn.")
+                        continue
+                    self._provision_base_troops(b.id, b.name, cfg, prov)
+
+                self.after(0, self._append_bm_log, "🏁 Hoàn tất biên chế quân đội cho TẤT CẢ căn cứ đã chọn!")
+                self.roster = fetch_roster(self.gateway)
+                if self._current_bm_base_id:
+                    self.after(0, self._load_bm_base_config, self._current_bm_base_id)
+            except Exception as e:
+                self.after(0, self._append_bm_log, f"❌ Lỗi biên chế hàng loạt: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_binhman_once(self):
+        tasks = self._create_binhman_tasks()
+        if not tasks:
+            return
+        def _worker():
+            for t in tasks:
+                bname = getattr(t, "base_name", f"Base-{getattr(t, 'city_id', '')}")
+                res = t.run_once()
+                self.after(0, self._append_bm_log, f"⚡ [{bname}] Kết quả chạy 1 lượt: {res}")
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _toggle_binhman(self):
         if not self._bm_runner or not self._bm_runner.is_alive():
-            task = self._create_binhman_task()
-            if not task:
+            tasks = self._create_binhman_tasks()
+            if not tasks:
                 return
             try:
                 bm_interval = max(3.0, float(self.bm_interval_var.get() or "15"))
             except ValueError:
                 bm_interval = 15.0
             self._bm_runner = BinhManAutoRunner(
-                task,
+                tasks,
                 interval=bm_interval,
                 log_cb=lambda m: self.after(0, self._append_bm_log, m),
                 status_cb=lambda s: None,
@@ -5204,6 +5730,8 @@ class Dashboard(tk.Tk):
         if camps_items and not self.bm_city_combo.get():
             self.bm_city_combo.current(0)
             self._on_bm_city_selected()
+        if hasattr(self, "_refresh_bm_bases_tree"):
+            self._refresh_bm_bases_tree()
 
         if hasattr(self, "dt_camp_combo"):
             self.dt_camp_combo["values"] = camps_items

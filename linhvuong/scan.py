@@ -4,7 +4,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from .coords import MAP_MAX, MAP_MIN, coords_from_mid, mid_from_coords
 from .gateway import GatewayClient
@@ -36,6 +36,36 @@ class Target:
     y: int
     target_id: int
     man_type: int
+
+
+@dataclass(frozen=True)
+class BasePeer:
+    base_id: int
+    ox: int = 0
+    oy: int = 0
+    radius: int = 0
+    target_types: Iterable[int] = ()
+    origin: Optional[tuple[int, int]] = None
+    mantypes: Optional[Any] = None
+    name: str = ""
+
+    def __post_init__(self):
+        if self.origin is not None:
+            object.__setattr__(self, "ox", int(self.origin[0]))
+            object.__setattr__(self, "oy", int(self.origin[1]))
+        if self.mantypes is not None and not self.target_types:
+            if isinstance(self.mantypes, str):
+                types = [int(x.strip()) for x in self.mantypes.split(",") if x.strip().isdigit()]
+            elif isinstance(self.mantypes, (list, tuple, set)):
+                types = [int(x) for x in self.mantypes if str(x).isdigit()]
+            else:
+                types = []
+            object.__setattr__(self, "target_types", types)
+        if isinstance(self.radius, str):
+            try:
+                object.__setattr__(self, "radius", int(self.radius))
+            except ValueError:
+                object.__setattr__(self, "radius", 0)
 
 
 class Scanner:
@@ -79,10 +109,21 @@ class Scanner:
         radius: int,
         target_types: Iterable[int],
         skip_capital_radius: int = 0,
+        owner_id: Optional[int] = None,
+        peers: Optional[list[BasePeer]] = None,
     ) -> Optional[Target]:
-        """Trả Mục tiêu hợp lệ gần nhất (đã Khóa) hoặc None."""
+        """Trả Mục tiêu hợp lệ gần nhất (đã Khóa) hoặc None.
+        
+        Áp dụng Quy Tắc Ưu Tiên Căn Cứ Gần Nhất (ADR-0029) khi cung cấp danh sách peers.
+        """
         wanted = set(target_types)
         capitals: list[tuple[int, int]] = []
+        peer_list = []
+        if peers:
+            for p in peers:
+                if p.base_id != owner_id:
+                    peer_list.append((p.base_id, p.ox, p.oy, p.radius, set(p.target_types)))
+
         for _, x, y in self._scan_points(ox, oy, radius):
             if self._stop.is_set():
                 return None
@@ -103,6 +144,21 @@ class Scanner:
                     math.hypot(tx - cx, ty - cy) <= skip_capital_radius for cx, cy in capitals
                 ):
                     continue
-                if self.locks.try_lock(target_id, LockReason.CLAIMED):
+
+                # Ưu tiên căn cứ gần nhất: nếu có căn cứ khác gần Man này hơn, nhường cho căn cứ đó
+                if peer_list:
+                    my_dist = math.hypot(tx - ox, ty - oy)
+                    has_closer_peer = False
+                    for p_id, p_ox, p_oy, p_rad, p_wanted in peer_list:
+                        if man_type in p_wanted:
+                            p_dist = math.hypot(tx - p_ox, ty - p_oy)
+                            if p_dist <= p_rad:
+                                if p_dist < my_dist or (abs(p_dist - my_dist) < 1e-5 and p_id < (owner_id or 0)):
+                                    has_closer_peer = True
+                                    break
+                    if has_closer_peer:
+                        continue
+
+                if self.locks.try_lock(target_id, LockReason.CLAIMED, owner=owner_id):
                     return Target(tx, ty, target_id, man_type)
         return None
