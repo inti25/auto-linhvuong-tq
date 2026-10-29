@@ -662,3 +662,17 @@ def test_assign_combat_orders_falls_back_to_normal_attack_when_unit_skill_reject
 
 
 
+
+
+def test_troop_from_raw_man_monsters_at_pos_19_not_identified_as_boss():
+    """Kiểm tra các tướng quái Man tộc (Ô Hoàn, Tiên Ti, Hung Nô, Nam Man...)
+    đứng ở vị trí 19 (chủ soái dã ngoại, flag=16) không bị nhận diện nhầm là BOSS."""
+    raw_wuhuan = [19, "", 0, "乌桓千夫长", 0, "", 0, 0, 4, 100, 0, 500, 0, 500, 0, 0, 0, 0, "", 16]
+    raw_xianbei = [19, "", 0, "鲜卑百夫长", 0, "", 0, 0, 4, 100, 0, 500, 0, 500, 0, 0, 0, 0, "", 16]
+    raw_xiongnu = [19, "", 0, "匈奴万夫长", 0, "", 0, 0, 4, 100, 0, 500, 0, 500, 0, 0, 0, 0, "", 16]
+    raw_nanman = [19, "", 0, "南蛮头领", 0, "", 0, 0, 4, 100, 0, 500, 0, 500, 0, 0, 0, 0, "", 16]
+    raw_shanxian = [19, "", 0, "山越首领", 0, "", 0, 0, 4, 100, 0, 500, 0, 500, 0, 0, 0, 0, "", 16]
+
+    for raw in [raw_wuhuan, raw_xianbei, raw_xiongnu, raw_nanman, raw_shanxian]:
+        t = BattleTroop.from_raw(raw)
+        assert not t.is_boss, f"Quái Man '{t.general_name}' tại pos {t.position} không được coi là BOSS"
