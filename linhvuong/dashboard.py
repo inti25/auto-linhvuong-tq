@@ -181,7 +181,7 @@ class MultiSelectDropdown(ttk.Menubutton):
         return ",".join(str(x) for x in self.get_selected())
 
     def set_selected(self, values: Union[list[int], set[int], tuple[int, ...]]) -> None:
-        val_set = set(values)
+        val_set = {int(x) for x in values if str(x).isdigit()}
         for val, var in self.vars.items():
             var.set(val in val_set)
         self._update_label()
@@ -1363,6 +1363,20 @@ class Dashboard(tk.Frame):
     def _collect_unified_profile(self) -> dict:
         if hasattr(self, "_save_bm_current_base_config"):
             self._save_bm_current_base_config()
+        tp_city_id = None
+        if hasattr(self, "tp_city_combo") and self.roster and self.roster.bases:
+            sel_idx = self.tp_city_combo.current()
+            if 0 <= sel_idx < len(self.roster.bases):
+                tp_city_id = self.roster.bases[sel_idx].id
+        elif getattr(self, "_pending_tp_city_id", None) is not None:
+            tp_city_id = self._pending_tp_city_id
+
+        tp_gens = []
+        if hasattr(self, "tp_gen_tree"):
+            tp_gens = [int(iid) for iid in self.tp_gen_tree.get_children() if self.tp_gen_tree.item(iid, "values")[0] == "☑"]
+        if not tp_gens and getattr(self, "_pending_tp_generals", None):
+            tp_gens = list(self._pending_tp_generals)
+
         profile = {
             "version": 1,
             "building": {
@@ -1396,6 +1410,8 @@ class Dashboard(tk.Frame):
                 "resource_cities": sorted(list(self._selected_resource_cities)),
             },
             "thao_phat": {
+                "city_id": tp_city_id,
+                "generals": tp_gens,
                 "min_army": self.tp_target_inf_var.get() if hasattr(self, "tp_target_inf_var") else (self.tp_min_army_var.get() if hasattr(self, "tp_min_army_var") else "5000"),
                 "target_infantry": self.tp_target_inf_var.get() if hasattr(self, "tp_target_inf_var") else "5000",
                 "target_cavalry": self.tp_target_cav_var.get() if hasattr(self, "tp_target_cav_var") else "0",
@@ -1439,6 +1455,7 @@ class Dashboard(tk.Frame):
                 "auto_recruit": bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True,
                 "auto_morale": bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True,
                 "min_morale": self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95",
+                "current_base_id": self._current_bm_base_id,
                 "bases": {str(bid): cfg.to_dict() for bid, cfg in self.bm_base_configs.items()} if hasattr(self, "bm_base_configs") else {},
             },
             "logistics": {
@@ -1734,6 +1751,27 @@ class Dashboard(tk.Frame):
                 self.tp_min_morale_var.set(str(tp_data["min_morale"]))
             if hasattr(self, "tp_interval_var") and "interval" in tp_data:
                 self.tp_interval_var.set(str(tp_data["interval"]))
+
+            if "city_id" in tp_data and tp_data["city_id"] is not None:
+                try:
+                    self._pending_tp_city_id = int(tp_data["city_id"])
+                    if hasattr(self, "tp_city_combo") and self.roster and self.roster.bases:
+                        for idx, b in enumerate(self.roster.bases):
+                            if b.id == self._pending_tp_city_id:
+                                self.tp_city_combo.current(idx)
+                                self._on_tp_city_selected()
+                                break
+                except (ValueError, TypeError):
+                    pass
+
+            if "generals" in tp_data and isinstance(tp_data["generals"], list):
+                self._pending_tp_generals = {int(x) for x in tp_data["generals"] if str(x).isdigit()}
+                if hasattr(self, "tp_gen_tree") and self.tp_gen_tree.get_children():
+                    for iid in self.tp_gen_tree.get_children():
+                        vals = list(self.tp_gen_tree.item(iid, "values"))
+                        vals[0] = "☑" if int(iid) in self._pending_tp_generals else "☐"
+                        self.tp_gen_tree.item(iid, values=vals)
+
             loaded_sections.append("Thảo Phạt")
 
         # 4. Gọi Man
@@ -1797,8 +1835,8 @@ class Dashboard(tk.Frame):
             if hasattr(self, "bm_mode_var") and "mode" in bm_data:
                 try:
                     self.bm_mode_var.set(int(bm_data["mode"]))
-                    if hasattr(self, "_on_bm_mode_changed"):
-                        self._on_bm_mode_changed()
+                    if hasattr(self, "_update_bm_mode_ui_states"):
+                        self._update_bm_mode_ui_states(int(bm_data["mode"]))
                 except Exception:
                     pass
             if hasattr(self, "bm_radius_var") and "radius" in bm_data:
@@ -1834,8 +1872,14 @@ class Dashboard(tk.Frame):
                 self.bm_auto_morale_var.set(bool(bm_data["auto_morale"]))
             if hasattr(self, "bm_min_morale_var") and "min_morale" in bm_data:
                 self.bm_min_morale_var.set(str(bm_data["min_morale"]))
+            if "current_base_id" in bm_data and bm_data["current_base_id"] is not None:
+                try:
+                    self._current_bm_base_id = int(bm_data["current_base_id"])
+                except (ValueError, TypeError):
+                    pass
             if "bases" in bm_data and isinstance(bm_data["bases"], dict) and bm_data["bases"]:
                 self.bm_base_configs.clear()
+                self._pending_bm_generals = None
                 for bid_str, bcfg_raw in bm_data["bases"].items():
                     if isinstance(bcfg_raw, dict):
                         try:
@@ -1873,12 +1917,20 @@ class Dashboard(tk.Frame):
                 if legacy_cfg.mode == 1 and legacy_cfg.camp_id and str(legacy_cfg.camp_id).lstrip("-").isdigit():
                     target_bid = int(legacy_cfg.camp_id)
                 elif self._current_bm_base_id:
-                    target_bid = self._current_bm_base_id
-                elif self.roster and self.roster.bases:
-                    target_bid = self.roster.bases[0].id
+                    curr_b = next((b for b in self.roster.bases if b.id == self._current_bm_base_id), None) if self.roster else None
+                    if curr_b and (legacy_cfg.mode == 1 or not curr_b.is_camp):
+                        target_bid = self._current_bm_base_id
+                if target_bid is None and self.roster:
+                    if legacy_cfg.mode == 2 and self.roster.cities:
+                        target_bid = self.roster.cities[0].id
+                    elif legacy_cfg.mode == 1 and self.roster.camps:
+                        target_bid = self.roster.camps[0].id
+                    elif self.roster.bases:
+                        target_bid = self.roster.bases[0].id
 
                 if target_bid is not None:
                     self.bm_base_configs[target_bid] = legacy_cfg
+                    self._current_bm_base_id = target_bid
                     if hasattr(self, "bm_bases_tree") and self.roster:
                         self._refresh_bm_bases_tree()
             if "generals" in bm_data and isinstance(bm_data["generals"], list):
@@ -2139,6 +2191,9 @@ class Dashboard(tk.Frame):
             return
         base = bases[sel_idx]
         self.tp_gen_tree.delete(*self.tp_gen_tree.get_children())
+        pending_gens = getattr(self, "_pending_tp_generals", None)
+        target_cid = getattr(self, "_pending_tp_city_id", None)
+        apply_pending = (pending_gens is not None) and (target_cid is None or target_cid == base.id)
         for g in self.roster.generals_of(base.id):
             if g.role != "vo":
                 continue
@@ -2147,12 +2202,13 @@ class Dashboard(tk.Frame):
             cav = army.cavalry if army else 0
             arc = army.archers if army else 0
             total = army.total if army else 0
+            sym = "☑" if (apply_pending and g.id in pending_gens) else "☐"
             self.tp_gen_tree.insert(
                 "",
                 "end",
                 iid=str(g.id),
                 text=g.name,
-                values=("☐", g.level, f"{g.stamina}/{g.stamina_max}", g.morale, inf, cav, arc, total),
+                values=(sym, g.level, f"{g.stamina}/{g.stamina_max}", g.morale, inf, cav, arc, total),
             )
 
     def _on_tp_gen_toggle(self, event):
@@ -3120,6 +3176,13 @@ class Dashboard(tk.Frame):
             self.bm_log_text.delete("1.0", "end")
 
     def _update_bm_mode_ui_states(self, mode: int):
+        if hasattr(self, "bm_city_combo") and hasattr(self, "roster") and self.roster:
+            if mode == 2:
+                items = [c.display_name for c in self.roster.cities]
+            else:
+                items = [c.display_name for c in self.roster.camps] if self.roster.camps else [b.display_name for b in self.roster.bases]
+            self.bm_city_combo["values"] = items
+
         if mode == 2:  # Chế độ 2: Xuất quân thẳng từ Thành
             if hasattr(self, "bm_base_lbl"):
                 self.bm_base_lbl.configure(text="Thành xuất phát:")
@@ -3146,17 +3209,10 @@ class Dashboard(tk.Frame):
     def _on_bm_mode_changed(self):
         mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
         self._update_bm_mode_ui_states(mode)
-        if hasattr(self, "roster") and self.roster:
-            cities_items = [c.display_name for c in self.roster.cities]
-            camps_items = [c.display_name for c in self.roster.camps] if self.roster.camps else [b.display_name for b in self.roster.bases]
-            if mode == 2 and cities_items and hasattr(self, "bm_city_combo"):
-                self.bm_city_combo["values"] = cities_items
-                if self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(cities_items):
-                    self.bm_city_combo.current(0)
-            elif mode == 1 and camps_items and hasattr(self, "bm_city_combo"):
-                self.bm_city_combo["values"] = camps_items
-                if self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= len(camps_items):
-                    self.bm_city_combo.current(0)
+        if hasattr(self, "bm_city_combo"):
+            combo_len = len(self.bm_city_combo["values"])
+            if combo_len > 0 and (self.bm_city_combo.current() < 0 or self.bm_city_combo.current() >= combo_len):
+                self.bm_city_combo.current(0)
         self._on_bm_city_selected()
 
     def _on_bm_city_selected(self, _event=None):
@@ -3217,8 +3273,15 @@ class Dashboard(tk.Frame):
             return
         if getattr(self, "_pending_bm_legacy_config", None) and self.roster.bases:
             if not any(b.id in self.bm_base_configs for b in self.roster.bases):
-                target_bid = self.roster.bases[0].id
+                if self._pending_bm_legacy_config.mode == 2 and self.roster.cities:
+                    target_bid = self.roster.cities[0].id
+                elif self._pending_bm_legacy_config.mode == 1 and self.roster.camps:
+                    target_bid = self.roster.camps[0].id
+                else:
+                    target_bid = self.roster.bases[0].id
                 self.bm_base_configs[target_bid] = self._pending_bm_legacy_config
+                if not self._pending_bm_legacy_config.generals:
+                    self._pending_bm_legacy_config.generals = [g.id for g in self.roster.generals_of(target_bid) if g.role == "vo"]
             self._pending_bm_legacy_config = None
 
         self.bm_bases_tree.delete(*self.bm_bases_tree.get_children())
@@ -3239,7 +3302,21 @@ class Dashboard(tk.Frame):
             )
 
         if self.roster.bases:
-            target_id = self._current_bm_base_id if (self._current_bm_base_id and any(b.id == self._current_bm_base_id for b in self.roster.bases)) else self.roster.bases[0].id
+            target_id = self._current_bm_base_id if (self._current_bm_base_id and any(b.id == self._current_bm_base_id for b in self.roster.bases)) else None
+            if target_id is None:
+                for b in self.roster.bases:
+                    cfg = self.bm_base_configs.get(b.id)
+                    if cfg and cfg.enabled:
+                        target_id = b.id
+                        break
+            if target_id is None:
+                cur_mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
+                if cur_mode == 1 and self.roster.camps:
+                    target_id = self.roster.camps[0].id
+                else:
+                    target_id = self.roster.bases[0].id
+
+            self._current_bm_base_id = target_id
             iid = str(target_id)
             if self.bm_bases_tree.exists(iid):
                 self.bm_bases_tree.selection_set(iid)
@@ -3361,7 +3438,7 @@ class Dashboard(tk.Frame):
         if hasattr(self, "bm_parent_city_combo") and self.roster.cities:
             if cfg.parent_city_id:
                 for idx, c in enumerate(self.roster.cities):
-                    if c.id == cfg.parent_city_id:
+                    if str(c.id) == str(cfg.parent_city_id):
                         self.bm_parent_city_combo.current(idx)
                         break
             elif not self.bm_parent_city_combo.get() and len(self.roster.cities) > 0:
@@ -3393,6 +3470,11 @@ class Dashboard(tk.Frame):
                     self.bm_city_combo.current(idx)
                     break
 
+        if hasattr(self, "bm_bases_tree") and self.bm_bases_tree.exists(str(base_id)):
+            cur_sel = self.bm_bases_tree.selection()
+            if not cur_sel or cur_sel[0] != str(base_id):
+                self.bm_bases_tree.selection_set(str(base_id))
+
         if hasattr(self, "bm_gen_tree"):
             self.bm_gen_tree.delete(*self.bm_gen_tree.get_children())
             sel_gens_set = set(cfg.generals) if cfg.generals is not None else set()
@@ -3407,7 +3489,7 @@ class Dashboard(tk.Frame):
                 total = army.total if army else 0
                 if pending is not None:
                     checked = "☑" if g.id in pending else "☐"
-                elif cfg.generals:
+                elif cfg.generals is not None:
                     checked = "☑" if g.id in sel_gens_set else "☐"
                 else:
                     checked = "☑"
@@ -6287,17 +6369,38 @@ class Dashboard(tk.Frame):
                     break
 
 
-        for combo in (self.tp_city_combo, self.log_from_city_combo, self.log_to_city_combo):
+        for combo in (self.log_from_city_combo, self.log_to_city_combo):
             combo["values"] = all_base_items
             if all_base_items and not combo.get():
                 combo.current(0)
 
-        self.bm_city_combo["values"] = camps_items
-        if camps_items and not self.bm_city_combo.get():
-            self.bm_city_combo.current(0)
-            self._on_bm_city_selected()
+        if hasattr(self, "tp_city_combo") and all_base_items:
+            self.tp_city_combo["values"] = all_base_items
+            tp_cid = getattr(self, "_pending_tp_city_id", None)
+            matched = False
+            if tp_cid is not None:
+                for idx, b in enumerate(roster.bases):
+                    if b.id == tp_cid:
+                        self.tp_city_combo.current(idx)
+                        matched = True
+                        break
+            if not matched and (self.tp_city_combo.current() < 0 or not self.tp_city_combo.get()):
+                self.tp_city_combo.current(0)
+            self._on_tp_city_selected()
+
+        bm_mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
+        if hasattr(self, "bm_city_combo"):
+            self.bm_city_combo["values"] = city_items if bm_mode == 2 else camps_items
+            if (bm_mode == 2 and city_items) or camps_items:
+                if not self.bm_city_combo.get() or self.bm_city_combo.current() < 0:
+                    self.bm_city_combo.current(0)
+
         if hasattr(self, "_refresh_bm_bases_tree"):
             self._refresh_bm_bases_tree()
+        else:
+            if camps_items and not self.bm_city_combo.get():
+                self.bm_city_combo.current(0)
+                self._on_bm_city_selected()
 
         if hasattr(self, "dt_camp_combo"):
             self.dt_camp_combo["values"] = camps_items
@@ -6322,13 +6425,9 @@ class Dashboard(tk.Frame):
             if hasattr(self, "_refresh_craft_tree"):
                 self._refresh_craft_tree()
 
-        if all_base_items:
-            self._on_tp_city_selected()
         if city_items:
             self._fetch_city_buildings()
             self._on_gd_city_selected()
-        if camps_items or all_base_items:
-            self._on_bm_city_selected()
 
         today_str = time.strftime("%Y-%m-%d")
         if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():

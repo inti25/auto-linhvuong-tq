@@ -145,12 +145,17 @@ class ThaoPhatProfile:
     auto_morale: bool = True
     min_morale: str = "95"
     interval: str = "10"
+    city_id: Optional[int] = None
+    generals: list[int] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> "ThaoPhatProfile":
         if not isinstance(data, dict):
             return cls()
         min_army = str(data.get("min_army", data.get("target_infantry", "5000")))
+        raw_gens = data.get("generals", [])
+        gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
+        cid = data.get("city_id")
         return cls(
             min_army=min_army,
             target_infantry=str(data.get("target_infantry", min_army)),
@@ -161,6 +166,8 @@ class ThaoPhatProfile:
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
             interval=str(data.get("interval", "10")),
+            city_id=int(cid) if cid is not None and str(cid).lstrip("-").isdigit() else None,
+            generals=gens,
         )
 
 
@@ -311,6 +318,7 @@ class BinhManProfile:
     auto_morale: bool = True
     min_morale: str = "95"
     bases: dict[str, BaseBinhManConfig] = field(default_factory=dict)
+    current_base_id: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "BinhManProfile":
@@ -336,6 +344,9 @@ class BinhManProfile:
             for bid_str, binfo in raw_bases.items():
                 bases_map[str(bid_str)] = BaseBinhManConfig.from_dict(binfo)
 
+        cbid = data.get("current_base_id")
+        current_base_id = int(cbid) if cbid is not None and str(cbid).lstrip("-").isdigit() else None
+
         return cls(
             mode=int(data.get("mode", 1)),
             radius=str(data.get("radius", "5")),
@@ -356,6 +367,7 @@ class BinhManProfile:
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
             bases=bases_map,
+            current_base_id=current_base_id,
         )
 
 
