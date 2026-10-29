@@ -219,8 +219,12 @@ Cơ chế trên giao diện đăng nhập và thanh điều hướng cho phép l
 _Avoid_: Account switcher, đổi acc, quản lý tài khoản
 
 **Thanh Điều Hướng Tài Khoản**:
-Khu vực menu dạng cột bên trái cửa sổ ứng dụng hiển thị danh sách các tài khoản đã lưu, kèm thẻ trạng thái hoạt động độc lập và các nút điều phối chung.
+Khu vực menu dạng cột bên trái cửa sổ ứng dụng hiển thị danh sách các tài khoản đã lưu, kèm thẻ trạng thái hoạt động độc lập và nút ủng hộ tác giả.
 _Avoid_: Account sidebar, menu trái, danh sách acc
+
+**Ủng Hộ Tác Giả** (Buy Me A Coffee):
+Nút bấm và cửa sổ tương tác (Modal Dialog) trên Thanh Điều Hướng Tài Khoản hiển thị mã QR thanh toán/ủng hộ (qrcode.webp) kèm thông điệp tri ân người dùng đã tin tưởng và đồng hành cùng dự án Auto Linh Vương.
+_Avoid_: Nút donate, quét mã ủng hộ, donate button
 
 **Không Gian Đa Tài Khoản**:
 Cửa sổ ứng dụng hợp nhất vận hành song song nhiều phiên làm việc của các tài khoản Linh Vương khác nhau trên cùng một tiến trình duy nhất.

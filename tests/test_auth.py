@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from linhvuong.auth import (
+    USER_AGENT,
     LoginError,
     apply_proxy_to_session,
     login,
@@ -130,11 +131,37 @@ def test_login_success():
     mock_post_resp.text = "登录成功"
     session.post = MagicMock(return_value=mock_post_resp)
     mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
     session.get = MagicMock(return_value=mock_get_resp)
 
     login(session, 57, "validuser", "validpass")
     session.post.assert_called_once()
     session.get.assert_called_once_with("http://sg57.dipan.com/login", timeout=30)
+    assert session.headers.get("User-Agent") == USER_AGENT
+
+
+def test_login_retries_get_on_502_and_raises_on_403():
+    session = requests.Session()
+    mock_post_resp = MagicMock()
+    mock_post_resp.text = "登录成功"
+    session.post = MagicMock(return_value=mock_post_resp)
+
+    resp_502 = MagicMock()
+    resp_502.status_code = 502
+    resp_200 = MagicMock()
+    resp_200.status_code = 200
+    session.get = MagicMock(side_effect=[resp_502, resp_200])
+
+    with patch("linhvuong.auth.time.sleep"):
+        login(session, 57, "inti00", "123456aA")
+    assert session.get.call_count == 2
+
+    resp_403 = MagicMock()
+    resp_403.status_code = 403
+    session.get = MagicMock(return_value=resp_403)
+    with pytest.raises(LoginError) as exc_info:
+        login(session, 57, "inti00", "123456aA")
+    assert "403 Forbidden" in str(exc_info.value)
 
 
 def test_login_invalid_credentials_error():
@@ -157,4 +184,3 @@ def test_login_captcha_required_error():
     with pytest.raises(LoginError) as exc_info:
         login(session, 57, "inti00", "anypass")
     assert "Captcha" in str(exc_info.value)
-

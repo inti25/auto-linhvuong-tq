@@ -18,7 +18,7 @@ from urllib.parse import quote, urlsplit
 
 import requests
 
-from .auth import normalize_proxy_url
+from .auth import USER_AGENT, normalize_proxy_url
 
 logger = logging.getLogger("linhvuong.proxy")
 
@@ -174,9 +174,7 @@ class ProxyPool:
         logger.info(f"Đang tải danh sách proxy từ {target_url}...")
         resp = requests.get(
             target_url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            },
+            headers={"User-Agent": USER_AGENT},
             timeout=timeout,
         )
         resp.raise_for_status()
@@ -211,7 +209,7 @@ class ProxyPool:
                     target_url,
                     proxies=proxies,
                     timeout=to,
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers={"User-Agent": USER_AGENT},
                 )
                 elapsed = time.time() - start
                 # Mã 200, 301, 302, 303, 307, 308 chứng tỏ kết nối thành công tới cổng game

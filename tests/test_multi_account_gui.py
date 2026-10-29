@@ -313,3 +313,33 @@ def test_multi_account_app_poll_statuses_updates_badges_and_detects_captcha(temp
     finally:
         app.destroy()
 
+
+
+def test_multi_account_app_coffee_button_and_dialog(temp_settings):
+    app = safe_multi_account_app()
+    try:
+        assert hasattr(app, "coffee_btn")
+        assert app.coffee_btn.cget("text") == "☕ Buy me a coffee"
+
+        # Gọi mở dialog ủng hộ tác giả
+        app._show_coffee_dialog()
+        # Tìm Toplevel con của app
+        toplevels = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)]
+        assert len(toplevels) == 1
+        dlg = toplevels[0]
+        assert "Buy Me A Coffee" in dlg.title()
+
+        # Kiểm tra nội dung văn bản tri ân
+        labels = []
+        for w in dlg.winfo_children():
+            if isinstance(w, tk.Label):
+                labels.append(w.cget("text"))
+            if hasattr(w, "winfo_children"):
+                for child in w.winfo_children():
+                    if isinstance(child, tk.Label):
+                        labels.append(child.cget("text"))
+        assert any("Cảm ơn bạn đã tin tưởng" in txt for txt in labels)
+
+        dlg.destroy()
+    finally:
+        app.destroy()

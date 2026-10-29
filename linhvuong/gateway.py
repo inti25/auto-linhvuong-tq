@@ -5,12 +5,9 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-logger = logging.getLogger("linhvuong.gateway")
+from .auth import USER_AGENT
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
+logger = logging.getLogger("linhvuong.gateway")
 
 RET_SESSION_EXPIRED = 198599
 
@@ -35,6 +32,12 @@ class GatewayClient:
         self.proxy_pool = proxy_pool
         self._relogin_lock = threading.Lock()
         self._last_relogin_time = 0.0
+        headers_attr = getattr(self.session, "headers", None)
+        if headers_attr is not None and hasattr(headers_attr, "update"):
+            try:
+                headers_attr.update({"User-Agent": USER_AGENT})
+            except Exception:
+                pass
         self._mount_pool()
 
     @staticmethod
@@ -71,7 +74,7 @@ class GatewayClient:
         }
 
     def call(self, endpoint: str, api_id: int, data: dict[str, Any]) -> Optional[dict]:
-        """POST tới <endpoint>?id=<api_id>. Retry tuyến tính khi HTTP 503."""
+        """POST tới <endpoint>?id=<api_id>. Retry tuyến tính khi HTTP 502/503/504."""
         url = f"{self.base_url}/GateWay/{endpoint}?id={api_id}"
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Request: POST {endpoint}?id={api_id} | Data: {data}")
@@ -111,9 +114,9 @@ class GatewayClient:
                         self._sleep(0.5)
                         continue
 
-            if resp.status_code == 503:
+            if resp.status_code in (502, 503, 504):
                 logger.warning(
-                    f"Máy chủ trả về HTTP 503 cho {endpoint}?id={api_id} (lần {attempt}/{self.max_retries})"
+                    f"Máy chủ trả về HTTP {resp.status_code} cho {endpoint}?id={api_id} (lần {attempt}/{self.max_retries})"
                 )
                 if attempt < self.max_retries:
                     self._sleep(0.5 * attempt)

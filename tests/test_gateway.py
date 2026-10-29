@@ -62,10 +62,25 @@ def test_gateway_triggers_relogin_and_retries_on_198599():
 
 def test_gateway_mounts_connection_pool():
     import requests
+    from linhvuong.auth import USER_AGENT
     sess = requests.Session()
     client = GatewayClient(53, sess)
     adapter = sess.get_adapter("http://sg53.dipan.com")
     assert adapter._pool_maxsize == 32
+    assert sess.headers.get("User-Agent") == USER_AGENT
+
+
+def test_gateway_retries_on_502_without_proxy():
+    session = MockSession([
+        MockRawResponse("<html>502 Bad Gateway</html>", status_code=502),
+        MockRawResponse('{"ret": 0, "ok": 1}', status_code=200),
+    ])
+    sleeps = []
+    client = GatewayClient(57, session, sleep=sleeps.append)
+    res = client.call("Common.ashx", 29, {"_": ""})
+    assert res == {"ret": 0, "ok": 1}
+    assert len(session.calls) == 2
+    assert sleeps == [0.5]
 
 
 def test_gateway_relogin_failed_returns_expired_result():
@@ -123,4 +138,3 @@ def test_gateway_relogin_recent_skips_duplicate_relogin():
     assert res is not None
     assert res.get("ret") == 0
     assert len(session.calls) == 2
-

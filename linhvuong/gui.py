@@ -59,6 +59,27 @@ def set_app_icon(win: tk.Tk | tk.Toplevel):
         pass
 
 
+def load_coffee_qr_image(max_w: int = 300, max_h: int = 400):
+    """Tải và co giãn mã QR ủng hộ tác giả từ file qrcode.webp."""
+    try:
+        import sys
+        from PIL import Image, ImageTk
+        base_dir = Path(getattr(sys, "_MEIPASS", "."))
+        candidates = [
+            base_dir / "qrcode.webp",
+            Path("qrcode.webp"),
+            Path(__file__).resolve().parent.parent / "qrcode.webp",
+        ]
+        for p in candidates:
+            if p.is_file():
+                img = Image.open(str(p))
+                img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+                return ImageTk.PhotoImage(img)
+    except Exception:
+        pass
+    return None
+
+
 def load_app_image():
     """Tải hình ảnh icon menu từ file PNG thuần Tkinter (không phụ thuộc PIL/NumPy)."""
     try:
@@ -939,6 +960,8 @@ class MultiAccountApp(tk.Tk):
         style.map("StartAll.TButton", background=[("active", "#34c759"), ("disabled", "#444a70")])
         style.configure("StopAll.TButton", background="#dc3545", foreground="white", font=("Segoe UI", 9, "bold"), padding=6)
         style.map("StopAll.TButton", background=[("active", "#ff453a"), ("disabled", "#444a70")])
+        style.configure("Coffee.TButton", background="#c89666", foreground="white", font=("Segoe UI", 9, "bold"), padding=6)
+        style.map("Coffee.TButton", background=[("active", "#d4a373"), ("disabled", "#444a70")])
 
     def _build_ui(self):
         # 1. Thanh điều hướng bên trái (Sidebar)
@@ -989,23 +1012,17 @@ class MultiAccountApp(tk.Tk):
         scrollbar.pack(side="right", fill="y")
         self.cards_canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Thanh điều khiển hàng loạt ở dưới đáy sidebar
+        # Thanh tiện ích / ủng hộ ở dưới đáy sidebar
         bottom_bar = tk.Frame(self.sidebar_frame, bg=CARD, padx=12, pady=12)
         bottom_bar.pack(fill="x", side="bottom")
 
-        ttk.Button(
+        self.coffee_btn = ttk.Button(
             bottom_bar,
-            text="▶️ Bắt đầu tất cả",
-            style="StartAll.TButton",
-            command=self._batch_start_all,
-        ).pack(fill="x", pady=2)
-
-        ttk.Button(
-            bottom_bar,
-            text="⏹️ Dừng tất cả",
-            style="StopAll.TButton",
-            command=self._batch_stop_all,
-        ).pack(fill="x", pady=2)
+            text="☕ Buy me a coffee",
+            style="Coffee.TButton",
+            command=self._show_coffee_dialog,
+        )
+        self.coffee_btn.pack(fill="x", pady=2)
 
         # 2. Khung làm việc bên phải (Workspace)
         self.workspace_frame = tk.Frame(self, bg=BG)
@@ -1362,6 +1379,75 @@ class MultiAccountApp(tk.Tk):
                     pass
         if stopped_count > 0:
             messagebox.showinfo("Dừng tất cả", f"Đã tạm dừng tự động hóa cho {stopped_count} tài khoản.")
+
+    def _show_coffee_dialog(self):
+        """Hiển thị cửa sổ modal Buy me a coffee kèm mã QR và lời cảm ơn."""
+        dialog = tk.Toplevel(self)
+        dialog.title("Ủng Hộ Tác Giả - Buy Me A Coffee")
+        dialog.configure(bg=CARD)
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        # Tiêu đề & lời cảm ơn
+        header_frame = tk.Frame(dialog, bg=CARD, padx=20, pady=12)
+        header_frame.pack(fill="x")
+
+        tk.Label(
+            header_frame,
+            text="☕ Buy Me A Coffee",
+            font=("Segoe UI", 13, "bold"),
+            fg="#e0a96d",
+            bg=CARD,
+        ).pack(pady=(0, 4))
+
+        tk.Label(
+            header_frame,
+            text="Cảm ơn bạn đã tin tưởng và đồng hành cùng Auto Linh Vương!\nSự ủng hộ của bạn là động lực lớn để dự án tiếp tục phát triển.",
+            font=("Segoe UI", 9),
+            fg=FG,
+            bg=CARD,
+            justify="center",
+        ).pack()
+
+        # Ảnh QR Code
+        qr_photo = load_coffee_qr_image(300, 400)
+        if qr_photo:
+            qr_frame = tk.Frame(dialog, bg="#181b27", padx=8, pady=8)
+            qr_frame.pack(padx=20, pady=8)
+
+            qr_lbl = tk.Label(qr_frame, image=qr_photo, bg="#181b27")
+            qr_lbl.image = qr_photo  # Giữ tham chiếu tránh bị Garbage Collection thu hồi
+            qr_lbl.pack()
+        else:
+            tk.Label(
+                dialog,
+                text="Không tìm thấy tệp mã QR (qrcode.webp)",
+                fg="#dc3545",
+                bg=CARD,
+                font=("Segoe UI", 9, "italic"),
+            ).pack(padx=20, pady=20)
+
+        # Nút Đóng
+        btn_frame = tk.Frame(dialog, bg=CARD, padx=20, pady=10)
+        btn_frame.pack(fill="x")
+
+        close_btn = ttk.Button(
+            btn_frame,
+            text="Đóng",
+            style="Sidebar.TButton",
+            command=dialog.destroy,
+        )
+        close_btn.pack(ipadx=16)
+
+        # Căn giữa cửa sổ dialog so với cửa sổ cha
+        dialog.update_idletasks()
+        try:
+            x = self.winfo_rootx() + (self.winfo_width() - dialog.winfo_width()) // 2
+            y = self.winfo_rooty() + (self.winfo_height() - dialog.winfo_height()) // 2
+            dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
 
     def _poll_statuses(self):
         try:

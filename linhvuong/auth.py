@@ -1,11 +1,16 @@
 """Đăng nhập Linh Vương (dùng chung cho CLI và GUI)."""
 
+import time
 from typing import Optional
 from urllib.parse import quote, urlsplit
 
 import requests
 
 LOGIN_URL = "http://pass.dipan.com/aspx/LoginAPI.aspx"
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 
 class LoginError(Exception):
@@ -118,9 +123,16 @@ def login(
     proxy_user: Optional[str] = None,
     proxy_pass: Optional[str] = None,
 ) -> None:
-    """Theo báo cáo ZMan; chưa kiểm chứng trên server thật."""
+    """Đăng nhập tài khoản vào cổng pass.dipan.com và kích hoạt phiên tại sg<server_id>.dipan.com."""
     if proxy is not None:
         apply_proxy_to_session(session, proxy, username=proxy_user, password=proxy_pass)
+
+    headers_attr = getattr(session, "headers", None)
+    if headers_attr is not None and hasattr(headers_attr, "update"):
+        try:
+            headers_attr.update({"User-Agent": USER_AGENT})
+        except Exception:
+            pass
 
     cookies = getattr(session, "cookies", None)
     if cookies is not None and hasattr(cookies, "clear"):
@@ -139,7 +151,7 @@ def login(
                 "callback": f"http://sg{server_id}.dipan.com",
             },
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": USER_AGENT,
                 "Referer": LOGIN_URL,
             },
             timeout=30,
@@ -154,7 +166,30 @@ def login(
             if "用户名或密码不正确" in resp.text:
                 raise LoginError("Đăng nhập thất bại: Sai tên tài khoản hoặc mật khẩu.")
             raise LoginError(f"Đăng nhập thất bại: Sai tài khoản hoặc mật khẩu (HTTP {resp.status_code}).")
-        session.get(f"http://sg{server_id}.dipan.com/login", timeout=30)
+
+        login_url_server = f"http://sg{server_id}.dipan.com/login"
+        for attempt in range(3):
+            get_resp = session.get(login_url_server, timeout=30)
+            status = getattr(get_resp, "status_code", 200)
+            if status in (502, 503, 504) and attempt < 2:
+                # Nếu redirect 302 từ /login đã kịp gán cookie ASP.NET_SessionId trên sg<id>.dipan.com thì không cần gọi lại /login
+                has_sg_session = False
+                if cookies is not None:
+                    try:
+                        for c in cookies:
+                            if getattr(c, "name", "") in ("ASP.NET_SessionId", "uid") and f"sg{server_id}" in getattr(c, "domain", ""):
+                                has_sg_session = True
+                                break
+                    except Exception:
+                        pass
+                if not has_sg_session:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+            if status == 403:
+                raise LoginError(
+                    f"Máy chủ game sg{server_id}.dipan.com từ chối kết nối (HTTP 403 Forbidden)."
+                )
+            break
     except LoginError:
         raise
     except requests.exceptions.ProxyError as e:
