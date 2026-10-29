@@ -235,12 +235,12 @@ class WeaponCrafter:
             raise CaptchaRequired()
 
         if ret == RET_OK:
-            msg = f"✅ Đã đặt lệnh chế tạo thành công: {amount}x '{w_name}' (Xưởng ô {plot_id})"
+            msg = f"✅ Đã đặt lệnh chế tạo thành công: {amount} '{w_name}' (Xưởng ô {plot_id})"
             if notify:
                 notify(msg)
             return True, 0, msg
         elif ret == 32:
-            msg = f"⚠️ Không đủ tài nguyên (Gỗ/Đá/Sắt/Lúa) để chế tạo {amount}x '{w_name}', hoãn sang chu kỳ sau"
+            msg = f"⚠️ Không đủ tài nguyên (Gỗ/Đá/Sắt/Lúa) để chế tạo {amount} '{w_name}', hoãn sang chu kỳ sau"
             if notify:
                 notify(msg)
             return False, 32, msg

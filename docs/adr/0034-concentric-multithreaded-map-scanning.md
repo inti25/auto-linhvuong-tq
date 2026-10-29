@@ -36,3 +36,4 @@ Khi người chơi thiết lập bán kính quét lớn (ví dụ bán kính 50 
   - Thời gian quét trọn vẹn bán kính 60 giảm từ **~150 giây xuống còn ~19 giây** (tăng tốc độ gấp **~8 lần**).
   - Với các mục tiêu ở khoảng cách gần và trung bình (bán kính 10 - 25), thời gian phản hồi chỉ còn từ **1 - 3 giây**.
 - **An toàn máy chủ**: Mức tải 3 luồng song song qua kết nối SOCKS5 hoàn toàn nằm trong ngưỡng an toàn của game server Linh Vương.
+
