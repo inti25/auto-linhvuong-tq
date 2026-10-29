@@ -46,7 +46,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          python -m pytest tests/test_tasks.py tests/test_battle.py tests/test_building.py tests/test_roster.py tests/test_logistics.py tests/test_thao_phat.py
+          python -m pytest tests/test_tasks.py tests/test_battle.py tests/test_building.py tests/test_roster.py tests/test_logistics.py tests/test_thao_phat.py tests/test_coffee_qr_frozen.py
 
       - name: Build executable with PyInstaller
         run: |
@@ -65,6 +65,10 @@ jobs:
           if (Test-Path "config.example.json") { Copy-Item "config.example.json" -Destination "dist/package/" }
           if (Test-Path "build_plans.example.json") { Copy-Item "build_plans.example.json" -Destination "dist/package/" }
           if (Test-Path "tech_plans.example.json") { Copy-Item "tech_plans.example.json" -Destination "dist/package/" }
+          if (Test-Path "linhvuong.ico") { Copy-Item "linhvuong.ico" -Destination "dist/package/" }
+          if (Test-Path "linhvuong.png") { Copy-Item "linhvuong.png" -Destination "dist/package/" }
+          if (Test-Path "linhvuong_menu.png") { Copy-Item "linhvuong_menu.png" -Destination "dist/package/" }
+          if (Test-Path "qrcode.png") { Copy-Item "qrcode.png" -Destination "dist/package/" }
 
           # Nén file zip
           Compress-Archive -Path "dist/package/*" -DestinationPath "dist/$zipName" -Force
