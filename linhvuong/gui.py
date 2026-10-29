@@ -17,20 +17,70 @@ BG, CARD, FG, ACCENT = "#14161f", "#1e2130", "#e8eaf2", "#6c7bff"
 
 
 def set_app_icon(win: tk.Tk | tk.Toplevel):
-    """Đặt icon cho cửa sổ ứng dụng từ file linhvuong.ico."""
+    """Đặt icon cho cửa sổ ứng dụng và taskbar Windows thuần Tkinter (không phụ thuộc PIL/NumPy)."""
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("linhvuong.autobot.multiaccount.v1")
+    except Exception:
+        pass
+
     try:
         import sys
+        base_dir = Path(getattr(sys, "_MEIPASS", "."))
         candidates = [
-            Path(getattr(sys, "_MEIPASS", ".")) / "linhvuong.ico",
+            base_dir / "linhvuong.ico",
             Path("linhvuong.ico"),
             Path(__file__).resolve().parent.parent / "linhvuong.ico",
         ]
         for p in candidates:
             if p.is_file():
-                win.iconbitmap(str(p))
+                try:
+                    win.iconbitmap(str(p))
+                except Exception:
+                    pass
                 break
+
+        # Đặt iconphoto bằng PNG thuần Tkinter để hiển thị trên Taskbar & Alt-Tab
+        png_candidates = [
+            base_dir / "linhvuong.png",
+            Path("linhvuong.png"),
+            Path(__file__).resolve().parent.parent / "linhvuong.png",
+        ]
+        for png_p in png_candidates:
+            if png_p.is_file():
+                try:
+                    photo = tk.PhotoImage(file=str(png_p))
+                    win.iconphoto(True, photo)
+                    win._app_icon_photo = photo
+                    break
+                except Exception:
+                    pass
     except Exception:
         pass
+
+
+def load_app_image():
+    """Tải hình ảnh icon menu từ file PNG thuần Tkinter (không phụ thuộc PIL/NumPy)."""
+    try:
+        import sys
+        base_dir = Path(getattr(sys, "_MEIPASS", "."))
+        candidates = [
+            base_dir / "linhvuong_menu.png",
+            Path("linhvuong_menu.png"),
+            Path(__file__).resolve().parent.parent / "linhvuong_menu.png",
+            base_dir / "linhvuong.png",
+            Path("linhvuong.png"),
+            Path(__file__).resolve().parent.parent / "linhvuong.png",
+        ]
+        for p in candidates:
+            if p.is_file():
+                try:
+                    return tk.PhotoImage(file=str(p))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return None
 
 
 class LoginWindow(tk.Tk):
@@ -899,13 +949,18 @@ class MultiAccountApp(tk.Tk):
         # Header của sidebar
         sidebar_header = tk.Frame(self.sidebar_frame, bg=CARD, padx=12, pady=12)
         sidebar_header.pack(fill="x")
-        tk.Label(
+
+        self.brand_icon = load_app_image()
+        self.brand_lbl = tk.Label(
             sidebar_header,
-            text="🏰 Linh Vương",
+            text=" Linh Vương" if self.brand_icon else "Linh Vương",
+            image=self.brand_icon if self.brand_icon else "",
+            compound="left" if self.brand_icon else "none",
             font=("Segoe UI", 13, "bold"),
             fg=ACCENT,
             bg=CARD,
-        ).pack(anchor="w")
+        )
+        self.brand_lbl.pack(anchor="w")
 
         add_btn = ttk.Button(
             sidebar_header,
