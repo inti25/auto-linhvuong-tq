@@ -35,10 +35,10 @@ class FakeGateway:
         return FakeResponse(200, self.views.get(mid, {"npc_tent": []}))
 
 
-def make(views=None, failures=None, locks=None):
+def make(views=None, failures=None, locks=None, step=7, workers=3):
     session = FakeGateway(views, failures)
     client = GatewayClient(53, session, sleep=session.sleeps.append)
-    scanner = Scanner(client, locks or TargetLocks(), delay=0.0, sleep=lambda s: None)
+    scanner = Scanner(client, locks or TargetLocks(), delay=0.0, step=step, workers=workers, sleep=lambda s: None)
     return scanner, session
 
 
@@ -47,16 +47,16 @@ def npc_at(x, y, target_id, man_type):
 
 
 def test_returns_nearest_matching_target():
-    near = npc_at(5, 0, 111, 7)
-    far = npc_at(25, 0, 222, 7)
+    near = npc_at(7, 0, 111, 7)
+    far = npc_at(28, 0, 222, 7)
     scanner, _ = make(
         {
-            mid_from_coords(5, 0): {"npc_tent": [near]},
-            mid_from_coords(25, 0): {"npc_tent": [far]},
+            mid_from_coords(7, 0): {"npc_tent": [near]},
+            mid_from_coords(28, 0): {"npc_tent": [far]},
         }
     )
     t = scanner.find_nearest(0, 0, radius=30, target_types=[7])
-    assert (t.x, t.y, t.target_id, t.man_type) == (5, 0, 111, 7)
+    assert (t.x, t.y, t.target_id, t.man_type) == (7, 0, 111, 7)
 
 
 def test_scans_points_in_order_of_distance_within_circle():
@@ -101,11 +101,11 @@ def test_retries_on_503_with_backoff_then_succeeds():
 
 def test_gives_up_on_a_point_after_max_retries_and_continues():
     bad = mid_from_coords(0, 0)
-    good = mid_from_coords(5, 0)
+    good = mid_from_coords(7, 0)
     scanner, _ = make(
-        {good: {"npc_tent": [npc_at(5, 0, 3, 7)]}}, failures={bad: [503] * 10}
+        {good: {"npc_tent": [npc_at(7, 0, 3, 7)]}}, failures={bad: [503] * 10}
     )
-    t = scanner.find_nearest(0, 0, radius=6, target_types=[7])
+    t = scanner.find_nearest(0, 0, radius=8, target_types=[7])
     assert t.target_id == 3
 
 
@@ -174,4 +174,37 @@ def test_nearest_base_priority_claims_when_this_base_is_closer():
     )
     assert target is not None
     assert target.target_id == 100
+
+
+def test_concurrent_scanning_finds_nearest_and_stops_early():
+    # Điểm (0, 0) không có gì, điểm (7, 0) có Man gần (d=7), điểm (21, 0) có Man xa (d=21)
+    # Các điểm xa hơn không cần quét hết vì đã tìm thấy Man gần nhất
+    scanner, session = make({
+        mid_from_coords(7, 0): {"npc_tent": [npc_at(7, 0, 10, 7)]},
+        mid_from_coords(21, 0): {"npc_tent": [npc_at(21, 0, 20, 7)]},
+    }, workers=3)
+    target = scanner.find_nearest(0, 0, radius=30, target_types=[7])
+    assert target is not None
+    assert target.target_id == 10
+    assert (target.x, target.y) == (7, 0)
+
+
+def test_sequential_fallback_when_workers_is_one():
+    scanner, session = make({
+        mid_from_coords(7, 0): {"npc_tent": [npc_at(7, 0, 10, 7)]},
+    }, workers=1)
+    target = scanner.find_nearest(0, 0, radius=10, target_types=[7])
+    assert target is not None
+    assert target.target_id == 10
+
+
+def test_scanner_custom_step_and_workers():
+    scanner, _ = make(step=10, workers=5)
+    assert scanner.step == 10
+    assert scanner.workers == 5
+    pts = scanner._scan_points(0, 0, 20)
+    # Với step=10, reach=20, các offset là -20, -10, 0, 10, 20
+    assert any(pt[1] == 10 and pt[2] == 0 for pt in pts)
+    assert not any(pt[1] == 7 for pt in pts)
+
 
