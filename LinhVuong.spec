@@ -17,7 +17,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PIL', 'Pillow', 'numpy', 'scipy', 'matplotlib'],
+    excludes=['PIL', 'Pillow', 'numpy'],
     noarchive=False,
     optimize=0,
 )
