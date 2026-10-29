@@ -4,7 +4,8 @@ import json
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+from tkinter import messagebox, ttk
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -441,6 +442,958 @@ class LoginWindow(tk.Tk):
         self.destroy()
 
 
+class AccountLoginFrame(tk.Frame):
+    """Khung đăng nhập cục bộ cho một tài khoản cụ thể trong Không Gian Đa Tài Khoản."""
+
+    def __init__(
+        self,
+        master,
+        account_data: Optional[dict] = None,
+        on_login_success: Optional[Callable] = None,
+        on_delete: Optional[Callable] = None,
+        **kwargs,
+    ):
+        super().__init__(master, bg=CARD, padx=32, pady=24, **kwargs)
+        self.account_data = dict(account_data or {})
+        self.on_login_success = on_login_success
+        self.on_delete = on_delete
+        self._updating_proxy = False
+
+        self.server_var = tk.StringVar(value=str(self.account_data.get("server", "")))
+        self.user_var = tk.StringVar(value=self.account_data.get("username", ""))
+        self.pass_var = tk.StringVar()  # Không lưu mật khẩu ra đĩa
+        self.proxy_url_var = tk.StringVar(value=self.account_data.get("proxy_url", ""))
+        self.proxy_var = tk.StringVar(value=self.account_data.get("proxy", "") or self.account_data.get("proxy_raw", ""))
+        self.proxy_user_var = tk.StringVar(value=self.account_data.get("proxy_user", ""))
+        self.proxy_pass_var = tk.StringVar(value=self.account_data.get("proxy_pass", ""))
+        self.status = tk.StringVar()
+
+        self._build_ui()
+
+    def _build_ui(self):
+        card = self
+        ttk.Label(card, text="Đăng Nhập Tài Khoản", style="Title.TLabel").grid(
+            row=0, column=0, columnspan=2, pady=(0, 16)
+        )
+
+        basic_fields = [
+            ("Server ID", self.server_var, ""),
+            ("Tài khoản", self.user_var, ""),
+            ("Mật khẩu", self.pass_var, "•"),
+        ]
+        for row, (label, var, show) in enumerate(basic_fields, start=1):
+            ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 14))
+            ttk.Entry(card, textvariable=var, show=show, width=28).grid(row=row, column=1, pady=4)
+
+        # URL Proxy List
+        ttk.Label(card, text="URL Proxy List").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 14))
+        purl_frame = tk.Frame(card, bg=CARD)
+        purl_frame.grid(row=4, column=1, sticky="ew", pady=4)
+        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=19).pack(side="left", fill="x", expand=True)
+        ttk.Button(purl_frame, text="🔄 Test", width=6, command=self._test_proxy_url).pack(side="left", padx=(4, 0))
+
+        proxy_fields = [
+            ("Proxy", self.proxy_var, ""),
+            ("Proxy User", self.proxy_user_var, ""),
+            ("Proxy Pass", self.proxy_pass_var, "•"),
+        ]
+        for row, (label, var, show) in enumerate(proxy_fields, start=5):
+            ttk.Label(card, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 14))
+            ttk.Entry(card, textvariable=var, show=show, width=28).grid(row=row, column=1, pady=4)
+
+        proxy_hint = ttk.Label(
+            card,
+            text="Hỗ trợ: URL tải proxy list hoặc thủ công ip:port / ip:port:user:pass",
+            foreground="#8a90b0",
+            font=("Segoe UI", 8),
+            wraplength=310,
+        )
+        proxy_hint.grid(row=8, column=0, columnspan=2, sticky="w", pady=(2, 4))
+
+        self.url_hint = ttk.Label(
+            card,
+            text="Địa chỉ: http://sg<Server ID>.dipan.com/",
+            foreground="#8a90b0",
+            font=("Segoe UI", 8),
+        )
+        self.url_hint.grid(row=9, column=0, columnspan=2, sticky="w")
+        self.server_var.trace_add("write", self._update_hint)
+        self.proxy_var.trace_add("write", self._on_proxy_change)
+        self._update_hint()
+
+        self.btn = ttk.Button(card, text="🔑 Đăng nhập", style="Login.TButton", command=self._submit)
+        self.btn.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(14, 6))
+
+        tk.Label(
+            card,
+            textvariable=self.status,
+            bg=CARD,
+            fg="#ff8a8a",
+            wraplength=320,
+            font=("Segoe UI", 9),
+        ).grid(row=11, column=0, columnspan=2)
+
+    def _update_hint(self, *_):
+        sid = self.server_var.get().strip() or "<Server ID>"
+        self.url_hint.configure(text=f"Địa chỉ: http://sg{sid}.dipan.com/")
+
+    def _on_proxy_change(self, *_):
+        if self._updating_proxy:
+            return
+        raw = self.proxy_var.get().strip()
+        if "@" not in raw and ":" in raw:
+            scheme = ""
+            rest = raw
+            if "://" in raw:
+                scheme, rest = raw.split("://", 1)
+            parts = rest.split(":")
+            if len(parts) == 4:
+                host, port, u, p = parts
+                if host and port.isdigit():
+                    self._updating_proxy = True
+                    try:
+                        prefix = f"{scheme}://" if scheme else ""
+                        self.proxy_var.set(f"{prefix}{host}:{port}")
+                        self.proxy_user_var.set(u)
+                        self.proxy_pass_var.set(p)
+                    finally:
+                        self._updating_proxy = False
+
+    def _test_proxy_url(self):
+        url = self.proxy_url_var.get().strip()
+        if not url:
+            self.status.set("Vui lòng nhập URL danh sách Proxy trước khi kiểm tra.")
+            return
+        self.status.set("🔄 Đang tải và kiểm tra danh sách proxy...")
+
+        def run_test():
+            try:
+                pool = ProxyPool(url=url)
+                count = pool.fetch_from_url()
+                if count == 0:
+                    self.after(0, self.status.set, "⚠️ Không tìm thấy proxy hợp lệ trong file tải về.")
+                    return
+                alive = pool.check_all()
+                if alive:
+                    best = alive[0]
+                    self.after(
+                        0,
+                        self.status.set,
+                        f"✅ Tìm thấy {len(alive)}/{count} proxy sống (Tốt nhất: {best.display_name} - {best.latency}s)",
+                    )
+                else:
+                    self.after(
+                        0,
+                        self.status.set,
+                        f"❌ Đã tải {count} proxy nhưng toàn bộ đều không kết nối được game.",
+                    )
+            except Exception as ex:
+                self.after(0, self.status.set, f"❌ Lỗi kiểm tra proxy: {ex}")
+
+        threading.Thread(target=run_test, daemon=True).start()
+
+    def _submit(self):
+        try:
+            server_id = parse_server_id(self.server_var.get())
+        except ValueError as e:
+            self.status.set(str(e))
+            return
+        username, password = self.user_var.get().strip(), self.pass_var.get()
+        if not username or not password:
+            self.status.set("Nhập tài khoản và mật khẩu.")
+            return
+
+        proxy_url = self.proxy_url_var.get().strip()
+        proxy_raw = self.proxy_var.get().strip()
+        proxy_user = self.proxy_user_var.get().strip()
+        proxy_pass = self.proxy_pass_var.get()
+        normalized_proxy = None
+        if not proxy_url and proxy_raw:
+            try:
+                normalized_proxy = normalize_proxy_url(
+                    proxy_raw, username=proxy_user, password=proxy_pass
+                )
+            except ValueError as e:
+                self.status.set(f"Proxy không hợp lệ: {e}")
+                return
+
+        self.btn.state(["disabled"])
+        self.status.set("Đang chuẩn bị kết nối...")
+        threading.Thread(
+            target=self._do_login,
+            args=(
+                server_id,
+                username,
+                password,
+                proxy_url,
+                proxy_raw,
+                proxy_user,
+                proxy_pass,
+                normalized_proxy,
+            ),
+            daemon=True,
+        ).start()
+
+    def _do_login(
+        self,
+        server_id,
+        username,
+        password,
+        proxy_url,
+        proxy_raw,
+        proxy_user,
+        proxy_pass,
+        normalized_proxy,
+    ):
+        session = requests.Session()
+        proxy_pool = None
+        if proxy_url:
+            self.after(0, self.status.set, "🔄 Đang tải và kiểm tra danh sách proxy...")
+            try:
+                proxy_pool = ProxyPool(url=proxy_url)
+                count = proxy_pool.fetch_from_url()
+                alive = proxy_pool.check_all()
+                if not alive:
+                    self.after(
+                        0,
+                        self._failed,
+                        f"Tải được {count} proxy từ URL nhưng toàn bộ đều không kết nối được.",
+                    )
+                    return
+                proxy_pool.apply_to_session(session)
+            except Exception as ex:
+                self.after(0, self._failed, f"Lỗi nạp proxy từ URL: {ex}")
+                return
+
+        self.after(0, self.status.set, "🔑 Đang đăng nhập máy chủ Linh Vương...")
+        try:
+            if not proxy_url and normalized_proxy:
+                login(session, server_id, username, password, proxy=normalized_proxy)
+            else:
+                login(session, server_id, username, password)
+        except LoginError as e:
+            self.after(0, self._failed, str(e))
+            return
+
+        self.after(
+            0,
+            self._succeeded,
+            session,
+            server_id,
+            username,
+            password,
+            proxy_raw,
+            proxy_user,
+            proxy_pass,
+            proxy_url,
+            proxy_pool,
+        )
+
+    def _failed(self, msg):
+        self.status.set(msg)
+        self.btn.state(["!disabled"])
+
+    def _succeeded(
+        self,
+        session,
+        server_id,
+        username,
+        password,
+        proxy_raw,
+        proxy_user,
+        proxy_pass,
+        proxy_url,
+        proxy_pool,
+    ):
+        self.status.set("✅ Đăng nhập thành công!")
+        if self.on_login_success:
+            self.on_login_success(
+                session=session,
+                server_id=server_id,
+                username=username,
+                password=password,
+                proxy_raw=proxy_raw,
+                proxy_user=proxy_user,
+                proxy_pass=proxy_pass,
+                proxy_url=proxy_url,
+                proxy_pool=proxy_pool,
+            )
+
+
+class AccountCard(tk.Frame):
+    """Thẻ đại diện cho một tài khoản trên Thanh Điều Hướng (menu trái)."""
+
+    def __init__(
+        self,
+        master,
+        account_key: str,
+        server_id: int | str,
+        username: str,
+        on_select: Callable[[str], None],
+        on_logout: Optional[Callable[[str], None]] = None,
+        on_delete: Optional[Callable[[str], None]] = None,
+        **kwargs,
+    ):
+        super().__init__(master, bg=CARD, padx=12, pady=10, cursor="hand2", **kwargs)
+        self.account_key = account_key
+        self.server_id = server_id
+        self.username = username
+        self.on_select = on_select
+        self.on_logout = on_logout
+        self.on_delete = on_delete
+        self.is_selected = False
+        self.is_connected = False
+        self._status_type = "disconnected"
+
+        self._build_ui()
+        self._bind_clicks(self)
+
+    def _build_ui(self):
+        # Dòng 1: Tên tài khoản & Server ID
+        self.header_frame = tk.Frame(self, bg=CARD)
+        self.header_frame.pack(fill="x", expand=True)
+
+        srv_str = f"S{self.server_id}" if self.server_id else ""
+        title_text = f"[{srv_str}] {self.username}" if self.username else "Tài khoản mới"
+        self.title_lbl = tk.Label(
+            self.header_frame,
+            text=title_text,
+            font=("Segoe UI", 10, "bold"),
+            fg=FG,
+            bg=CARD,
+            anchor="w",
+        )
+        self.title_lbl.pack(side="left", fill="x", expand=True)
+
+        # Dòng 2: Trạng thái kết nối
+        self.status_frame = tk.Frame(self, bg=CARD)
+        self.status_frame.pack(fill="x", expand=True, pady=(3, 0))
+
+        self.badge_lbl = tk.Label(
+            self.status_frame,
+            text="⚪ Chưa đăng nhập",
+            font=("Segoe UI", 8),
+            fg="#8a90b0",
+            bg=CARD,
+            anchor="w",
+        )
+        self.badge_lbl.pack(side="left")
+
+        # Dòng 3: Tóm tắt tác vụ bot đang chạy
+        self.task_lbl = tk.Label(
+            self,
+            text="Nghỉ",
+            font=("Segoe UI", 8),
+            fg="#6c7bff",
+            bg=CARD,
+            anchor="w",
+        )
+        self.task_lbl.pack(fill="x", expand=True, pady=(2, 0))
+
+    def _bind_clicks(self, widget):
+        widget.bind("<Button-1>", lambda e: self.on_select(self.account_key))
+        widget.bind("<Button-3>", self._show_context_menu)
+        for child in widget.winfo_children():
+            self._bind_clicks(child)
+
+    def _show_context_menu(self, event):
+        menu = tk.Menu(self, tearoff=0, bg=CARD, fg=FG, activebackground=ACCENT, activeforeground="white")
+        if self.is_connected and self.on_logout:
+            menu.add_command(label="🚪 Đăng xuất", command=lambda: self.on_logout(self.account_key))
+        if self.on_delete:
+            menu.add_command(label="🗑️ Xóa tài khoản", command=lambda: self.on_delete(self.account_key))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def update_info(self, server_id, username):
+        self.server_id = server_id
+        self.username = username
+        srv_str = f"S{self.server_id}" if self.server_id else ""
+        title_text = f"[{srv_str}] {self.username}" if self.username else "Tài khoản mới"
+        self.title_lbl.config(text=title_text)
+
+    def set_selected(self, selected: bool):
+        self.is_selected = selected
+        bg_col = "#2a2e45" if selected else CARD
+        border_col = ACCENT if selected else CARD
+        self.configure(bg=bg_col, highlightbackground=border_col, highlightthickness=2 if selected else 0)
+        self.header_frame.configure(bg=bg_col)
+        self.title_lbl.configure(bg=bg_col)
+        self.status_frame.configure(bg=bg_col)
+        self.badge_lbl.configure(bg=bg_col)
+        self.task_lbl.configure(bg=bg_col)
+
+    def set_status(self, status_type: str, status_text: str):
+        self._status_type = status_type
+        colors = {
+            "disconnected": ("⚪", "#8a90b0"),
+            "connecting": ("🟡", "#ffc107"),
+            "connected": ("🟢", "#28a745"),
+            "captcha": ("⚠️", "#ffc107"),
+            "error": ("🔴", "#dc3545"),
+        }
+        icon, col = colors.get(status_type, ("⚪", "#8a90b0"))
+        self.badge_lbl.configure(text=f"{icon} {status_text}", fg=col)
+        self.is_connected = status_type in ("connected", "captcha")
+
+    def set_tasks_summary(self, summary_text: str):
+        self.task_lbl.configure(text=summary_text or "Nghỉ")
+
+
+class MultiAccountApp(tk.Tk):
+    """Cửa sổ ứng dụng hợp nhất quản lý và chạy đồng thời nhiều tài khoản Linh Vương."""
+
+    def __init__(self):
+        super().__init__()
+        self.title("LinhVuong - Quản Lý Đa Tài Khoản")
+        set_app_icon(self)
+        self.geometry("1280x750")
+        self.minsize(1100, 650)
+        self.configure(bg=BG)
+
+        self.accounts: dict[str, dict] = {}
+        self.cards: dict[str, AccountCard] = {}
+        self.login_frames: dict[str, AccountLoginFrame] = {}
+        self.dashboards: dict[str, Any] = {}
+        self.current_key: Optional[str] = None
+        self._is_closing = False
+
+        self._init_styles()
+        self._build_ui()
+        self._load_accounts()
+
+        from tkinter import messagebox
+        self.messagebox = messagebox
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close_app)
+        self.after(1000, self._poll_statuses)
+
+    def _init_styles(self):
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("TLabel", background=CARD, foreground=FG, font=("Segoe UI", 10))
+        style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"), foreground=ACCENT)
+        style.configure("TEntry", fieldbackground="#2a2e45", foreground=FG, insertcolor=FG)
+        style.configure(
+            "Login.TButton",
+            background=ACCENT,
+            foreground="white",
+            font=("Segoe UI", 10, "bold"),
+            padding=8,
+        )
+        style.map("Login.TButton", background=[("active", "#8591ff"), ("disabled", "#444a70")])
+        style.configure("Sidebar.TButton", font=("Segoe UI", 9, "bold"), padding=6)
+        style.configure("StartAll.TButton", background="#28a745", foreground="white", font=("Segoe UI", 9, "bold"), padding=6)
+        style.map("StartAll.TButton", background=[("active", "#34c759"), ("disabled", "#444a70")])
+        style.configure("StopAll.TButton", background="#dc3545", foreground="white", font=("Segoe UI", 9, "bold"), padding=6)
+        style.map("StopAll.TButton", background=[("active", "#ff453a"), ("disabled", "#444a70")])
+
+    def _build_ui(self):
+        # 1. Thanh điều hướng bên trái (Sidebar)
+        self.sidebar_frame = tk.Frame(self, bg=CARD, width=250)
+        self.sidebar_frame.pack(side="left", fill="y", padx=(0, 2))
+        self.sidebar_frame.pack_propagate(False)
+
+        # Header của sidebar
+        sidebar_header = tk.Frame(self.sidebar_frame, bg=CARD, padx=12, pady=12)
+        sidebar_header.pack(fill="x")
+        tk.Label(
+            sidebar_header,
+            text="🏰 Linh Vương",
+            font=("Segoe UI", 13, "bold"),
+            fg=ACCENT,
+            bg=CARD,
+        ).pack(anchor="w")
+
+        add_btn = ttk.Button(
+            sidebar_header,
+            text="➕ Thêm tài khoản",
+            style="Sidebar.TButton",
+            command=self._on_add_account,
+        )
+        add_btn.pack(fill="x", pady=(10, 0))
+
+        # Danh sách thẻ tài khoản có thanh cuộn
+        list_container = tk.Frame(self.sidebar_frame, bg=CARD)
+        list_container.pack(fill="both", expand=True)
+
+        self.cards_canvas = tk.Canvas(list_container, bg=CARD, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.cards_canvas.yview)
+        self.cards_inner = tk.Frame(self.cards_canvas, bg=CARD)
+
+        self.cards_inner.bind(
+            "<Configure>",
+            lambda e: self.cards_canvas.configure(scrollregion=self.cards_canvas.bbox("all")),
+        )
+        self.cards_window = self.cards_canvas.create_window((0, 0), window=self.cards_inner, anchor="nw")
+        self.cards_canvas.configure(yscrollcommand=scrollbar.set)
+
+        self.cards_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.cards_canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # Thanh điều khiển hàng loạt ở dưới đáy sidebar
+        bottom_bar = tk.Frame(self.sidebar_frame, bg=CARD, padx=12, pady=12)
+        bottom_bar.pack(fill="x", side="bottom")
+
+        ttk.Button(
+            bottom_bar,
+            text="▶️ Bắt đầu tất cả",
+            style="StartAll.TButton",
+            command=self._batch_start_all,
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            bottom_bar,
+            text="⏹️ Dừng tất cả",
+            style="StopAll.TButton",
+            command=self._batch_stop_all,
+        ).pack(fill="x", pady=2)
+
+        # 2. Khung làm việc bên phải (Workspace)
+        self.workspace_frame = tk.Frame(self, bg=BG)
+        self.workspace_frame.pack(side="right", fill="both", expand=True)
+
+        # Thanh header của Workspace
+        self.workspace_header = tk.Frame(self.workspace_frame, bg="#181b27", height=46, padx=16)
+        self.workspace_header.pack(fill="x")
+        self.workspace_header.pack_propagate(False)
+
+        header_left = tk.Frame(self.workspace_header, bg="#181b27")
+        header_left.pack(side="left", fill="y")
+
+        self.header_title = tk.Label(
+            header_left,
+            text="Chưa chọn tài khoản",
+            font=("Segoe UI", 12, "bold"),
+            fg=FG,
+            bg="#181b27",
+        )
+        self.header_title.pack(side="left", pady=10)
+
+        self.header_status = tk.Label(
+            header_left,
+            text="",
+            font=("Segoe UI", 9),
+            fg="#8a90b0",
+            bg="#181b27",
+        )
+        self.header_status.pack(side="left", padx=(14, 0), pady=10)
+
+        self.header_logout_btn = ttk.Button(
+            self.workspace_header,
+            text="🚪 Đăng xuất",
+            command=self._on_current_logout,
+        )
+
+        # Thân của Workspace (chứa Login Frame hoặc Dashboard)
+        self.workspace_content = tk.Frame(self.workspace_frame, bg=BG)
+        self.workspace_content.pack(fill="both", expand=True)
+
+    def _on_canvas_configure(self, event):
+        self.cards_canvas.itemconfig(self.cards_window, width=event.width)
+
+    def _load_accounts(self):
+        accounts_dict = {}
+        last_account = ""
+        if SETTINGS.exists():
+            try:
+                data = json.loads(SETTINGS.read_text(encoding="utf-8"))
+                raw_accounts = data.get("accounts")
+                if isinstance(raw_accounts, dict) and raw_accounts:
+                    accounts_dict = dict(raw_accounts)
+                elif data.get("username"):
+                    srv = data.get("server", "")
+                    usr = data.get("username", "")
+                    k = f"{usr} @ S{srv}"
+                    accounts_dict[k] = {
+                        "server": srv,
+                        "username": usr,
+                        "proxy_url": data.get("proxy_url", ""),
+                        "proxy": data.get("proxy", ""),
+                        "proxy_user": data.get("proxy_user", ""),
+                        "proxy_pass": data.get("proxy_pass", ""),
+                    }
+                last_account = data.get("last_account", "")
+            except Exception:
+                pass
+
+        for k, v in accounts_dict.items():
+            self._add_account_entry(k, v)
+
+        if not self.accounts:
+            self._on_add_account()
+        else:
+            select_key = last_account if last_account in self.accounts else next(iter(self.accounts.keys()))
+            self._select_account(select_key)
+
+    def _add_account_entry(self, key: str, data: dict):
+        self.accounts[key] = {
+            "server": data.get("server", ""),
+            "username": data.get("username", ""),
+            "proxy_url": data.get("proxy_url", ""),
+            "proxy": data.get("proxy", "") or data.get("proxy_raw", ""),
+            "proxy_user": data.get("proxy_user", ""),
+            "proxy_pass": data.get("proxy_pass", ""),
+            "password": "",  # RAM ONLY
+            "session": None,
+            "proxy_pool": None,
+        }
+        card = AccountCard(
+            self.cards_inner,
+            account_key=key,
+            server_id=data.get("server", ""),
+            username=data.get("username", ""),
+            on_select=self._select_account,
+            on_logout=self._on_logout,
+            on_delete=self._on_delete_account,
+        )
+        card.pack(fill="x", expand=True, padx=6, pady=4)
+        self.cards[key] = card
+
+    def _select_account(self, key: str):
+        if key not in self.accounts:
+            return
+
+        # Bỏ chọn thẻ cũ
+        if self.current_key and self.current_key in self.cards:
+            self.cards[self.current_key].set_selected(False)
+        if self.current_key in self.login_frames:
+            self.login_frames[self.current_key].pack_forget()
+        if self.current_key in self.dashboards:
+            self.dashboards[self.current_key].pack_forget()
+
+        self.current_key = key
+        card = self.cards.get(key)
+        if card:
+            card.set_selected(True)
+
+        acc = self.accounts[key]
+        dash = self.dashboards.get(key)
+
+        if dash and getattr(dash, "winfo_exists", lambda: False)():
+            dash.pack(fill="both", expand=True)
+            srv_str = f"S{acc.get('server')}" if acc.get('server') else ""
+            self.header_title.config(text=f"[{srv_str}] {acc.get('username')}")
+            self.header_status.config(text="🟢 Đã kết nối", fg="#28a745")
+            self.header_logout_btn.pack(side="right", padx=12, pady=8)
+        else:
+            lf = self.login_frames.get(key)
+            if not lf or not getattr(lf, "winfo_exists", lambda: False)():
+                captured_key = key
+                lf = AccountLoginFrame(
+                    self.workspace_content,
+                    account_data=acc,
+                    on_login_success=lambda **kw: self._on_login_success(captured_key, **kw),
+                )
+                self.login_frames[key] = lf
+            lf.pack(fill="none", expand=True, pady=20)
+            srv_str = f"S{acc.get('server')}" if acc.get('server') else ""
+            usr = acc.get("username")
+            title_text = f"[{srv_str}] {usr}" if usr else "Tài khoản mới"
+            self.header_title.config(text=title_text)
+            self.header_status.config(text="⚪ Chưa đăng nhập", fg="#8a90b0")
+            self.header_logout_btn.pack_forget()
+
+    def _on_add_account(self):
+        draft_idx = 1
+        draft_key = f"Tài khoản mới #{draft_idx}"
+        while draft_key in self.accounts:
+            draft_idx += 1
+            draft_key = f"Tài khoản mới #{draft_idx}"
+
+        self._add_account_entry(draft_key, {"server": "", "username": "", "proxy": ""})
+        self._select_account(draft_key)
+
+    def _on_login_success(
+        self,
+        account_key: str,
+        session: requests.Session,
+        server_id: int,
+        username: str,
+        password: str,
+        proxy_raw: str,
+        proxy_user: str,
+        proxy_pass: str,
+        proxy_url: str,
+        proxy_pool: Optional[Any],
+    ):
+        canonical_key = f"{username} @ S{server_id}"
+
+        # Nếu là tài khoản mới hoặc key thay đổi
+        if canonical_key != account_key:
+            old_card = self.cards.pop(account_key, None)
+            if old_card:
+                old_card.destroy()
+            old_lf = self.login_frames.pop(account_key, None)
+            if old_lf:
+                old_lf.destroy()
+            self.accounts.pop(account_key, None)
+
+            if canonical_key not in self.cards:
+                self._add_account_entry(canonical_key, {
+                    "server": server_id,
+                    "username": username,
+                    "proxy_url": proxy_url,
+                    "proxy": proxy_raw,
+                    "proxy_user": proxy_user,
+                    "proxy_pass": proxy_pass,
+                })
+            self.current_key = canonical_key
+
+        acc = self.accounts[self.current_key]
+        acc.update({
+            "server": server_id,
+            "username": username,
+            "proxy_url": proxy_url,
+            "proxy": proxy_raw,
+            "proxy_user": proxy_user,
+            "proxy_pass": proxy_pass,
+            "password": password,  # RAM ONLY
+            "session": session,
+            "proxy_pool": proxy_pool,
+        })
+        self._persist_settings()
+
+        card = self.cards.get(self.current_key)
+        if card:
+            card.account_key = self.current_key
+            card.update_info(server_id, username)
+            card.set_status("connected", "Đã kết nối")
+            card.set_selected(True)
+
+        if self.current_key in self.login_frames:
+            self.login_frames[self.current_key].pack_forget()
+
+        if self.current_key in self.dashboards:
+            try:
+                self.dashboards[self.current_key].destroy()
+            except Exception:
+                pass
+
+        from .dashboard import Dashboard
+
+        dash = Dashboard(
+            session=session,
+            server_id=server_id,
+            username=username,
+            password=password,
+            proxy_raw=proxy_raw,
+            proxy_user=proxy_user,
+            proxy_pass=proxy_pass,
+            proxy_pool=proxy_pool,
+            master=self.workspace_content,
+        )
+        self.dashboards[self.current_key] = dash
+        dash.pack(fill="both", expand=True)
+
+        srv_str = f"S{server_id}"
+        self.header_title.config(text=f"[{srv_str}] {username}")
+        self.header_status.config(text="🟢 Đã kết nối", fg="#28a745")
+        self.header_logout_btn.pack(side="right", padx=12, pady=8)
+
+    def _on_current_logout(self):
+        if self.current_key:
+            self._on_logout(self.current_key)
+
+    def _on_logout(self, account_key: str):
+        dash = self.dashboards.pop(account_key, None)
+        if dash:
+            try:
+                dash.destroy()
+            except Exception:
+                pass
+
+        acc = self.accounts.get(account_key)
+        if acc:
+            acc["password"] = ""  # Xóa sạch mật khẩu trong RAM
+            acc["session"] = None
+
+        card = self.cards.get(account_key)
+        if card:
+            card.set_status("disconnected", "Chưa đăng nhập")
+            card.set_tasks_summary("Nghỉ")
+
+        if self.current_key == account_key:
+            self._select_account(account_key)
+
+    def _on_delete_account(self, account_key: str):
+        from tkinter import messagebox
+        if not messagebox.askyesno("Xác nhận xóa", f"Bạn có chắc muốn xóa tài khoản '{account_key}' khỏi danh bạ?"):
+            return
+
+        self._on_logout(account_key)
+        self.accounts.pop(account_key, None)
+        self._persist_settings()
+
+        card = self.cards.pop(account_key, None)
+        if card:
+            card.destroy()
+
+        lf = self.login_frames.pop(account_key, None)
+        if lf:
+            lf.destroy()
+
+        if self.current_key == account_key:
+            self.current_key = None
+            remaining = list(self.accounts.keys())
+            if remaining:
+                self._select_account(remaining[0])
+            else:
+                self._on_add_account()
+
+    def _persist_settings(self):
+        clean_accounts = {}
+        for k, v in self.accounts.items():
+            u = v.get("username", "")
+            s = v.get("server", "")
+            if not u or not s:
+                continue
+            clean_accounts[k] = {
+                "server": s,
+                "username": u,
+                "proxy_url": v.get("proxy_url", ""),
+                "proxy": v.get("proxy", "") or v.get("proxy_raw", ""),
+                "proxy_user": v.get("proxy_user", ""),
+                "proxy_pass": v.get("proxy_pass", ""),
+            }
+        last_acc = self.current_key if (self.current_key and self.current_key in clean_accounts) else ""
+        first_acc = next(iter(clean_accounts.values()), {})
+        data = {
+            "server": first_acc.get("server", ""),
+            "username": first_acc.get("username", ""),
+            "proxy_url": first_acc.get("proxy_url", ""),
+            "proxy": first_acc.get("proxy", ""),
+            "proxy_user": first_acc.get("proxy_user", ""),
+            "proxy_pass": first_acc.get("proxy_pass", ""),
+            "last_account": last_acc,
+            "accounts": clean_accounts,
+        }
+        try:
+            SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _batch_start_all(self):
+        from tkinter import messagebox
+        started_count = 0
+        for key, dash in self.dashboards.items():
+            if dash and getattr(dash, "winfo_exists", lambda: False)():
+                try:
+                    if hasattr(dash, "engine"):
+                        dash.engine.start_all()
+                    started_count += 1
+                except Exception:
+                    pass
+        if started_count > 0:
+            messagebox.showinfo("Bắt đầu tất cả", f"Đã gửi lệnh kích hoạt tự động hóa cho {started_count} tài khoản đang kết nối.")
+        else:
+            messagebox.showwarning("Thông báo", "Không có tài khoản nào đang kết nối để kích hoạt.")
+
+    def _batch_stop_all(self):
+        from tkinter import messagebox
+        stopped_count = 0
+        for key, dash in self.dashboards.items():
+            if dash and getattr(dash, "winfo_exists", lambda: False)():
+                try:
+                    if hasattr(dash, "engine"):
+                        dash.engine.stop_all()
+                    if hasattr(dash, "_tp_runner") and dash._tp_runner:
+                        dash._tp_runner.stop()
+                    stopped_count += 1
+                except Exception:
+                    pass
+        if stopped_count > 0:
+            messagebox.showinfo("Dừng tất cả", f"Đã tạm dừng tự động hóa cho {stopped_count} tài khoản.")
+
+    def _poll_statuses(self):
+        try:
+            for key, dash in list(self.dashboards.items()):
+                if not dash or not getattr(dash, "winfo_exists", lambda: False)():
+                    continue
+
+                needs_captcha = False
+                if hasattr(dash, "engine") and hasattr(dash.engine, "tasks"):
+                    for task in dash.engine.tasks.values():
+                        err = str(getattr(task, "last_error", "") or "")
+                        msg = str(getattr(task, "status_message", "") or "")
+                        if "Captcha" in err or "Captcha" in msg:
+                            needs_captcha = True
+                            break
+
+                active = []
+                if getattr(dash, "_tp_running", False):
+                    active.append("⚔️ Thảo Phạt")
+                if getattr(dash, "_bm_runner", None) and getattr(dash._bm_runner, "is_running", lambda: True)():
+                    active.append("🏕️ Bình Man")
+                if getattr(dash, "_bld_runner", None) and getattr(dash._bld_runner, "is_running", lambda: True)():
+                    active.append("🏗️ Xây Dựng")
+                if getattr(dash, "_res_runner", None) and getattr(dash._res_runner, "is_running", lambda: True)():
+                    active.append("🔬 Nghiên Cứu")
+                if getattr(dash, "_morale_runner", None) and getattr(dash._morale_runner, "is_running", lambda: True)():
+                    active.append("🧘 Sĩ Khí")
+                if getattr(dash, "_craft_running", False):
+                    active.append("🛡️ Rèn Quân")
+                if getattr(dash, "_gd_runner", None) and getattr(dash._gd_runner, "is_running", lambda: True)():
+                    active.append("🧛 Gọi Dân")
+
+                card = self.cards.get(key)
+                if card:
+                    if needs_captcha:
+                        card.set_status("captcha", "Cần giải Captcha")
+                    else:
+                        card.set_status("connected", "Đang chạy" if active else "Đã kết nối")
+                    card.set_tasks_summary(" | ".join(active) if active else "Nghỉ")
+
+                if key == self.current_key:
+                    if needs_captcha:
+                        self.header_status.config(text="⚠️ Cần giải Captcha", fg="#ffc107")
+                    else:
+                        st_text = "🟢 Đang chạy" if active else "🟢 Đã kết nối"
+                        self.header_status.config(text=st_text, fg="#28a745")
+        except Exception:
+            pass
+        finally:
+            if not self._is_closing:
+                self.after(1000, self._poll_statuses)
+
+    def _on_close_app(self):
+        from tkinter import messagebox
+        running_accounts = []
+        for key, dash in self.dashboards.items():
+            if dash and getattr(dash, "winfo_exists", lambda: False)():
+                is_running = (
+                    getattr(dash, "_tp_running", False)
+                    or (getattr(dash, "_bm_runner", None) and getattr(dash._bm_runner, "is_running", lambda: True)())
+                    or (getattr(dash, "_bld_runner", None) and getattr(dash._bld_runner, "is_running", lambda: True)())
+                    or (getattr(dash, "_res_runner", None) and getattr(dash._res_runner, "is_running", lambda: True)())
+                    or (getattr(dash, "_morale_runner", None) and getattr(dash._morale_runner, "is_running", lambda: True)())
+                )
+                if is_running:
+                    running_accounts.append(key)
+
+        if running_accounts:
+            msg = (
+                f"Đang có {len(running_accounts)} tài khoản đang chạy tác vụ tự động ngầm:\n"
+                + "\n".join(f"• {acc}" for acc in running_accounts[:5])
+                + ("\n..." if len(running_accounts) > 5 else "")
+                + "\n\nBạn có chắc chắn muốn dừng toàn bộ và thoát ứng dụng?"
+            )
+            if not messagebox.askyesno("Xác nhận thoát", msg):
+                return
+
+        self._is_closing = True
+        for dash in list(self.dashboards.values()):
+            try:
+                dash.destroy()
+            except Exception:
+                pass
+
+        self.destroy()
+
+
 def ask_login():
     """Hiện cửa sổ đăng nhập; trả (session, server_id, username, password, proxy_raw, proxy_user, proxy_pass, proxy_pool) hoặc None nếu đóng cửa sổ."""
     win = LoginWindow()
@@ -457,24 +1410,5 @@ def ask_login():
 
 
 if __name__ == "__main__":
-    result = ask_login()
-    if result:
-        from .dashboard import Dashboard
-
-        session, server_id, *rest = result
-        username = rest[0] if len(rest) > 0 else ""
-        password = rest[1] if len(rest) > 1 else ""
-        proxy_raw = rest[2] if len(rest) > 2 else ""
-        proxy_user = rest[3] if len(rest) > 3 else ""
-        proxy_pass = rest[4] if len(rest) > 4 else ""
-        proxy_pool = rest[5] if len(rest) > 5 else None
-        Dashboard(
-            session,
-            server_id,
-            username=username,
-            password=password,
-            proxy_raw=proxy_raw,
-            proxy_user=proxy_user,
-            proxy_pass=proxy_pass,
-            proxy_pool=proxy_pool,
-        ).mainloop()
+    app = MultiAccountApp()
+    app.mainloop()

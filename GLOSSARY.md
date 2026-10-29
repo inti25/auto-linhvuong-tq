@@ -215,8 +215,24 @@ Tập tin cấu hình tổng hợp (`auto_profile_{username}_{server_id}.json`) 
 _Avoid_: Profile độc lập, file cấu hình riêng, isolated profile
 
 **Trình Chuyển Đổi Tài Khoản**:
-Tính năng trên giao diện đăng nhập cho phép lưu trữ và chuyển đổi nhanh giữa danh sách các tài khoản Linh Vương đã đăng nhập (kèm Server ID và Proxy riêng biệt tương ứng) mà không cần nhập lại thông tin thủ công.
+Cơ chế trên giao diện đăng nhập và thanh điều hướng cho phép lưu trữ và chuyển đổi nhanh giữa danh sách các tài khoản Linh Vương (kèm Server ID và Proxy riêng biệt tương ứng) mà không cần nhập lại thông tin thủ công.
 _Avoid_: Account switcher, đổi acc, quản lý tài khoản
+
+**Thanh Điều Hướng Tài Khoản**:
+Khu vực menu dạng cột bên trái cửa sổ ứng dụng hiển thị danh sách các tài khoản đã lưu, kèm thẻ trạng thái hoạt động độc lập và các nút điều phối chung.
+_Avoid_: Account sidebar, menu trái, danh sách acc
+
+**Không Gian Đa Tài Khoản**:
+Cửa sổ ứng dụng hợp nhất vận hành song song nhiều phiên làm việc của các tài khoản Linh Vương khác nhau trên cùng một tiến trình duy nhất.
+_Avoid_: Multi-account window, trình chạy đa acc, gộp cửa sổ
+
+**Thẻ Tài Khoản**:
+Thành phần giao diện trên Thanh Điều Hướng đại diện cho một tài khoản, hiển thị tên nhân vật, máy chủ, huy hiệu kết nối và trạng thái tác vụ tóm tắt.
+_Avoid_: Account card, mục tài khoản, item acc
+
+**Giao Diện Đăng Nhập Cục Bộ**:
+Khung biểu mẫu nhập mật khẩu và cấu hình kết nối hiển thị trực tiếp trong Khung Làm Việc đối với tài khoản chưa kết nối phiên.
+_Avoid_: In-workspace login, form đăng nhập con, login frame
 
 **Đồng Bộ Dữ Liệu Thực Tế**:
 Tiến trình tự động cập nhật cấp độ và trạng thái kiến trúc, kỹ thuật từ phản hồi của máy chủ về bộ nhớ và giao diện bot sau mỗi chu kỳ thi công mà không phát sinh thêm lệnh truy vấn dư thừa.

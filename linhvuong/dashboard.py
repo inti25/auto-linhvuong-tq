@@ -501,7 +501,7 @@ class ResearchAutoRunner(BaseTaskRunner):
 # CLASS CHÍNH: DASHBOARD ĐIỀU KHIỂN
 # =============================================================================
 
-class Dashboard(tk.Tk):
+class Dashboard(tk.Frame):
     def __init__(
         self,
         session,
@@ -512,8 +512,16 @@ class Dashboard(tk.Tk):
         proxy_user: str = "",
         proxy_pass: str = "",
         proxy_pool: Optional[Any] = None,
+        master: Optional[tk.Widget] = None,
     ):
-        super().__init__()
+        if master is None:
+            self._standalone_window = tk.Tk()
+            super().__init__(self._standalone_window)
+            self.pack(fill="both", expand=True)
+        else:
+            self._standalone_window = None
+            super().__init__(master)
+
         self.session = session
         self.server_id = server_id
         self.username = username
@@ -527,15 +535,19 @@ class Dashboard(tk.Tk):
         except Exception:
             pass
         if username:
-            self.title(f"LinhVuong - S{server_id} - [{username}]")
             self.default_profile_name = f"auto_profile_{username}_{server_id}.json"
         else:
-            self.title(f"LinhVuong - Server {server_id}")
             self.default_profile_name = "auto_profile.json"
         self.configure(bg=BG)
-        set_app_icon(self)
-        self.geometry("1100x700")
-        self.minsize(1060, 650)
+
+        if self._standalone_window:
+            if username:
+                self.title(f"LinhVuong - S{server_id} - [{username}]")
+            else:
+                self.title(f"LinhVuong - Server {server_id}")
+            set_app_icon(self._standalone_window)
+            self.geometry("1100x700")
+            self.minsize(1060, 650)
 
         if self.proxy_pool:
             def _on_proxy_failover(old_ep, new_ep):
@@ -5642,6 +5654,7 @@ class Dashboard(tk.Tk):
 
                 auto_open_box = bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False
                 auto_fallback_box = bool(self.bld_box_fallback_var.get()) if hasattr(self, "bld_box_fallback_var") else True
+                city_auto_open_box = auto_open_box and (cid in self._selected_resource_cities)
 
                 task = BuildingTask(
                     gateway=self.gateway,
@@ -5651,7 +5664,7 @@ class Dashboard(tk.Tk):
                     auto_speedup=self.bld_speedup_var.get(),
                     auto_boost=self.bld_boost_var.get(),
                     auto_comfort=self.bld_comfort_var.get(),
-                    auto_open_box=auto_open_box,
+                    auto_open_box=city_auto_open_box,
                     box_id=box_id,
                     max_boxes_per_round=max_boxes,
                     auto_fallback_box=auto_fallback_box,
@@ -7013,3 +7026,52 @@ class Dashboard(tk.Tk):
         except Exception:
             pass
         super().destroy()
+        if getattr(self, "_standalone_window", None):
+            try:
+                self._standalone_window.destroy()
+            except Exception:
+                pass
+
+    def title(self, text: Optional[str] = None) -> str:
+        top = getattr(self, "_standalone_window", None) or self.winfo_toplevel()
+        if top and hasattr(top, "title"):
+            if text is not None:
+                if getattr(self, "_standalone_window", None):
+                    return top.title(text)
+                elif hasattr(top, "update_account_title"):
+                    top.update_account_title(self.username, text)
+                return top.title(text)
+            return top.title()
+        return ""
+
+    def geometry(self, geom: Optional[str] = None) -> str:
+        top = getattr(self, "_standalone_window", None) or self.winfo_toplevel()
+        if top and hasattr(top, "geometry"):
+            return top.geometry(geom) if geom is not None else top.geometry()
+        return ""
+
+    def minsize(self, width: Optional[int] = None, height: Optional[int] = None):
+        top = getattr(self, "_standalone_window", None) or self.winfo_toplevel()
+        if top and hasattr(top, "minsize"):
+            return top.minsize(width, height) if width is not None else top.minsize()
+        return (0, 0)
+
+    def withdraw(self):
+        top = getattr(self, "_standalone_window", None) or self.winfo_toplevel()
+        if top and hasattr(top, "withdraw"):
+            top.withdraw()
+
+    def deiconify(self):
+        top = getattr(self, "_standalone_window", None) or self.winfo_toplevel()
+        if top and hasattr(top, "deiconify"):
+            top.deiconify()
+
+    def resizable(self, width: Optional[bool] = None, height: Optional[bool] = None):
+        top = getattr(self, "_standalone_window", None) or self.winfo_toplevel()
+        if top and hasattr(top, "resizable"):
+            return top.resizable(width, height)
+
+    def protocol(self, name: str, func: Optional[Callable] = None):
+        top = getattr(self, "_standalone_window", None) or self.winfo_toplevel()
+        if top and hasattr(top, "protocol"):
+            return top.protocol(name, func)

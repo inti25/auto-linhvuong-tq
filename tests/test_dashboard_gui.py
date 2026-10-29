@@ -2566,6 +2566,40 @@ def test_dashboard_overview_two_columns_and_multi_crafting():
         dash.destroy()
 
 
+def test_building_task_respects_resource_city_checkbox():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+        # Thành 15230 chọn xây dựng nhưng KHÔNG tích Tài nguyên
+        # Thành 15237 chọn xây dựng VÀ CÓ tích Tài nguyên
+        dash._selected_building_cities = {15230, 15237}
+        dash._selected_resource_cities = {15237}
+        dash.bld_open_box_var.set(True)
+
+        plan = {"pid": 1, "gid": 1, "target_level": 5, "name": "Quan Phủ", "enabled": True}
+        dash._city_building_plans[15230] = [plan]
+        dash._city_building_plans[15237] = [plan]
+
+        with patch("linhvuong.dashboard.BuildingTask") as mock_bld_task, \
+             patch("linhvuong.dashboard.BuildingAutoRunner") as mock_runner_cls, \
+             patch.object(dash, "_save_current_bld_tree_to_cache"):
+            dash._toggle_building()
+
+            calls = mock_bld_task.call_args_list
+            assert len(calls) == 2
+            call_15230 = next(c for c in calls if c.kwargs.get("city_id") == 15230)
+            call_15237 = next(c for c in calls if c.kwargs.get("city_id") == 15237)
+
+            # Thành không tích ô tài nguyên (15230) tuyệt đối không được tự động mở rương
+            assert call_15230.kwargs.get("auto_open_box") is False
+            # Thành có tích ô tài nguyên (15237) được phép mở rương khi thiếu
+            assert call_15237.kwargs.get("auto_open_box") is True
+    finally:
+        dash.destroy()
+
+
+
 
 
 
