@@ -1,6 +1,6 @@
 [project]
 name = "linhvuong"
-version = "1.0.1"
+version = "1.0.2"
 description = "Bot Gọi Dân, Thảo Phạt, Bình Man cho game Linh Vương"
 requires-python = ">=3.10"
 dependencies = [
