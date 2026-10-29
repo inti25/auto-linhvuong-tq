@@ -60,21 +60,39 @@ def set_app_icon(win: tk.Tk | tk.Toplevel):
 
 
 def load_coffee_qr_image(max_w: int = 300, max_h: int = 400):
-    """Tải và co giãn mã QR ủng hộ tác giả từ file qrcode.webp."""
+    """Tải mã QR ủng hộ tác giả từ file PNG thuần Tkinter hoặc file WEBP (hỗ trợ cả Tkinter thuần và PIL)."""
     try:
         import sys
-        from PIL import Image, ImageTk
         base_dir = Path(getattr(sys, "_MEIPASS", "."))
-        candidates = [
-            base_dir / "qrcode.webp",
-            Path("qrcode.webp"),
-            Path(__file__).resolve().parent.parent / "qrcode.webp",
+
+        # 1. Ưu tiên load qrcode.png bằng tk.PhotoImage thuần (không phụ thuộc PIL/Pillow khi build exe)
+        png_candidates = [
+            base_dir / "qrcode.png",
+            Path("qrcode.png"),
+            Path(__file__).resolve().parent.parent / "qrcode.png",
         ]
-        for p in candidates:
+        for p in png_candidates:
             if p.is_file():
-                img = Image.open(str(p))
-                img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
-                return ImageTk.PhotoImage(img)
+                try:
+                    return tk.PhotoImage(file=str(p))
+                except Exception:
+                    pass
+
+        # 2. Fallback dùng PIL nếu có cài đặt (để load định dạng .webp hoặc tự động co giãn)
+        try:
+            from PIL import Image, ImageTk
+            all_candidates = png_candidates + [
+                base_dir / "qrcode.webp",
+                Path("qrcode.webp"),
+                Path(__file__).resolve().parent.parent / "qrcode.webp",
+            ]
+            for p in all_candidates:
+                if p.is_file():
+                    img = Image.open(str(p))
+                    img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+                    return ImageTk.PhotoImage(img)
+        except Exception:
+            pass
     except Exception:
         pass
     return None
@@ -1422,7 +1440,7 @@ class MultiAccountApp(tk.Tk):
         else:
             tk.Label(
                 dialog,
-                text="Không tìm thấy tệp mã QR (qrcode.webp)",
+                text="Không tìm thấy tệp mã QR (qrcode.png)",
                 fg="#dc3545",
                 bg=CARD,
                 font=("Segoe UI", 9, "italic"),

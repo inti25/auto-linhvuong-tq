@@ -223,7 +223,7 @@ Khu vực menu dạng cột bên trái cửa sổ ứng dụng hiển thị danh
 _Avoid_: Account sidebar, menu trái, danh sách acc
 
 **Ủng Hộ Tác Giả** (Buy Me A Coffee):
-Nút bấm và cửa sổ tương tác (Modal Dialog) trên Thanh Điều Hướng Tài Khoản hiển thị mã QR thanh toán/ủng hộ (qrcode.webp) kèm thông điệp tri ân người dùng đã tin tưởng và đồng hành cùng dự án Auto Linh Vương.
+Nút bấm và cửa sổ tương tác (Modal Dialog) trên Thanh Điều Hướng Tài Khoản hiển thị mã QR thanh toán/ủng hộ (qrcode.png) kèm thông điệp tri ân người dùng đã tin tưởng và đồng hành cùng dự án Auto Linh Vương.
 _Avoid_: Nút donate, quét mã ủng hộ, donate button
 
 **Không Gian Đa Tài Khoản**:

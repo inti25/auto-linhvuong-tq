@@ -339,6 +339,7 @@ def test_multi_account_app_coffee_button_and_dialog(temp_settings):
                     if isinstance(child, tk.Label):
                         labels.append(child.cget("text"))
         assert any("Cảm ơn bạn đã tin tưởng" in txt for txt in labels)
+        assert not any("Không tìm thấy tệp mã QR" in txt for txt in labels)
 
         dlg.destroy()
     finally:

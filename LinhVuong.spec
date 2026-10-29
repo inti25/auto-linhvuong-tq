@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('linhvuong.ico', '.'), ('linhvuong.png', '.'), ('linhvuong_menu.png', '.')]
+datas = [('linhvuong.ico', '.'), ('linhvuong.png', '.'), ('linhvuong_menu.png', '.'), ('qrcode.png', '.')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('linhvuong')
