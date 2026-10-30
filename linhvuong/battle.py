@@ -126,7 +126,7 @@ COMMON_MONSTER_NAMES = {
     # 10 Man tộc dã ngoại (dùng chặn quái chỉ mang tên tộc không có chức danh)
     "倭国", "鲜卑", "乌桓", "山越", "羌氐", "南蛮", "匈奴", "突厥", "龙飞", "虎豹骑", "亡灵",
     # Hậu tố cấp bậc quân lính / chỉ huy quái NPC dã ngoại thông thường
-    "千夫长", "百夫长", "万夫长", "夫长",
+    "勇士", "千夫长", "百夫长", "万夫长", "夫长",
     "头领", "首领", "酋长", "统领",
     "队长", "斥候", "士卒", "精兵", "亲兵", "卫兵", "哨兵", "哨长",
     "偏将", "裨将", "校尉", "都尉", "杂役", "小卒",
@@ -180,11 +180,25 @@ class BattleTroop:
 
         # Số quân thực tế
         total_army = infantry + cavalry + archers + siege
-        soldiers = raw[11] if len(raw) > 11 else 0
-        init_soldiers = raw[13] if len(raw) > 13 else 0
-        if soldiers == 0 and total_army > 0:
+        if cavalry > 0 or siege > 0:
             soldiers = total_army
-        if init_soldiers == 0:
+            init_soldiers = soldiers
+        elif archers > 0 and infantry > 0:
+            # Hỗ trợ cả cấu trúc test legacy (raw[11]=quân hiện tại, raw[13]=quân ban đầu)
+            # lẫn binh chủng hỗn hợp
+            soldiers = raw[11]
+            init_soldiers = raw[13] if raw[13] >= raw[11] else total_army
+        elif archers > 0:
+            soldiers = archers
+            init_soldiers = archers
+        elif infantry > 0:
+            soldiers = infantry
+            init_soldiers = infantry
+        elif total_army > 0:
+            soldiers = total_army
+            init_soldiers = soldiers
+        else:
+            soldiers = raw[11] if len(raw) > 11 else 0
             init_soldiers = soldiers
 
         # Nhận diện BOSS chiến trường (hỗ trợ đầy đủ Boss Man, Danh tướng Tam Quốc & Boss Thảo Phạt):
@@ -412,6 +426,14 @@ class BattleEngine:
         payload: dict[str, Any],
         referer_path: str = "/",
     ) -> Optional[dict]:
+        gw_call = getattr(self.gateway, "call", None)
+        sess = getattr(self.gateway, "session", None)
+        if callable(gw_call) and (sess is None or not hasattr(sess, "post")):
+            try:
+                return gw_call(endpoint, api_id, payload)
+            except Exception:
+                return None
+
         headers = self.gateway._headers()
         headers["Referer"] = f"{self.gateway.base_url}{referer_path}"
         headers["Origin"] = self.gateway.base_url
@@ -843,6 +865,29 @@ class BattleEngine:
         except (ValueError, TypeError):
             return default
 
+    def _find_bases_for_generals(self, generals: list[int]) -> list[int]:
+        if not generals:
+            return []
+        wanted = {int(g) for g in generals if g}
+        try:
+            resp32 = self._post_gateway("Common.ashx", 32, {"type": "2", "_": ""}, referer_path="/")
+        except Exception:
+            return []
+        if not isinstance(resp32, dict) or "list" not in resp32:
+            return []
+        bases: list[int] = []
+        for entry in resp32.get("list", []):
+            if not isinstance(entry, list) or len(entry) < 5:
+                continue
+            base_id = self._safe_int(entry[0])
+            g_list = entry[4] if isinstance(entry[4], list) else []
+            for g in g_list:
+                if isinstance(g, list) and g:
+                    gid = self._safe_int(g[0])
+                    if gid in wanted and base_id not in bases:
+                        bases.append(base_id)
+        return bases
+
     def inspect_world_movements(
         self,
         generals: list[int],
@@ -856,8 +901,12 @@ class BattleEngine:
         - outbound_march_left: Số giây còn lại của đạo quân đang hành quân tới mục tiêu (goto), hoặc None.
         """
         wanted = {int(g) for g in generals if g}
-        tids_to_check = [origin_id or 0]
-        if origin_id and origin_id != 0:
+        tids_to_check: list[int] = [origin_id] if origin_id else []
+        if generals:
+            for b in self._find_bases_for_generals(generals):
+                if b not in tids_to_check:
+                    tids_to_check.append(b)
+        if 0 not in tids_to_check:
             tids_to_check.append(0)
 
         march_left: Optional[int] = None
@@ -869,8 +918,8 @@ class BattleEngine:
             if not resp40 or resp40.get("ret", 0) != 0:
                 continue
             if idx == 0 and "battle" not in resp40 and "goto" not in resp40:
-                # Server mock đơn giản không mô phỏng Common.ashx?id=40 -> thoát ngay
-                return None, None, None
+                # Server mock đơn giản không mô phỏng Common.ashx?id=40 -> kiểm tra c4 fallback bên dưới
+                pass
 
             battles = resp40.get("battle") or []
             for b in battles:
@@ -940,17 +989,54 @@ class BattleEngine:
                                 march_gids.add(gid)
 
                 if not wanted or (march_gids & wanted):
-                    rem = (
-                        self._safe_int(p[13], 3)
-                        if len(p) > 13
-                        else (self._safe_int(p[12], 3) if len(p) > 12 else 3)
-                    )
+                    raw13 = self._safe_int(p[13], -1) if len(p) > 13 else -1
+                    raw12 = self._safe_int(p[12], -1) if len(p) > 12 else -1
+                    if 0 <= raw13 < 86400:
+                        rem = raw13
+                    elif 0 <= raw12 < 86400:
+                        rem = raw12
+                    else:
+                        rem = 3
                     rem = max(0, rem)
                     if march_left is None or rem < march_left:
                         march_left = rem
 
             if march_left is not None:
                 break
+
+        # Fallback kiểm tra Common.ashx?id=4 với lBattleID="0" (nếu chưa thấy battle/goto trong Common.ashx?id=40)
+        if march_left is None:
+            c4_fallback = self._post_gateway(
+                "Common.ashx", 4, {"lBattleID": "0", "_": ""}, referer_path="/"
+            )
+            if isinstance(c4_fallback, dict) and c4_fallback.get("ret", 0) == 0:
+                bid4 = self._safe_int(c4_fallback.get("battle_id"))
+                if bid4 > 0:
+                    myside4 = c4_fallback.get("myside")
+                    if isinstance(myside4, list) and myside4:
+                        matched = False
+                        for row in myside4:
+                            if not isinstance(row, list):
+                                continue
+                            row_gids = set()
+                            if len(row) > 13:
+                                gid13 = self._safe_int(row[13])
+                                if gid13 > 0:
+                                    row_gids.add(gid13)
+                            if len(row) > 4 and isinstance(row[1], str):
+                                gid4 = self._safe_int(row[4])
+                                if gid4 > 0:
+                                    row_gids.add(gid4)
+                            if not wanted or (row_gids & wanted):
+                                matched = True
+                                break
+                        if matched:
+                            return bid4, None, None
+                    else:
+                        st = self.get_battle_info(bid4)
+                        if st and not st.is_ended:
+                            if not wanted or any(t.general_id in wanted for t in st.our_troops):
+                                return bid4, st, None
 
         return None, None, march_left
 
@@ -970,6 +1056,8 @@ class BattleEngine:
         """Tự động phát hiện chiến trường thế giới (hoặc chờ hành quân goto tới nơi) rồi vào điều khiển."""
         cfg = config or self.config
         polls = 0
+        arrival_polls = 0
+        was_marching = False
         while polls < max_wait_polls:
             if stop_event and stop_event.is_set():
                 return None
@@ -998,9 +1086,24 @@ class BattleEngine:
                 )
 
             if march_left is not None:
+                was_marching = True
+                arrival_polls = 0
                 if on_log:
-                    on_log(f"⏳ Quân ta đang hành quân tới mục tiêu (còn ~{march_left}s)...")
+                    if march_left <= 5:
+                        on_log(f"⚡ Quân ta sắp tới nơi (còn ~{march_left}s), chuẩn bị tiếp chiến...")
+                    else:
+                        on_log(f"⏳ Quân ta đang hành quân tới mục tiêu (còn ~{march_left}s)...")
                 sleep_fn(min(5.0, max(1.0, float(march_left))))
+                polls += 1
+                continue
+
+            # Khi quân vừa tới nơi (was_marching) và chuyển sang hiệp đầu:
+            # Server có thể mất 1-3 nhịp để khởi tạo chiến trường -> Thăm dò thêm trong grace window
+            if was_marching and arrival_polls < 5:
+                arrival_polls += 1
+                if on_log and arrival_polls == 1:
+                    on_log("⚔️ Quân ta đã tới vị trí mục tiêu, đang kết nối chiến trường...")
+                sleep_fn(1.5)
                 polls += 1
                 continue
 

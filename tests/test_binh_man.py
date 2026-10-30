@@ -920,6 +920,95 @@ def test_binh_man_detects_and_logs_boss_man():
     assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in boss_alerts[0]
 
 
+def test_binh_man_tracks_marching_countdown_and_enters_battle_when_arrived():
+    """Khi võ tướng đang trên đường hành quân (status=16, goto có countdown),
+    Binh Man theo dõi đếm lùi sắp tới nơi, grace period khi vừa tới và tự động vào chỉ huy trận đánh."""
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [21936, "ThienCo", 280, 237, [[99056, "TC8", "", 2, 0, 16, 76, 100, 860, 860]]],
+                ],
+            },
+            "Common.ashx?id=40": [
+                # Poll 1: Đang hành quân, còn 4s (sắp tới nơi)
+                {
+                    "ret": 0,
+                    "come": [],
+                    "goto": [
+                        [7001, 1, 0, "", 555, "鲜卑部队", 269, 211, [[99056, "TC8"]], 0, 16000, 0, 0, 4, 1]
+                    ],
+                    "battle": [],
+                },
+                # Poll 2: Vừa tới nơi (goto rỗng, grace period chờ chiến trường)
+                {"ret": 0, "come": [], "goto": [], "battle": []},
+                {"ret": 0, "come": [], "goto": [], "battle": []},
+                # Poll 3: Chiến trường xuất hiện
+                {
+                    "ret": 0,
+                    "come": [],
+                    "goto": [],
+                    "battle": [[1054, 555, "鲜卑部队", 269, 211, 10]],
+                },
+            ],
+            "Common.ashx?id=4": [
+                {"ret": 0, "battle_id": 0, "myside": []},
+                {
+                    "ret": 0,
+                    "battle_id": 1054,
+                    "next_left": 10,
+                    "atside": 1,
+                    "city": [555, "鲜卑部队", 269, 211],
+                    "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TC8", 0, 16000, 0, 0, 100, 99056]],
+                    "enemy": [],
+                },
+            ],
+            "OPT.ashx?id=24": [
+                {
+                    "ret": 0,
+                    "site": "鲜卑部队",
+                    "mapid": 555,
+                    "bout": 1,
+                    "bout_left": 10,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "quilia", 738816, "TC8", 99056, "", 21936, 0, 5, 100, 0, 0, 16000, 0, 0, 0, 0, 0, "", 1],
+                        [11, "", 0, "鲜卑千夫长", 0, "", 0, 0, 2, 100, 0, 2154, 1569, 0, 0, 0, 0, 0, "", 16],
+                    ],
+                },
+                {"ret": 13, "troops": []},
+            ],
+            "OPT.ashx?id=54": {"ret": 0},
+            "OPT.ashx?id=57": {"ret": 0},
+            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
+        },
+    )
+    server.cookies = {"uid": "738816"}
+    ctx, _ = ctx_for(server)
+    notifies = []
+    ctx.notify = lambda m: notifies.append(m)
+    task = BinhMan(
+        ctx,
+        generals=[99056],
+        origin=(280, 237),
+        radius=5,
+        man_types=[2],
+        mode=2,
+        city_id=21936,
+        check_idle=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "battle_tracked"
+    assert any("⚡ Quân ta sắp tới nơi (còn ~4s), chuẩn bị tiếp chiến..." in m for m in notifies)
+    assert any("⚔️ Quân ta đã tới vị trí mục tiêu, đang kết nối chiến trường..." in m for m in notifies)
+    assert any("⚔️ Phát hiện chiến trường đang diễn ra (ID: 1054)" in m for m in notifies)
+
+
+
 
 
 

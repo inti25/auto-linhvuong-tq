@@ -793,3 +793,124 @@ def test_track_battle_boss_alert_format_and_deduplication():
     assert len(boss_alerts) == 1, f"Thông báo boss phải được log đúng 1 lần, thực tế: {len(boss_alerts)} lần ({boss_alerts})"
     assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in boss_alerts[0]
 
+
+def test_troop_from_raw_real_server_mixed_troops_soldier_count():
+    """Kiểm tra dữ liệu thực tế từ máy chủ (VD: server 53 quái 鲜卑千夫长 có 2154 bộ binh và 1569 kỵ binh).
+    Số quân soldiers phải tính tổng toàn bộ binh chủng (3723 lính), không được bỏ sót kỵ binh."""
+    raw_qianfu = [11, "", 0, "鲜卑千夫长", 0, "", 0, 0, 2, 100, 0, 2154, 1569, 0, 0, 0, 0, 0, "", 16]
+    troop = BattleTroop.from_raw(raw_qianfu)
+    assert troop.infantry == 2154
+    assert troop.cavalry == 1569
+    assert troop.soldiers == 3723
+    assert troop.initial_soldiers == 3723
+    assert not troop.is_boss
+
+    raw_yongshi = [12, "", 0, "鲜卑勇士", 0, "", 0, 0, 2, 100, 0, 0, 5000, 0, 0, 0, 0, 0, "", 16]
+    troop_ys = BattleTroop.from_raw(raw_yongshi)
+    assert troop_ys.cavalry == 5000
+    assert troop_ys.soldiers == 5000
+    assert not troop_ys.is_boss
+
+
+def test_wait_and_track_world_battle_marching_countdown_and_arrival_grace_period():
+    """Kiểm tra cơ chế theo dõi chiến trường khi quân đang hành quân (sắp tới nơi):
+    - Đếm lùi thời gian hành quân (>5s và <=5s 'chuẩn bị tiếp chiến').
+    - Khi quân vừa tới nơi (was_marching, march_left=None), phải có grace period chờ server khởi tạo
+      thay vì return None ngay lập tức."""
+    mock_gw = MagicMock()
+    mock_gw.base_url = "http://sg53.dipan.com"
+    mock_gw._headers.return_value = {}
+
+    def mk_resp(data):
+        m = MagicMock()
+        m.status_code = 200
+        m.json.return_value = data
+        return m
+
+    resp_march_8 = {"ret": 0, "goto": [[7001, 1, 0, "", 555, "鲜卑", 269, 211, [[99056, "TC8"]], 0, 16000, 0, 0, 8, 1]], "battle": []}
+    resp_march_3 = {"ret": 0, "goto": [[7001, 1, 0, "", 555, "鲜卑", 269, 211, [[99056, "TC8"]], 0, 16000, 0, 0, 3, 1]], "battle": []}
+    resp_arrival = {"ret": 0, "goto": [], "battle": []}
+    resp_battle_ready = {"ret": 0, "goto": [], "battle": [[1054, 1054, "鲜卑部队", 269, 211, 67]]}
+
+    c4_empty = {"ret": 0, "battle_id": 0, "myside": []}
+    c4_ready = {"ret": 0, "battle_id": 1054, "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TC8", 0, 16000, 0, 0, 100, 99056]]}
+
+    b24_ended = {"ret": 13}
+
+    r40_queue = [resp_march_8, resp_march_3, resp_arrival, resp_arrival, resp_battle_ready]
+    c4_queue = [c4_empty, c4_ready]
+
+    def session_post(url, data=None, headers=None, timeout=None):
+        if "id=32" in url:
+            return mk_resp({"ret": 0, "list": []})
+        if "id=40" in url:
+            data = r40_queue.pop(0) if r40_queue else {"ret": 0, "goto": [], "battle": []}
+            return mk_resp(data)
+        if "id=4" in url:
+            data = c4_queue.pop(0) if c4_queue else {"ret": 0, "battle_id": 0, "myside": []}
+            return mk_resp(data)
+        if "id=24" in url:
+            return mk_resp(b24_ended)
+        return mk_resp({"ret": 0})
+
+    mock_gw.session.post.side_effect = session_post
+
+    logs = []
+    ctrl = BattleController(mock_gw)
+    report = ctrl.wait_and_track_world_battle(
+        generals=[99056],
+        origin_id=21936,
+        on_log=logs.append,
+        sleep_fn=lambda s: None,
+    )
+
+    assert report is not None
+    assert any("⏳ Quân ta đang hành quân tới mục tiêu (còn ~8s)..." in l for l in logs)
+    assert any("⚡ Quân ta sắp tới nơi (còn ~3s), chuẩn bị tiếp chiến..." in l for l in logs)
+    assert any("⚔️ Quân ta đã tới vị trí mục tiêu, đang kết nối chiến trường..." in l for l in logs)
+    assert any("⚔️ Phát hiện chiến trường đang diễn ra (ID: 1054)" in l for l in logs)
+
+
+def test_inspect_world_movements_resolves_base_from_common_32_when_origin_zero():
+    """Khi origin_id=0 (không chỉ định thành), inspect_world_movements phải tự tra cứu
+    căn cứ của võ tướng qua Common.ashx?id=32 để thăm dò đúng tid của thành/trại đó."""
+    mock_gw = MagicMock()
+    mock_gw.base_url = "http://sg53.dipan.com"
+    mock_gw._headers.return_value = {}
+
+    def mk_resp(data):
+        m = MagicMock()
+        m.status_code = 200
+        m.json.return_value = data
+        return m
+
+    def session_post(url, data=None, headers=None, timeout=None):
+        if "id=32" in url:
+            return mk_resp({
+                "ret": 0,
+                "list": [
+                    [21936, "ThienCo", 280, 237, [[99056, "TC8", "", 2, 0, 16, 76, 100, 860, 860]]],
+                ],
+            })
+        if "id=40" in url and data and data.get("tid") == "21936":
+            return mk_resp({
+                "ret": 0,
+                "battle": [[1054, 1054, "鲜卑部队", 269, 211, 67]],
+                "goto": [],
+            })
+        if "id=4" in url:
+            return mk_resp({
+                "ret": 0,
+                "battle_id": 1054,
+                "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TC8", 0, 16000, 0, 0, 100, 99056]],
+            })
+        return mk_resp({"ret": 0, "battle": [], "goto": []})
+
+    mock_gw.session.post.side_effect = session_post
+
+    ctrl = BattleController(mock_gw)
+    bid, state, march = ctrl.inspect_world_movements(generals=[99056], origin_id=0)
+    assert bid == 1054
+    assert march is None
+
+
