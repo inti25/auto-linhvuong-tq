@@ -532,6 +532,77 @@ def test_goi_dan_concurrent_morale_training_all_generals():
     assert not any(k == "OPT.ashx?id=53" for k, d in server.calls)
 
 
+def test_goi_dan_detects_and_logs_boss_man():
+    """Kiểm tra Gọi Man nhận diện Boss Man (VD: 足轻大将 tại vị trí 19)
+    và log cảnh báo chính xác ra nhật ký:
+    VD: 🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!"""
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [123, "City", 2, 2, [[50, "Gen 50", "", 2, 0, 16]]],
+                ],
+            },
+            "Common.ashx?id=40": {
+                "ret": 0,
+                "come": [],
+                "goto": [],
+                "battle": [[1002, 888, "倭国部队", 2, 2, 8]],
+            },
+            "Common.ashx?id=4": {
+                "ret": 0,
+                "battle_id": 777001,
+                "next_left": 8,
+                "atside": 1,
+                "city": [888, "倭国部队", 2, 2],
+                "myside": [[1, 123, "City", 2, 2, 100, "Player", "Gen 50", 0, 5000, 0, 0, 100, 50]],
+                "enemy": [],
+            },
+            "OPT.ashx?id=24": [
+                {
+                    "ret": 0,
+                    "site": "倭国部队",
+                    "mapid": 888,
+                    "bout": 1,
+                    "bout_left": 8,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "Player", 100, "Gen 50", 50, "", 123, 0, 1, 100, 0, 0, 5000, 5000, 0, 0, 0, 0, "", 1],
+                        [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 3000, 0, 3000, 0, 0, 0, 0, "", 16],
+                    ],
+                },
+                {"ret": 13, "troops": []},
+            ],
+            "OPT.ashx?id=54": {"ret": 0},
+            "OPT.ashx?id=57": {"ret": 0},
+            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
+        }
+    )
+    server.cookies = {"uid": "100"}
+    ctx, _ = ctx_for(server)
+    notifies = []
+    ctx.notify = lambda m: notifies.append(m)
+
+    task = GoiDan(
+        ctx,
+        generals=[50],
+        origin=(2, 2),
+        radius=5,
+        city_id=123,
+        check_idle=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "battle_tracked"
+
+    boss_alerts = [m for m in notifies if "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in m]
+    assert len(boss_alerts) == 1, f"Gọi Man phải log cảnh báo boss đúng 1 lần: {notifies}"
+    assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in boss_alerts[0]
+
+
 
 
 

@@ -6857,6 +6857,7 @@ class Dashboard(tk.Frame):
 
         en_scroll = ttk.Scrollbar(f_right, orient="vertical", command=self.bt_enemy_tree.yview)
         self.bt_enemy_tree.configure(yscrollcommand=en_scroll.set)
+        self.bt_enemy_tree.tag_configure("boss", foreground="#ff6b6b")
         self.bt_enemy_tree.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
         en_scroll.pack(side="right", fill="y", padx=(0, 4), pady=4)
 
@@ -6932,6 +6933,10 @@ class Dashboard(tk.Frame):
             return
         self._bt_render_state(state)
         self._append_bt_log(f"✅ Đã tải thông tin chiến trường '{state.site}' (ID: {battle_id}, Hiệp: {state.bout}, Còn lại: {state.bout_left}s)")
+        if state.boss_troops:
+            boss = state.boss_troops[0]
+            extra = " Đang giữ lại để người chơi vào bắt sống!" if getattr(self.bt_leave_boss_var, "get", lambda: True)() else ""
+            self._append_bt_log(f"🐉 PHÁT HIỆN BOSS [{boss.general_name}] tại vị trí {boss.position}!{extra}")
 
     def _bt_render_state(self, state: BattleState):
         self.bt_bout_var.set(f"Hiệp: {state.bout}")
@@ -6957,7 +6962,8 @@ class Dashboard(tk.Frame):
             target_str = str(e.target_id) if e.target_id != 0 else "Tùy chọn"
             self.bt_enemy_tree.insert(
                 "", "end", iid=str(e.position), text=f"{e.general_name} {'👑' if e.is_boss else ''}",
-                values=(e.position, f"{e.soldiers}/{e.initial_soldiers}", e.morale, fname, status_str, target_str)
+                values=(e.position, f"{e.soldiers}/{e.initial_soldiers}", e.morale, fname, status_str, target_str),
+                tags=("boss",) if e.is_boss else (),
             )
 
     def _bt_toggle_auto(self):
@@ -7021,6 +7027,7 @@ class Dashboard(tk.Frame):
             report = engine.track_battle(
                 battle_id=battle_id,
                 on_log=self._append_bt_log,
+                on_boss_alert=self._append_bt_log,
                 on_state=lambda st: self.after(0, lambda s=st: self._bt_render_state(s)),
                 stop_event=self._bt_stop_event,
                 config=cfg,

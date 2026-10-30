@@ -70,9 +70,50 @@ STRATAGEMS = {
     96: "Hủy bỏ trạng thái",
 }
 
+BOSS_KEYWORDS = {
+    # Chức danh / Hậu tố Boss Man & Dã ngoại đặc trưng
+    "大将",      # Đại tướng (足轻大将 - Túc Khinh Đại Tướng, 侍大将 - Thị Đại Tướng, 部将...)
+    "大王",      # Đại vương (Mộc Lộc Đại Vương, Nam Man Đại Vương...)
+    "单于",      # Thiền vu (Vua Hung Nô, Ô Hoàn, Tiên Ti)
+    "大单于",    # Đại Thiền vu
+    "可汗",      # Khả hãn (Vua Đột Quyết, Hung Nô)
+    "大汗",      # Đại hãn
+    "洞主",      # Động chủ (Mang Nha Trường, Đái Lai Động Chủ...)
+    "大首领",    # Đại thủ lĩnh
+    "元帅",      # Nguyên soái
+    "大元帅",    # Đại nguyên soái
+    "大名",      # Daimyo / Đại danh (Chúa Uy Quốc)
+    "宿老",      # Túc lão (Trọng thần Uy Quốc)
+    "家老",      # Gia lão
+    "大都督",    # Đại đô đốc
+    "都督",      # Đô đốc
+    "领主",      # Lãnh chúa (Vong linh)
+    "法师",      # Pháp sư (Vong linh)
+    "骷髅王",    # Khô Lâu Vương
+    "幽灵王",    # U Linh Vương
+    "宝箱",      # Bảo rương
+    "BOSS",
+    "Boss",
+    "boss",
+}
+
 KNOWN_BOSS_NAMES = {
-    "马超", "张飞", "黄忠", "关羽", "赵云", "宝箱",
-    "董卓", "吕布", "袁绍", "曹操", "刘备", "孙权", "孟获", "BOSS", "Boss",
+    # Uy Quốc / Oa Quốc (Nhật Bản - Man cấp 1)
+    "足轻大将", "侍大将", "部将", "大将", "大名", "宿老", "家老",
+    "织田信长", "丰臣秀吉", "德川家康", "武田信玄", "上杉谦信",
+    "伊达政宗", "真田幸村", "明智光秀", "本多忠胜", "服部半藏", "宫本武藏",
+    # Nam Man (Man cấp 6)
+    "孟获", "祝融", "兀突骨", "木鹿大王", "木鹿", "带来洞主", "带来",
+    "忙牙长", "阿会喃", "金环三结", "董荼那",
+    # Hung Nô, Ô Hoàn, Tiên Ti, Khương Đê, Đột Quyết
+    "呼厨泉", "于夫罗", "蹋顿", "轲比能", "步度根", "骨进", "强端",
+    "迷当", "彻里吉", "雅丹", "越吉", "俄何烧戈", "去卑", "刘豹",
+    # Danh tướng Tam Quốc
+    "关羽", "张飞", "赵云", "马超", "黄忠", "诸葛亮", "魏延", "姜维",
+    "曹操", "曹仁", "曹丕", "夏侯惇", "夏侯渊", "张辽", "张郃", "徐晃", "庞德", "许褚", "典韦", "司马懿", "郭嘉", "荀彧", "贾诩",
+    "孙权", "孙策", "孙坚", "周瑜", "陆逊", "鲁肃", "吕蒙", "甘宁", "太史慈",
+    "吕布", "董卓", "袁绍", "袁术", "颜良", "文丑", "貂蝉", "华佗", "左慈", "于吉",
+    "宝箱", "BOSS", "Boss", "boss",
 }
 
 COMMON_MONSTER_NAMES = {
@@ -80,13 +121,15 @@ COMMON_MONSTER_NAMES = {
     "山贼", "强盗", "恶霸", "黄巾", "流寇", "土匪",
     "蛮兵", "象兵", "藤甲兵", "狼兵", "叛军", "贼兵", "飞贼",
     "草寇", "乱军", "杂兵", "贼寇",
-    # 10 Man tộc dã ngoại (chuẩn theo GLOSSARY.md)
+    # Binh lính Uy Quốc thông thường
+    "足轻", "忍者", "浪人", "武士", "倭寇",
+    # 10 Man tộc dã ngoại (dùng chặn quái chỉ mang tên tộc không có chức danh)
     "倭国", "鲜卑", "乌桓", "山越", "羌氐", "南蛮", "匈奴", "突厥", "龙飞", "虎豹骑", "亡灵",
     # Hậu tố cấp bậc quân lính / chỉ huy quái NPC dã ngoại thông thường
     "千夫长", "百夫长", "万夫长", "夫长",
-    "头领", "首领", "酋长", "大王", "统领",
+    "头领", "首领", "酋长", "统领",
     "队长", "斥候", "士卒", "精兵", "亲兵", "卫兵", "哨兵", "哨长",
-    "偏将", "裨将", "校尉", "都尉",
+    "偏将", "裨将", "校尉", "都尉", "杂役", "小卒",
 }
 
 
@@ -144,22 +187,24 @@ class BattleTroop:
         if init_soldiers == 0:
             init_soldiers = soldiers
 
-        # Nhận diện BOSS chiến trường:
-        # 1. Quái thường dã ngoại (Sơn tặc, Cường đạo, Ác bá...) không bao giờ là BOSS.
-        # 2. Cờ flag & 0x20 đại diện cho tướng danh / BOSS (flag & 0x10 là quân thủ bình thường).
-        # 3. Tên thuộc danh sách danh tướng / BOSS / Bảo rương.
-        # 4. Tướng ở vị trí 19 (chủ soái) trong các phụ bản thảo phạt lớn (không thuộc quái thường).
-        is_common_monster = any(mname in gname for mname in COMMON_MONSTER_NAMES)
-        is_known_boss = any(bname in gname for bname in KNOWN_BOSS_NAMES)
+        # Nhận diện BOSS chiến trường (hỗ trợ đầy đủ Boss Man, Danh tướng Tam Quốc & Boss Thảo Phạt):
+        # 1. Tên chứa từ khóa BOSS hoặc thuộc danh sách danh tướng / BOSS Man (ưu tiên tuyệt đối).
+        # 2. Cờ flag & 0x20 đại diện cho tướng danh / BOSS.
+        # 3. Quái thường dã ngoại (chỉ chứa tên trong COMMON_MONSTER_NAMES mà không có chức danh BOSS) -> không phải BOSS.
+        # 4. Tướng ở vị trí 19 (chủ soái địch) có uid == 0 và không thuộc quái thường.
+        is_boss_title_or_name = (
+            any(kw in gname for kw in BOSS_KEYWORDS)
+            or any(bname in gname for bname in KNOWN_BOSS_NAMES)
+        )
 
-        if is_common_monster and not is_known_boss:
-            is_boss = False
+        if is_boss_title_or_name or bool(flag & 0x20):
+            is_boss = True
         else:
-            is_boss = (
-                is_known_boss
-                or bool(flag & 0x20)
-                or (pos == 19 and uid == 0 and not is_common_monster)
-            )
+            is_common_monster = any(mname in gname for mname in COMMON_MONSTER_NAMES)
+            if is_common_monster:
+                is_boss = False
+            else:
+                is_boss = (pos == 19 and uid == 0)
         return cls(
             position=pos,
             player_name=pname,
@@ -423,8 +468,10 @@ class BattleEngine:
         headers["Origin"] = self.gateway.base_url
 
         url = f"{self.gateway.base_url}/GateWay/OPT.ashx?id=24"
-        max_retries = getattr(self.gateway, "max_retries", 3)
-        timeout = getattr(self.gateway, "timeout", 15)
+        mr = getattr(self.gateway, "max_retries", 3)
+        max_retries = mr if isinstance(mr, int) else 3
+        to = getattr(self.gateway, "timeout", 15)
+        timeout = to if isinstance(to, (int, float)) else 15
         for _ in range(max_retries):
             try:
                 resp = self.gateway.session.post(
@@ -442,8 +489,10 @@ class BattleEngine:
         headers["Referer"] = f"{self.gateway.base_url}/battle/{battle_id}"
         headers["Origin"] = self.gateway.base_url
         url = f"{self.gateway.base_url}/GateWay/OPT.ashx?id=26"
-        max_retries = getattr(self.gateway, "max_retries", 3)
-        timeout = getattr(self.gateway, "timeout", 15)
+        mr = getattr(self.gateway, "max_retries", 3)
+        max_retries = mr if isinstance(mr, int) else 3
+        to = getattr(self.gateway, "timeout", 15)
+        timeout = to if isinstance(to, (int, float)) else 15
         for _ in range(max_retries):
             try:
                 resp = self.gateway.session.post(
@@ -1083,13 +1132,12 @@ class BattleEngine:
                     boss_detected = True
                     boss = state.boss_troops[0]
                     boss_name = boss.general_name
-                    alert_msg = (
-                        f"🐉 PHÁT HIỆN BOSS [{boss_name}] tại vị trí {boss.position}! "
-                        f"Đang giữ lại để người chơi vào bắt sống!"
-                    )
+                    extra = " Đang giữ lại để người chơi vào bắt sống!" if cfg.leave_boss_last else ""
+                    alert_msg = f"🐉 PHÁT HIỆN BOSS [{boss_name}] tại vị trí {boss.position}!{extra}"
                     if on_boss_alert:
                         on_boss_alert(alert_msg)
-                    _log(f"   {alert_msg}")
+                    if not on_boss_alert or on_boss_alert != on_log:
+                        _log(alert_msg)
 
                 _log(f"   ⚔️ [Chiến trường - Hiệp {state.bout}]")
 

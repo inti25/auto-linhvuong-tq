@@ -235,7 +235,7 @@ class WeaponCrafter:
             raise CaptchaRequired()
 
         if ret == RET_OK:
-            msg = f"✅ Đã đặt lệnh chế tạo thành công: {amount} '{w_name}' (Xưởng ô {plot_id})"
+            msg = f"✅ Đã đặt lệnh chế tạo thành công: {amount}x '{w_name}' (Xưởng ô {plot_id})"
             if notify:
                 notify(msg)
             return True, 0, msg

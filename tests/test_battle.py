@@ -676,3 +676,120 @@ def test_troop_from_raw_man_monsters_at_pos_19_not_identified_as_boss():
     for raw in [raw_wuhuan, raw_xianbei, raw_xiongnu, raw_nanman, raw_shanxian]:
         t = BattleTroop.from_raw(raw)
         assert not t.is_boss, f"Quái Man '{t.general_name}' tại pos {t.position} không được coi là BOSS"
+
+
+def test_boss_man_detection_ashigaru_taisho_and_tribal_bosses():
+    """Kiểm tra nhận diện chính xác Boss Man tộc:
+    - [足轻大将] (Túc Khinh Đại Tướng) tại vị trí 19 hoặc bất kỳ vị trí nào
+    - [倭国足轻大将] có tiền tố tên bộ tộc Uy Quốc
+    - Các Boss Man khác: 侍大将, 南蛮大王, 匈奴单于, 突厥可汗, 带来洞主
+    - Đồng thời không nhận diện nhầm quái thường: 倭国足轻, 足轻队长, 乌桓千夫长."""
+    # 1. Boss Man Uy Quốc (VD: 足轻大将)
+    raw_ashigaru = [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+    t1 = BattleTroop.from_raw(raw_ashigaru)
+    assert t1.is_boss is True, "足轻大将 tại vị trí 19 phải được nhận diện là BOSS"
+
+    # 2. Có tiền tố bộ tộc Uy Quốc (倭国足轻大将)
+    raw_woguo_ashigaru = [19, "", 0, "倭国足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+    t2 = BattleTroop.from_raw(raw_woguo_ashigaru)
+    assert t2.is_boss is True, "倭国足轻大将 phải được nhận diện là BOSS dù có tiền tố 倭国"
+
+    # 3. Xuất hiện tại vị trí khác vị trí 19 (ví dụ pos 11)
+    raw_pos11 = [11, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+    t3 = BattleTroop.from_raw(raw_pos11)
+    assert t3.is_boss is True, "足轻大将 tại vị trí 11 vẫn phải là BOSS"
+
+    # 4. Các thủ lĩnh / Boss Man tộc khác
+    boss_cases = [
+        ("侍大将", 19),
+        ("南蛮大王", 19),
+        ("匈奴单于", 19),
+        ("突厥可汗", 19),
+        ("带来洞主", 19),
+        ("山越大首领", 19),
+    ]
+    for bname, pos in boss_cases:
+        raw_b = [pos, "", 0, bname, 0, "", 0, 0, 4, 100, 0, 2000, 0, 2000, 0, 0, 0, 0, "", 16]
+        tb = BattleTroop.from_raw(raw_b)
+        assert tb.is_boss is True, f"Boss Man '{bname}' phải được nhận diện là BOSS"
+
+    # 5. Đảm bảo lính thường và đội trưởng tép không bị nhận diện nhầm thành BOSS
+    mob_cases = [
+        ("倭国足轻", 19),
+        ("倭国足轻", 11),
+        ("足轻队长", 19),
+        ("足轻", 11),
+        ("乌桓千夫长", 19),
+        ("南蛮头领", 19),
+    ]
+    for mname, pos in mob_cases:
+        raw_m = [pos, "", 0, mname, 0, "", 0, 0, 4, 100, 0, 500, 0, 500, 0, 0, 0, 0, "", 16]
+        tm = BattleTroop.from_raw(raw_m)
+        assert tm.is_boss is False, f"Quái thường '{mname}' không được nhận diện nhầm là BOSS"
+
+
+def test_track_battle_boss_alert_format_and_deduplication():
+    """Kiểm tra format cảnh báo phát hiện Boss Man chuẩn xác:
+    VD: 🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!
+    và không bị trùng lặp log khi on_boss_alert và on_log cùng trỏ tới 1 notify callback."""
+    mock_gw = MagicMock()
+    mock_gw.base_url = "http://test.com"
+    mock_gw._headers.return_value = {}
+    mock_gw.current_user_id = 1001
+
+    boss_raw = [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+    our_raw = [1, "Player", 1001, "Triệu Vân", 5001, "", 2001, 0, 1, 100, 0, 2000, 0, 2000, 0, 1, 19, 0, "", 1]
+
+    # Hiệp 1: Còn cả ta và boss -> Hiệp 2: Kết thúc
+    bout1_resp = {
+        "ret": 0,
+        "bout": 1,
+        "bout_left": 30,
+        "site": "Quân đoàn Man tộc",
+        "troops": [our_raw, boss_raw],
+        "tips": [],
+    }
+    bout2_resp = {
+        "ret": 0,
+        "bout": 2,
+        "bout_left": 0,
+        "site": "Quân đoàn Man tộc",
+        "troops": [our_raw],
+        "tips": [],
+    }
+
+    resp1 = MagicMock()
+    resp1.status_code = 200
+    resp1.json.return_value = bout1_resp
+
+    resp2 = MagicMock()
+    resp2.status_code = 200
+    resp2.json.return_value = bout2_resp
+
+    resp_tip = MagicMock()
+    resp_tip.status_code = 200
+    resp_tip.json.return_value = {"ret": 0, "tips": []}
+
+    mock_gw.session.post.side_effect = [resp1, resp_tip, resp2, resp_tip]
+
+    logged_messages = []
+    def single_notify(msg: str):
+        logged_messages.append(msg)
+
+    ctrl = BattleController(mock_gw)
+    report = ctrl.track_battle(
+        battle_id=9999,
+        on_log=single_notify,
+        on_boss_alert=single_notify,  # cả 2 cùng trỏ tới 1 hàm như trong BinhMan / GoiDan
+        leave_boss_last=True,
+        sleep_fn=lambda s: None,
+    )
+
+    assert report.boss_detected is True
+    assert report.boss_name == "足轻大将"
+
+    # Kiểm tra log phát hiện boss đúng định dạng
+    boss_alerts = [m for m in logged_messages if "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in m]
+    assert len(boss_alerts) == 1, f"Thông báo boss phải được log đúng 1 lần, thực tế: {len(boss_alerts)} lần ({boss_alerts})"
+    assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in boss_alerts[0]
+

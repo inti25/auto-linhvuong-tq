@@ -848,6 +848,78 @@ def test_binh_man_concurrent_morale_training_all_generals():
     assert not any(k == "OPT.ashx?id=53" for k, d in server.calls)
 
 
+def test_binh_man_detects_and_logs_boss_man():
+    """Kiểm tra Bình Man nhận diện Boss Man (VD: 足轻大将 tại vị trí 19)
+    và log cảnh báo chính xác ra nhật ký:
+    VD: 🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!"""
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [21936, "ThienCo", 280, 237, [[99057, "TP3", "", 2, 0, 16]]],
+                ],
+            },
+            "Common.ashx?id=40": {
+                "ret": 0,
+                "come": [],
+                "goto": [],
+                "battle": [[1002, 555, "倭国部队", 281, 237, 10]],
+            },
+            "Common.ashx?id=4": {
+                "ret": 0,
+                "battle_id": 39304999,
+                "next_left": 10,
+                "atside": 1,
+                "city": [555, "倭国部队", 281, 237],
+                "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TP3", 0, 8919, 0, 0, 100, 99057]],
+                "enemy": [],
+            },
+            "OPT.ashx?id=24": [
+                {
+                    "ret": 0,
+                    "site": "倭国部队",
+                    "mapid": 555,
+                    "bout": 1,
+                    "bout_left": 10,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "quilia", 738816, "TP3", 99057, "", 21936, 0, 1, 100, 0, 0, 8919, 8919, 0, 0, 0, 0, "", 1],
+                        [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", 16],
+                    ],
+                },
+                {"ret": 13, "troops": []},
+            ],
+            "OPT.ashx?id=54": {"ret": 0},
+            "OPT.ashx?id=57": {"ret": 0},
+            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
+        },
+    )
+    server.cookies = {"uid": "738816"}
+    ctx, _ = ctx_for(server)
+    notifies = []
+    ctx.notify = lambda m: notifies.append(m)
+    task = BinhMan(
+        ctx,
+        generals=[99057],
+        origin=(280, 237),
+        radius=5,
+        man_types=[1],
+        mode=2,
+        city_id=21936,
+        check_idle=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "battle_tracked"
+
+    boss_alerts = [m for m in notifies if "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in m]
+    assert len(boss_alerts) == 1, f"Bình Man phải log cảnh báo boss đúng 1 lần: {notifies}"
+    assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in boss_alerts[0]
+
+
 
 
 
