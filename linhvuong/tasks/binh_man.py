@@ -283,10 +283,15 @@ class BinhMan:
 
             # 3. Bổ sung quân số theo TargetArmy hoặc cấu hình legacy
             if self.target_army and self.target_army.total > 0 and self.auto_recruit:
+                try:
+                    roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.parent_city_id])
+                    cur_army = roster.army_of(gid) if roster else None
+                except Exception:
+                    cur_army = None
                 self.provisioner.adjust_troops(
                     base_id=self.parent_city_id,
                     general_id=gid,
-                    current_army=None,
+                    current_army=cur_army,
                     target_army=self.target_army,
                     auto_recruit=True,
                     on_log=self.ctx.notify,
@@ -324,16 +329,24 @@ class BinhMan:
     def recover_in_city(self) -> None:
         """Trị thương và bổ sung quân tại chỗ trong Thành (Chế độ 2 - Xuất quân từ Thành)."""
         cid = self.city_id or self.parent_city_id or 0
+        roster = None
+        if self.target_army and self.target_army.total > 0 and self.auto_recruit and cid:
+            try:
+                roster = fetch_roster(self.ctx.gateway, only_base_ids=[cid])
+            except Exception:
+                roster = None
+
         for gid in self.generals:
             # 1. Trị thương
             self.provisioner.heal_general(cid, gid)
 
             # 2. Bổ sung quân theo TargetArmy hoặc cấu hình legacy
             if self.target_army and self.target_army.total > 0 and self.auto_recruit:
+                cur_army = roster.army_of(gid) if roster else None
                 self.provisioner.adjust_troops(
                     base_id=cid,
                     general_id=gid,
-                    current_army=None,
+                    current_army=cur_army,
                     target_army=self.target_army,
                     auto_recruit=True,
                     on_log=self.ctx.notify,
@@ -368,6 +381,23 @@ class BinhMan:
                 return "retreated_below_threshold"
             else:
                 self.recover_in_city()
+                if self.return_threshold > 0 and self.origin_id:
+                    try:
+                        roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.origin_id])
+                        gens = {g.id: g for g in roster.generals_of(self.origin_id)}
+                        for gid in self.generals:
+                            g = gens.get(gid)
+                            if g and g.stamina_max > 0:
+                                stamina_pct = (g.stamina / g.stamina_max * 100.0)
+                                if stamina_pct < self.return_threshold:
+                                    if self.ctx.notify:
+                                        self.ctx.notify(
+                                            f"⏳ [Thể lực] Võ tướng {g.name} thể lực ({g.stamina}/{g.stamina_max} = {stamina_pct:.0f}%) "
+                                            f"dưới ngưỡng an toàn ({self.return_threshold}%), chờ hồi phục..."
+                                        )
+                                    return "waiting_stamina"
+                    except Exception:
+                        pass
                 return "recovered_in_city"
 
         # 2. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle

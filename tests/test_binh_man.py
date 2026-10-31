@@ -1013,3 +1013,70 @@ def test_binh_man_tracks_marching_countdown_and_enters_battle_when_arrived():
 
 
 
+
+
+def test_binh_man_recover_in_city_does_not_recruit_when_army_already_sufficient():
+    # Khi quân số đã đủ 20000 kỵ, recover_in_city không được nhét thêm 20000 kỵ hay gọi chiêu mộ id=41
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=29": {"ret": 0, "city": [[1001, "ThienCo", 0, 0, 0, 0, 0, 0, 0, 0, 0]]},
+            "Common.ashx?id=32": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]},
+            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 100, 0]]]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+        }
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        return_threshold=30,
+        target_army=__import__("linhvuong.troops", fromlist=["TargetArmy"]).TargetArmy(cavalry=20000),
+        auto_recruit=True,
+    )
+    out = task.run_once()
+    assert out == "waiting_stamina"
+
+    # Tướng đã có đủ 20000 kỵ, tuyệt đối không được gọi id=6 với amount=20000 hoặc id=41 để chiêu mộ
+    troop_add_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(troop_add_calls) == 0, f"Bị gọi lệnh phối quân lãng phí: {troop_add_calls}"
+    recruit_calls = [d for k, d in server.calls if k == "OPT.ashx?id=41"]
+    assert len(recruit_calls) == 0, f"Bị gọi lệnh chiêu mộ lãng phí: {recruit_calls}"
+
+
+def test_binh_man_recover_in_city_refills_only_missing_troops():
+    # Khi tướng đang có 15000 kỵ và target là 20000 kỵ, chỉ bổ sung đúng 5000 kỵ
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=29": {"ret": 0, "city": [[1001, "ThienCo", 0, 0, 0, 0, 0, 0, 0, 0, 0]]},
+            "Common.ashx?id=32": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]},
+            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 100, 0]]]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+        }
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        return_threshold=30,
+        target_army=__import__("linhvuong.troops", fromlist=["TargetArmy"]).TargetArmy(cavalry=20000),
+        auto_recruit=True,
+    )
+    task.run_once()
+
+    troop_add_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(troop_add_calls) == 1
+    assert troop_add_calls[0]["lAmount"] == "5000"
