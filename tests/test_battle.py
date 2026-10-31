@@ -914,3 +914,53 @@ def test_inspect_world_movements_resolves_base_from_common_32_when_origin_zero()
     assert march is None
 
 
+def test_binh_man_pos_11_regular_troop_and_bujiang_not_identified_as_boss():
+    """Kiểm tra trận Bình Man không có boss nhưng quân địch tiền phong ở vị trí 11
+    (như 倭国部将, 倭国部队, 部将...) với cờ flag 16, 32 hoặc 48 (0x20)
+    tuyệt đối KHÔNG bị nhận diện nhầm là BOSS.
+    """
+    test_cases = [
+        ("倭国部将", 16),
+        ("倭国部将", 48),
+        ("倭国部队", 16),
+        ("倭国部队", 48),
+        ("部将", 16),
+        ("部将", 48),
+        ("鲜卑部将", 16),
+        ("南蛮部将", 16),
+        ("先锋", 16),
+        ("副将", 16),
+    ]
+
+    for name, flag in test_cases:
+        raw = [11, "", 0, name, 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", flag]
+        troop = BattleTroop.from_raw(raw)
+        assert troop.is_boss is False, (
+            f"Quái thường '{name}' tại vị trí 11 (flag {flag}) không được coi là BOSS"
+        )
+
+    # Mô phỏng trận Bình Man 1013 (sg53.dipan.com/battle/1013)
+    battle_1013_payload = {
+        "ret": 0,
+        "site": "倭国部队",
+        "mapid": 1013,
+        "bout": 1,
+        "bout_left": 30,
+        "attack_total": 1,
+        "defend_total": 1,
+        "troops": [
+            [1, "quilia", 738816, "TC1_01", 99056, "", 21936, 0, 1, 100, 0, 0, 8000, 8000, 0, 0, 0, 0, "", 1],
+            [11, "", 0, "倭国部将", 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", 48],
+        ],
+    }
+    state = BattleState.from_json(battle_1013_payload, current_user_id=738816)
+    assert len(state.boss_troops) == 0, "Trận Bình Man 1013 không có BOSS thì boss_troops phải rỗng"
+    assert state.enemy_troops[0].is_boss is False
+
+    # Đồng thời đảm bảo Boss thật (足轻大将, 侍大将) tại vị trí 11 vẫn được nhận diện chính xác
+    real_boss_pos11 = BattleTroop.from_raw(
+        [11, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+    )
+    assert real_boss_pos11.is_boss is True, "Boss thật [足轻大将] tại vị trí 11 phải được nhận diện là BOSS"
+
+

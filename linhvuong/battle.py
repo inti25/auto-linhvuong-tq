@@ -97,30 +97,13 @@ BOSS_KEYWORDS = {
     "boss",
 }
 
-KNOWN_BOSS_NAMES = {
-    # Uy Quốc / Oa Quốc (Nhật Bản - Man cấp 1)
-    "足轻大将", "侍大将", "部将", "大将", "大名", "宿老", "家老",
-    "织田信长", "丰臣秀吉", "德川家康", "武田信玄", "上杉谦信",
-    "伊达政宗", "真田幸村", "明智光秀", "本多忠胜", "服部半藏", "宫本武藏",
-    # Nam Man (Man cấp 6)
-    "孟获", "祝融", "兀突骨", "木鹿大王", "木鹿", "带来洞主", "带来",
-    "忙牙长", "阿会喃", "金环三结", "董荼那",
-    # Hung Nô, Ô Hoàn, Tiên Ti, Khương Đê, Đột Quyết
-    "呼厨泉", "于夫罗", "蹋顿", "轲比能", "步度根", "骨进", "强端",
-    "迷当", "彻里吉", "雅丹", "越吉", "俄何烧戈", "去卑", "刘豹",
-    # Danh tướng Tam Quốc
-    "关羽", "张飞", "赵云", "马超", "黄忠", "诸葛亮", "魏延", "姜维",
-    "曹操", "曹仁", "曹丕", "夏侯惇", "夏侯渊", "张辽", "张郃", "徐晃", "庞德", "许褚", "典韦", "司马懿", "郭嘉", "荀彧", "贾诩",
-    "孙权", "孙策", "孙坚", "周瑜", "陆逊", "鲁肃", "吕蒙", "甘宁", "太史慈",
-    "吕布", "董卓", "袁绍", "袁术", "颜良", "文丑", "貂蝉", "华佗", "左慈", "于吉",
-    "宝箱", "BOSS", "Boss", "boss",
-}
+KNOWN_BOSS_NAMES = { "BOSS", "Boss", "boss", }
 
 COMMON_MONSTER_NAMES = {
     # Thổ phỉ, sơn tặc dã ngoại
     "山贼", "强盗", "恶霸", "黄巾", "流寇", "土匪",
     "蛮兵", "象兵", "藤甲兵", "狼兵", "叛军", "贼兵", "飞贼",
-    "草寇", "乱军", "杂兵", "贼寇",
+    "草寇", "乱军", "杂兵", "贼寇", "部队",
     # Binh lính Uy Quốc thông thường
     "足轻", "忍者", "浪人", "武士", "倭寇",
     # 10 Man tộc dã ngoại (dùng chặn quái chỉ mang tên tộc không có chức danh)
@@ -130,6 +113,7 @@ COMMON_MONSTER_NAMES = {
     "头领", "首领", "酋长", "统领",
     "队长", "斥候", "士卒", "精兵", "亲兵", "卫兵", "哨兵", "哨长",
     "偏将", "裨将", "校尉", "都尉", "杂役", "小卒",
+    "部将", "副将", "先锋", "前锋",
 }
 
 
@@ -213,12 +197,6 @@ class BattleTroop:
 
         if is_boss_title_or_name or bool(flag & 0x20):
             is_boss = True
-        else:
-            is_common_monster = any(mname in gname for mname in COMMON_MONSTER_NAMES)
-            if is_common_monster:
-                is_boss = False
-            else:
-                is_boss = (pos == 19 and uid == 0)
         return cls(
             position=pos,
             player_name=pname,
