@@ -272,6 +272,9 @@ class BaseTaskRunner(threading.Thread):
         self.logger.info(msg)
         self.log_cb(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
+    def is_running(self) -> bool:
+        return self.is_alive() and not self.stop_event.is_set()
+
     def stop(self):
         self.stop_event.set()
         self.log(f"⏹️ Đang dừng nhiệm vụ {self.task_name}...")
@@ -336,6 +339,7 @@ class BinhManAutoRunner(BaseTaskRunner):
         else:
             self.tasks: list[BinhMan] = [task_or_tasks]
         self.interval = interval
+        self.worker_threads: list[threading.Thread] = []
 
     @property
     def task(self) -> Optional[BinhMan]:
@@ -345,6 +349,35 @@ class BinhManAutoRunner(BaseTaskRunner):
     def task(self, val: BinhMan):
         self.tasks = [val]
 
+    def _run_base_worker(self, task: BinhMan):
+        base_label = getattr(task, "base_name", "") or f"Căn cứ {task.origin_id}"
+        cycle = 0
+        while not self.stop_event.is_set():
+            cycle += 1
+            has_action = False
+            try:
+                res = task.run_once()
+                prefix = f"[{base_label}] " if len(self.tasks) > 1 else ""
+                self.log(f"{prefix}Lượt {cycle}: Kết quả -> {res}")
+                if res not in ("no_target", "generals_busy", "camp_frozen", "waiting_morale", "target_claimed_by_other"):
+                    has_action = True
+            except CaptchaRequired:
+                self.logger.warning(f"Server yêu cầu Captcha tại [{base_label}]! Dừng nhiệm vụ Bình Man.")
+                self.log(f"⚠️ [{base_label}] Server yêu cầu Captcha! Dừng nhiệm vụ.")
+                self.status_cb("Cần giải Captcha")
+                self.stop_event.set()
+                break
+            except Exception as e:
+                self.logger.exception(f"Lỗi ngoại lệ tại [{base_label}]: {e}")
+                self.log(f"❌ [{base_label}] Lỗi ngoại lệ: {e}")
+
+            if self.stop_event.is_set():
+                break
+
+            wait_time = 1.0 if has_action else self.interval
+            if self.wait_cycle(wait_time if not has_action else min(wait_time, 2.0)):
+                break
+
     def run(self):
         for t in self.tasks:
             t.stop_event = self.stop_event
@@ -353,38 +386,29 @@ class BinhManAutoRunner(BaseTaskRunner):
         self.status_cb("Đang chạy...")
         num_bases = len(self.tasks)
         if num_bases > 1:
-            self.log(f"🚀 Bắt đầu điều phối Bình Man Đa Căn Cứ cho {num_bases} căn cứ...")
+            self.log(f"🚀 Bắt đầu điều phối Bình Man Đa Căn Cứ Đa Luồng cho {num_bases} căn cứ...")
         else:
             self.log("🚀 Bắt đầu nhiệm vụ Bình Man...")
-        cycle = 0
-        while not self.stop_event.is_set():
-            cycle += 1
-            has_action = False
-            try:
-                for t in self.tasks:
-                    if self.stop_event.is_set():
-                        break
-                    base_label = getattr(t, "base_name", "") or f"Căn cứ {t.origin_id}"
-                    res = t.run_once()
-                    if num_bases > 1:
-                        self.log(f"[{base_label}] Lượt {cycle}: Kết quả -> {res}")
-                    else:
-                        self.log(f"Lượt {cycle}: Kết quả -> {res}")
-                    if res not in ("no_target", "generals_busy", "camp_frozen", "waiting_morale", "target_claimed_by_other"):
-                        has_action = True
-            except CaptchaRequired:
-                self.logger.warning("Server yêu cầu Captcha! Dừng nhiệm vụ Bình Man.")
-                self.log("⚠️ Server yêu cầu Captcha! Dừng nhiệm vụ.")
-                self.status_cb("Cần giải Captcha")
-                break
-            except Exception as e:
-                self.logger.exception(f"Lỗi ngoại lệ trong nhiệm vụ Bình Man: {e}")
-                self.log(f"❌ Lỗi ngoại lệ: {e}")
 
-            # Cơ chế chuyển lượt không chặn (ADR-0029): Chỉ khi toàn bộ các căn cứ đều không có hành động khả dụng mới nghỉ trọn vẹn interval giây
-            wait_time = self.interval if not has_action else 1.0
-            if self.wait_cycle(wait_time if not has_action else min(wait_time, 2.0)):
-                break
+        self.worker_threads = []
+        for t in self.tasks:
+            base_label = getattr(t, "base_name", "") or f"Căn cứ {t.origin_id}"
+            w = threading.Thread(
+                target=self._run_base_worker,
+                args=(t,),
+                name=f"BMWorker-{base_label}",
+                daemon=True,
+            )
+            self.worker_threads.append(w)
+            w.start()
+
+        while not self.stop_event.is_set() and any(w.is_alive() for w in self.worker_threads):
+            for w in self.worker_threads:
+                w.join(timeout=0.2)
+
+        for w in self.worker_threads:
+            w.join(timeout=1.0)
+
         self.status_cb("Đã dừng")
         self.log("⏹️ Nhiệm vụ Bình Man đã dừng.")
 
@@ -3728,6 +3752,30 @@ class Dashboard(tk.Frame):
             )
             tasks.append(task)
 
+        if tasks:
+            def _make_peers_fn(for_task_id: int):
+                def _get_peers() -> list[BasePeer]:
+                    result = []
+                    for other in tasks:
+                        if other.origin_id != for_task_id:
+                            result.append(
+                                BasePeer(
+                                    base_id=other.origin_id,
+                                    ox=other.origin[0],
+                                    oy=other.origin[1],
+                                    radius=other.radius,
+                                    target_types=other.man_types,
+                                    origin=other.origin,
+                                    mantypes=other.man_types,
+                                    name=getattr(other, "base_name", ""),
+                                )
+                            )
+                    return result
+                return _get_peers
+
+            for t in tasks:
+                t.peers_fn = _make_peers_fn(t.origin_id)
+
         if not tasks:
             messagebox.showwarning("Cảnh báo", "Không có căn cứ nào có võ tướng khả dụng được chọn!")
         return tasks
@@ -4022,10 +4070,17 @@ class Dashboard(tk.Frame):
         if not tasks:
             return
         def _worker():
+            threads = []
             for t in tasks:
-                bname = getattr(t, "base_name", f"Base-{getattr(t, 'city_id', '')}")
-                res = t.run_once()
-                self.after(0, self._append_bm_log, f"⚡ [{bname}] Kết quả chạy 1 lượt: {res}")
+                def _sub_worker(task=t):
+                    bname = getattr(task, "base_name", f"Base-{getattr(task, 'city_id', '')}")
+                    res = task.run_once()
+                    self.after(0, self._append_bm_log, f"⚡ [{bname}] Kết quả chạy 1 lượt: {res}")
+                th = threading.Thread(target=_sub_worker, daemon=True)
+                threads.append(th)
+                th.start()
+            for th in threads:
+                th.join()
         threading.Thread(target=_worker, daemon=True).start()
 
     def _toggle_binhman(self):

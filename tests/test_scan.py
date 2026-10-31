@@ -60,7 +60,7 @@ def test_returns_nearest_matching_target():
 
 
 def test_scans_points_in_order_of_distance_within_circle():
-    scanner, session = make()
+    scanner, session = make(workers=1)
     scanner.find_nearest(0, 0, radius=10, target_types=[7])
     dists = [math.dist((0, 0), _xy(m)) for m in session.requested]
     assert dists == sorted(dists)

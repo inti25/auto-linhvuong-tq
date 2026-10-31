@@ -169,7 +169,7 @@ Thành hoặc Doanh trại được người chơi tích chọn tham gia tiến 
 _Avoid_: Thành được chọn, active base
 
 **Bình Man Đa Căn Cứ**:
-Cơ chế tự động điều phối tiến trình Bình Man qua danh sách các Căn Cứ (Thành hoặc Doanh trại) được người chơi bật chạy, luân phiên kiểm tra trạng thái võ tướng, dời trại áp sát hoặc xuất kích theo hồ sơ cấu hình độc lập của từng căn cứ.
+Cơ chế tự động điều phối tiến trình Bình Man qua danh sách các Căn Cứ (Thành hoặc Doanh trại) được người chơi bật chạy, vận hành song song đa luồng độc lập (Worker Threads), đồng thời kiểm tra trạng thái võ tướng, dời trại áp sát hoặc xuất kích theo hồ sơ cấu hình độc lập của từng căn cứ.
 _Avoid_: Bình Man đa thành, multi-city binh man
 
 **Căn Cứ Bình Man**:
