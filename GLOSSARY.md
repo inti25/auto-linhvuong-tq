@@ -102,8 +102,8 @@ Không gian diễn ra trận giao chiến giữa quân ta và quân địch theo
 Hành động nhận diện BOSS dã ngoại / Thất Man (định danh qua cờ hiệu đặc biệt `0x20` / `flag = 32` hoặc danh hiệu Boss tối cao, xuất hiện tại ô 11 hoặc các vị trí chỉ huy địch) và cô lập BOSS sống đến cuối trận (sau khi tiêu diệt hết lính bảo vệ có cờ thường `0x10`) bằng cách chuyển toàn bộ quân ta sang thế Phòng ngự để người chơi vào thi triển lệnh Cầm Hoạch (`action = 5` qua `Common.ashx?id=71`) bắt sống Boss.
 _Avoid_: Giữ slot 19, đánh chết Boss, diệt sạch toàn bộ
 
-**Tự Động Bắt BOSS Bằng Ngân Bảo**:
-Tính năng tự động gửi lệnh Cầm Hoạch (`OPT.ashx?id=54, action=5`) để bắt sống BOSS Man bằng Ngân Bảo (Nguyên Bảo) ngay khi sĩ khí của BOSS giảm xuống dưới ngưỡng an toàn (< 60), đồng thời kiểm tra chi phí và tỷ lệ qua `Common.ashx?id=71`, điều chuyển các đạo quân khác sang thế Phòng Ngự (`action=3`) để tránh đánh chết Boss.
+**Tự Động Bắt Sống BOSS Bằng Coin**:
+Tính năng tự động gửi lệnh Cầm Hoạch (`OPT.ashx?id=54, action=5`) để bắt sống BOSS Man bằng Coin (元宝 / Ngân bảo) ngay khi sĩ khí của BOSS giảm xuống dưới ngưỡng an toàn (< 60), đồng thời kiểm tra chi phí và tỷ lệ qua `Common.ashx?id=71`, điều chuyển các đạo quân khác sang thế Phòng Ngự (`action=3`) để tránh đánh chết Boss.
 _Avoid_: Bắt mù quáng, cắn vcoin vô tội vạ, spam action 5 khi sĩ khí cao
 
 **Thông Báo Đa Kênh**:

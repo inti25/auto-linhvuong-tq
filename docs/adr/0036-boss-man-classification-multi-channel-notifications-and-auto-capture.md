@@ -1,4 +1,4 @@
-# ADR 0036: Nhận Diện BOSS Thất Man, Thông Báo Đa Kênh Và Tự Động Cầm Hoạch Bằng Ngân Bảo
+# ADR 0036: Nhận Diện BOSS Thất Man, Thông Báo Đa Kênh Và Tự Động Cầm Hoạch Bằng Coin (Ngân Bảo)
 
 ## Ngữ Cảnh và Vấn Đề
 
@@ -10,8 +10,8 @@
 2. **Thiếu cơ chế cảnh báo chủ động khi người chơi thu nhỏ ứng dụng**:
    - Khi treo bot tự động đánh dã ngoại hoặc bình man, người chơi thường thu nhỏ cửa sổ bot hoặc chuyển qua làm việc khác. Thông báo chỉ hiển thị trong log văn bản dễ bị trôi và bỏ lỡ thời cơ vàng để bắt Boss trước khi chiến trường kết thúc.
 
-3. **Nhu cầu tự động hóa bắt Boss bằng Ngân bảo (Nguyên bảo)**:
-   - Khi Boss đã bị cô lập và sĩ khí giảm sâu (< 60), người chơi muốn bot có khả năng tự động gửi lệnh bắt sống (`action = 5`) tiêu hao ngân bảo mà không cần phải can thiệp thủ công bằng tay.
+3. **Nhu cầu tự động hóa bắt sống Boss bằng Coin (Ngân bảo / 元宝)**:
+   - Khi Boss đã bị cô lập và sĩ khí giảm sâu (< 60), người chơi muốn bot có khả năng tự động gửi lệnh bắt sống (`action = 5`) tiêu hao Coin mà không cần phải can thiệp thủ công bằng tay.
 
 ## Quyết Định Kiến Trúc
 
@@ -26,14 +26,14 @@
    - **Kênh Telegram**: Gửi HTTP POST tới Telegram Bot API (`sendMessage`) kèm thông tin: Tên Boss, Vị trí ô, Tọa độ/Thế lực dã ngoại và đường link trực tiếp vào chiến trường (`http://sg{server}.dipan.com/battle/{id}`).
    - **Chống Spam (Deduplication)**: Mỗi BOSS trên từng chiến trường `(battle_id, boss_pos)` chỉ kích hoạt thông báo đúng 1 lần duy nhất trong suốt thời gian diễn ra trận đánh.
 
-3. **Cơ Chế Tự Động Bắt BOSS Bằng Ngân Bảo (`CombatConfig` & `BattleController`)**:
+3. **Cơ Chế Tự Động Bắt Sống BOSS Bằng Coin (`CombatConfig` & `BattleController`)**:
    - Bổ sung tùy chọn `auto_capture_boss: bool = False` và `capture_boss_max_morale: int = 60` vào cấu hình tác chiến.
    - Khi quái bảo vệ đã hết và sĩ khí của Boss `< 60`:
-     - Gọi `Common.ashx?id=71` để kiểm tra chi phí ngân bảo (`fee`) và tỷ lệ thành công (`ratio`).
-     - Nếu không đủ ngân bảo (mã lỗi 30): Tự động chuyển toàn quân sang Phòng ngự (`action = 3`) và gửi thông báo cảnh báo.
+     - Gọi `Common.ashx?id=71` để kiểm tra chi phí Coin (`fee`) và tỷ lệ thành công (`ratio`).
+     - Nếu không đủ Coin (mã lỗi 30): Tự động chuyển toàn quân sang Phòng ngự (`action = 3`) và gửi thông báo cảnh báo.
      - Nếu đủ điều kiện: Chỉ định đạo quân số 1 (chủ tướng) gửi lệnh Bắt sống `action = 5` qua `OPT.ashx?id=54`, đồng thời điều chuyển tất cả các đạo quân còn lại sang thế Phòng ngự (`action = 3`) để tránh đánh chết Boss.
 
 4. **Hồ Sơ Cấu Hình & Giao Diện Popup Dashboard (`linhvuong/profile.py`, `linhvuong/dashboard.py`)**:
    - Bổ sung `NotificationProfile` vào `Profile` (lưu trữ độc lập cho từng tài khoản).
-   - Bổ sung nút **`🔔 Cài Đặt Thông Báo`** trên thanh công cụ Top Bar và Tab Chiến Trường. Khi bấm sẽ mở hộp thoại nổi (`tk.Toplevel`) cấu hình Desktop Toast, Chuông cảnh báo, Telegram Bot (kèm nút test trực tiếp) và tùy chọn Tự động bắt Boss.
+   - Bổ sung nút **`🔔 Cài Đặt Thông Báo & Bắt Sống BOSS`** trên Tab Chiến Trường. Khi bấm sẽ mở hộp thoại nổi (`tk.Toplevel`) cấu hình Desktop Toast, Chuông cảnh báo, Telegram Bot (kèm nút test trực tiếp) và tùy chọn Tự động bắt sống BOSS bằng Coin.
 

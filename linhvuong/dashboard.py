@@ -6793,14 +6793,14 @@ class Dashboard(tk.Frame):
         self.mo_stop_btn.configure(state="disabled")
 
     def _open_notification_settings_dialog(self):
-        """Mở cửa sổ cài đặt Thông Báo Đa Kênh & Tự Động Bắt BOSS (ADR-0036)."""
+        """Mở cửa sổ cài đặt Thông Báo Đa Kênh & Tự Động Bắt Sống BOSS (Coin) (ADR-0036)."""
         if hasattr(self, "_notify_win") and self._notify_win and self._notify_win.winfo_exists():
             self._notify_win.lift()
             self._notify_win.focus_force()
             return
 
         win = tk.Toplevel(self)
-        win.title("🔔 Cài Đặt Thông Báo & Bắt BOSS")
+        win.title("🔔 Cài Đặt Thông Báo & Bắt Sống BOSS (Coin)")
         win.geometry("520x480")
         win.configure(bg=BG)
         win.resizable(False, False)
@@ -6821,14 +6821,14 @@ class Dashboard(tk.Frame):
         top_frame.pack(fill="x", padx=16, pady=(12, 6))
         tk.Label(
             top_frame,
-            text="🔔 Cấu Hình Thông Báo & Bắt BOSS",
+            text="🔔 Cấu Hình Thông Báo & Bắt Sống BOSS",
             bg=BG,
             fg=FG,
             font=("Segoe UI", 12, "bold"),
         ).pack(anchor="w")
         tk.Label(
             top_frame,
-            text="Cảnh báo tức thời khi phát hiện BOSS & Tự động bắt bằng Ngân bảo",
+            text="Cảnh báo tức thời khi phát hiện BOSS & Tự động bắt sống bằng Coin",
             bg=BG,
             fg=MUTED,
             font=("Segoe UI", 8),
@@ -6865,15 +6865,15 @@ class Dashboard(tk.Frame):
         e_cid = ttk.Entry(r_cid, textvariable=v_chat_id, width=38)
         e_cid.pack(side="left", fill="x", expand=True)
 
-        # Khung 2: Tự Động Bắt BOSS
-        f_boss = ttk.LabelFrame(win, text="Tự Động Bắt BOSS Bằng Ngân Bảo", style="Card.TLabelframe")
+        # Khung 2: Tự Động Bắt Sống BOSS
+        f_boss = ttk.LabelFrame(win, text="Tự Động Bắt Sống BOSS Bằng Coin", style="Card.TLabelframe")
         f_boss.pack(fill="x", padx=16, pady=6)
 
         b1 = tk.Frame(f_boss, bg=CARD)
         b1.pack(fill="x", padx=8, pady=4)
         ttk.Checkbutton(
             b1,
-            text="Tự động bắt BOSS bằng Ngân bảo khi chỉ còn BOSS",
+            text="Tự động bắt sống BOSS bằng Coin khi chỉ còn BOSS",
             variable=v_capture,
             style="TCheckbutton",
         ).pack(anchor="w")
@@ -6929,7 +6929,7 @@ class Dashboard(tk.Frame):
                 self.bt_capture_morale_var.set(m_val if m_val.isdigit() else "60")
 
             if hasattr(self, "_append_bt_log"):
-                self._append_bt_log("🔔 Đã lưu cài đặt Thông báo và Tự động bắt BOSS.")
+                self._append_bt_log("🔔 Đã lưu cài đặt Thông báo và Tự động bắt sống BOSS bằng Coin.")
             win.destroy()
 
         ttk.Button(btn_frame, text="🧪 Thử Nghiệm Thông Báo", style="Action.TButton", command=on_test).pack(side="left")
@@ -6978,7 +6978,7 @@ class Dashboard(tk.Frame):
         tk.Label(cfg_r1, text="s cuối hiệp", bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(0, 12))
 
         self.bt_leave_boss_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(cfg_r1, text="Bắt sống BOSS (Phòng ngự khi chỉ còn BOSS)", variable=self.bt_leave_boss_var, style="TCheckbutton").pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(cfg_r1, text="Giữ BOSS bắt sống (Thủ khi chỉ còn BOSS)", variable=self.bt_leave_boss_var, style="TCheckbutton").pack(side="left", padx=(0, 12))
 
         self.bt_cleanse_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(cfg_r1, text="Tự giải Hỗn loạn (mưu kế 96)", variable=self.bt_cleanse_var, style="TCheckbutton").pack(side="left", padx=(0, 10))
@@ -7023,7 +7023,7 @@ class Dashboard(tk.Frame):
 
         ttk.Checkbutton(
             cfg_r3,
-            text="Tự động bắt BOSS bằng Ngân bảo (Yuanbao)",
+            text="Tự động bắt sống BOSS bằng Coin",
             variable=self.bt_auto_capture_boss_var,
             style="TCheckbutton",
         ).pack(side="left", padx=(0, 8))
@@ -7034,7 +7034,7 @@ class Dashboard(tk.Frame):
 
         ttk.Button(
             cfg_r3,
-            text="🔔 Cài Đặt Thông Báo & Bắt BOSS",
+            text="🔔 Cài Đặt Thông Báo & Bắt Sống BOSS",
             style="Action.TButton",
             command=self._open_notification_settings_dialog,
         ).pack(side="left", padx=(0, 6))

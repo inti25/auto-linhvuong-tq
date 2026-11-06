@@ -225,7 +225,7 @@ def test_auto_capture_boss_when_morale_below_threshold():
     engine.change_target_attack.assert_any_call(1012, 2, 11, action=3)
     assert our_troop2.attack_action == 3
 
-    assert any("Cầm Hoạch" in m and "50 ngân bảo" in m and "85%" in m for m in logs)
+    assert any("Cầm Hoạch" in m and "50 Coin" in m and "85%" in m for m in logs)
 
 
 def test_auto_capture_boss_fallback_when_insufficient_yuanbao():
@@ -268,7 +268,7 @@ def test_auto_capture_boss_fallback_when_insufficient_yuanbao():
     # Không được áp action = 5 mà phải chuyển sang action = 3 (Phòng ngự)
     engine.change_target_attack.assert_called_with(1012, 1, 11, action=3)
     assert our_troop1.attack_action == 3
-    assert any("Không đủ ngân bảo" in m for m in logs)
+    assert any("Không đủ Coin" in m for m in logs)
 
 
 def test_auto_capture_boss_wears_down_morale_when_morale_too_high():

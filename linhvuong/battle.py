@@ -378,7 +378,7 @@ class CombatConfig:
     emergency_retreat_threshold: int = 0  # % quân số để rút lui khẩn cấp (0 = tắt)
     offensive_stratagem_id: int = 0  # 0: Không dùng, 93: Phản khách, 95: Cầm tặc...
     focus_fire_ratio: int = 1  # Số tướng đánh 1 mục tiêu (1, 2, 3)
-    auto_capture_boss: bool = False  # Tự động bắt Boss bằng ngân bảo khi sĩ khí < capture_boss_max_morale
+    auto_capture_boss: bool = False  # Tự động bắt sống Boss bằng Coin khi sĩ khí < capture_boss_max_morale
     capture_boss_max_morale: int = 60  # Ngưỡng sĩ khí tối đa để kích hoạt Cầm Hoạch (action = 5)
     notification_config: Optional[Any] = None  # Cấu hình NotificationConfig phát cảnh báo đa kênh
     server_id: int = 0
@@ -743,7 +743,7 @@ class BattleEngine:
         if only_boss_left and cfg.leave_boss_last:
             boss = state.boss_troops[0]
 
-            # 1. Tự động bắt Boss bằng Ngân bảo khi sĩ khí < capture_boss_max_morale
+            # 1. Tự động bắt sống Boss bằng Coin khi sĩ khí < capture_boss_max_morale
             if cfg.auto_capture_boss and boss.morale < cfg.capture_boss_max_morale:
                 lead_our = state.our_troops[0]
                 chk = self.can_capture_boss(battle_id, lead_our.position, boss.position)
@@ -751,9 +751,9 @@ class BattleEngine:
                 ratio = chk.get("ratio", 0) if isinstance(chk, dict) else 0
                 ret = chk.get("ret", -1) if isinstance(chk, dict) else -1
 
-                if ret == 30:  # Không đủ ngân bảo
+                if ret == 30:  # Không đủ Coin
                     fee_msg = (
-                        f"      ⚠️ [Bắt sống BOSS] Không đủ ngân bảo ({fee} 元宝) để bắt Boss [{boss.general_name}]. "
+                        f"      ⚠️ [Bắt sống BOSS] Không đủ Coin ({fee} Coin) để bắt Boss [{boss.general_name}]. "
                         f"Chuyển toàn quân sang thế Phòng ngự."
                     )
                     if on_log:
@@ -771,7 +771,7 @@ class BattleEngine:
                     lead_our.target_id = boss.position
                     cap_msg = (
                         f"      🎯 [Cầm Hoạch] Tướng [{lead_our.general_name}] thi triển lệnh Bắt sống BOSS [{boss.general_name}] "
-                        f"bằng Ngân bảo (Chi phí: {fee} ngân bảo, Tỷ lệ: {ratio}%)!"
+                        f"bằng Coin (Chi phí: {fee} Coin, Tỷ lệ: {ratio}%)!"
                     )
                     if on_log:
                         on_log(cap_msg)
