@@ -31,7 +31,7 @@ def reset_notified_bosses() -> None:
         _notified_boss_keys.clear()
 
 
-@dataclass
+@dataclass(init=False)
 class NotificationConfig:
     desktop_enabled: bool = True
     sound_enabled: bool = True
@@ -39,13 +39,37 @@ class NotificationConfig:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    def __init__(
+        self,
+        desktop_enabled: Optional[bool] = None,
+        sound_enabled: Optional[bool] = None,
+        telegram_enabled: Optional[bool] = None,
+        telegram_bot_token: str = "",
+        telegram_chat_id: str = "",
+        notify_desktop_toast: Optional[bool] = None,
+        notify_sound: Optional[bool] = None,
+        notify_telegram: Optional[bool] = None,
+        **kwargs,
+    ):
+        d_val = notify_desktop_toast if notify_desktop_toast is not None else desktop_enabled
+        self.desktop_enabled = True if d_val is None else bool(d_val)
+
+        s_val = notify_sound if notify_sound is not None else sound_enabled
+        self.sound_enabled = True if s_val is None else bool(s_val)
+
+        t_val = notify_telegram if notify_telegram is not None else telegram_enabled
+        self.telegram_enabled = False if t_val is None else bool(t_val)
+
+        self.telegram_bot_token = str(kwargs.get("telegram_bot_token", telegram_bot_token)).strip()
+        self.telegram_chat_id = str(kwargs.get("telegram_chat_id", telegram_chat_id)).strip()
+
     @property
     def notify_desktop_toast(self) -> bool:
         return self.desktop_enabled
 
     @notify_desktop_toast.setter
     def notify_desktop_toast(self, val: bool):
-        self.desktop_enabled = val
+        self.desktop_enabled = bool(val)
 
     @property
     def notify_sound(self) -> bool:
@@ -53,7 +77,7 @@ class NotificationConfig:
 
     @notify_sound.setter
     def notify_sound(self, val: bool):
-        self.sound_enabled = val
+        self.sound_enabled = bool(val)
 
     @property
     def notify_telegram(self) -> bool:
@@ -61,7 +85,7 @@ class NotificationConfig:
 
     @notify_telegram.setter
     def notify_telegram(self, val: bool):
-        self.telegram_enabled = val
+        self.telegram_enabled = bool(val)
 
     @classmethod
     def from_dict(cls, data: dict) -> "NotificationConfig":
@@ -193,6 +217,7 @@ def dispatch_boss_alert(
     map_coords: Optional[Tuple[int, int]] = None,
     config: Optional[NotificationConfig] = None,
     on_log: Optional[Callable[[str], None]] = None,
+    bypass_dedup: bool = False,
     **kwargs,
 ) -> bool:
     """Điều phối thông báo BOSS đa kênh bất đồng bộ kèm cơ chế chống lặp (Deduplication)."""
@@ -201,10 +226,11 @@ def dispatch_boss_alert(
     cfg = config or NotificationConfig()
     key = (battle_id, position)
 
-    with _lock:
-        if key in _notified_boss_keys:
-            return False  # Đã thông báo cho Boss này trên chiến trường này
-        _notified_boss_keys.add(key)
+    if not bypass_dedup and battle_id != 9999:
+        with _lock:
+            if key in _notified_boss_keys:
+                return False  # Đã thông báo cho Boss này trên chiến trường này
+            _notified_boss_keys.add(key)
 
     coords_str = f"({map_coords[0]}, {map_coords[1]})" if map_coords else ""
     srv = server_id if server_id > 0 else 53

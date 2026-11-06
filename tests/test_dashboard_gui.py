@@ -1567,10 +1567,10 @@ def test_dashboard_battle_tab_controls_and_profile():
 
 def test_dashboard_battle_tab_boss_load_alert():
     """Kiểm tra tab Chiến Trường hiển thị cảnh báo khi nạp chiến trường có Boss Man:
-    VD: 🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!"""
+    VD: 🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 19!"""
     dash = safe_dashboard()
     try:
-        boss_raw = [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+        boss_raw = [19, "", 0, "卑弥呼", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 32]
         our_raw = [1, "Player", 1001, "Triệu Vân", 5001, "", 2001, 0, 1, 100, 0, 2000, 0, 2000, 0, 1, 19, 0, "", 1]
         bout_resp = {
             "ret": 0,
@@ -1589,11 +1589,11 @@ def test_dashboard_battle_tab_boss_load_alert():
         dash.update()
 
         log_content = dash.bt_log_text.get("1.0", "end")
-        assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in log_content
+        assert "🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 19!" in log_content
 
         enemy_items = dash.bt_enemy_tree.get_children()
         assert len(enemy_items) == 1
-        assert "足轻大将" in dash.bt_enemy_tree.item(enemy_items[0], "text")
+        assert "卑弥呼" in dash.bt_enemy_tree.item(enemy_items[0], "text")
         assert "👑" in dash.bt_enemy_tree.item(enemy_items[0], "text")
         assert "boss" in dash.bt_enemy_tree.item(enemy_items[0], "tags")
     finally:
@@ -2667,6 +2667,22 @@ def test_notification_and_boss_capture_gui():
         # Re-opening dialog should lift existing window
         dash._open_notification_settings_dialog()
         assert dash._notify_win.winfo_exists()
+
+        # Kiểm tra bấm nút '🧪 Thử Nghiệm Thông Báo' không gây lỗi và kích hoạt dispatch_boss_alert
+        test_btn = None
+        for child in dash._notify_win.winfo_children():
+            if isinstance(child, tk.Frame):
+                for sub in child.winfo_children():
+                    if isinstance(sub, ttk.Button) and "Thử Nghiệm" in sub.cget("text"):
+                        test_btn = sub
+                        break
+        assert test_btn is not None
+        with patch("linhvuong.dashboard.dispatch_boss_alert") as mock_dispatch:
+            test_btn.invoke()
+            mock_dispatch.assert_called_once()
+            call_kwargs = mock_dispatch.call_args.kwargs
+            assert call_kwargs["boss_name"] == "[Thử Nghiệm] Tào Tháo"
+            assert call_kwargs["config"].notify_desktop_toast is True
 
         # Destroy dialog
         dash._notify_win.destroy()

@@ -33,10 +33,27 @@ def test_notification_config_serialization():
     cfg2 = NotificationConfig.from_dict(d)
     assert cfg2 == cfg
 
+    # Kiểm tra khởi tạo bằng tên tham số mới notify_desktop_toast / notify_sound / notify_telegram
+    cfg_alt = NotificationConfig(
+        notify_desktop_toast=False,
+        notify_sound=True,
+        notify_telegram=True,
+        telegram_bot_token="bot:tok",
+        telegram_chat_id="chat123",
+    )
+    assert cfg_alt.desktop_enabled is False
+    assert cfg_alt.notify_desktop_toast is False
+    assert cfg_alt.sound_enabled is True
+    assert cfg_alt.notify_sound is True
+    assert cfg_alt.telegram_enabled is True
+    assert cfg_alt.notify_telegram is True
+
     # Profile integration
     prof = Profile(
         notifications=NotificationProfile(
-            telegram_enabled=True,
+            notify_desktop_toast=True,
+            notify_sound=False,
+            notify_telegram=True,
             telegram_bot_token="tok",
             telegram_chat_id="cid",
         ),
@@ -47,11 +64,13 @@ def test_notification_config_serialization():
     )
     p_dict = prof.to_dict()
     assert p_dict["notifications"]["telegram_enabled"] is True
+    assert p_dict["notifications"]["notify_desktop_toast"] is True
     assert p_dict["combat"]["auto_capture_boss"] is True
     assert p_dict["combat"]["capture_boss_max_morale"] == "55"
 
     prof2 = Profile.from_dict(p_dict)
     assert prof2.notifications.telegram_enabled is True
+    assert prof2.notifications.notify_desktop_toast is True
     assert prof2.combat.auto_capture_boss is True
     assert prof2.combat.capture_boss_max_morale == "55"
 
