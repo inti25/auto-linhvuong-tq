@@ -71,8 +71,7 @@ STRATAGEMS = {
 }
 
 BOSS_KEYWORDS = {
-    # Chức danh / Hậu tố Boss Man & Dã ngoại đặc trưng
-    "大将",      # Đại tướng (足轻大将 - Túc Khinh Đại Tướng, 侍大将 - Thị Đại Tướng, 部将...)
+    # Chức danh / Hậu tố Boss Man & Dã ngoại đặc trưng (đã loại bỏ "大将" để tránh nhận nhầm quái hộ vệ)
     "大王",      # Đại vương (Mộc Lộc Đại Vương, Nam Man Đại Vương...)
     "单于",      # Thiền vu (Vua Hung Nô, Ô Hoàn, Tiên Ti)
     "大单于",    # Đại Thiền vu
@@ -186,17 +185,24 @@ class BattleTroop:
             init_soldiers = soldiers
 
         # Nhận diện BOSS chiến trường (hỗ trợ đầy đủ Boss Man, Danh tướng Tam Quốc & Boss Thảo Phạt):
-        # 1. Tên chứa từ khóa BOSS hoặc thuộc danh sách danh tướng / BOSS Man (ưu tiên tuyệt đối).
-        # 2. Cờ flag & 0x20 đại diện cho tướng danh / BOSS.
-        # 3. Quái thường dã ngoại (chỉ chứa tên trong COMMON_MONSTER_NAMES mà không có chức danh BOSS) -> không phải BOSS.
-        # 4. Tướng ở vị trí 19 (chủ soái địch) có uid == 0 và không thuộc quái thường.
+        # 1. Tên chứa chức danh BOSS tối cao (BOSS_KEYWORDS) hoặc danh sách danh tướng / Boss Thảo Phạt (KNOWN_BOSS_NAMES).
+        # 2. Cờ flag & 0x20 đại diện cho BOSS Thất Man dã ngoại (như Himiko - 卑弥呼) có thể bắt sống (Cầm hoạch).
+        # 3. Quái thường dã ngoại (chứa tên trong COMMON_MONSTER_NAMES và không có chức danh BOSS) -> không phải BOSS.
         is_boss_title_or_name = (
             any(kw in gname for kw in BOSS_KEYWORDS)
             or any(bname in gname for bname in KNOWN_BOSS_NAMES)
         )
 
-        if is_boss_title_or_name or bool(flag & 0x20):
+        is_common_monster = any(
+            gname == mname or gname.endswith(mname) for mname in COMMON_MONSTER_NAMES
+        )
+
+        if is_boss_title_or_name:
             is_boss = True
+        elif bool(flag & 0x20) and not is_common_monster:
+            is_boss = True
+        else:
+            is_boss = False
         return cls(
             position=pos,
             player_name=pname,
@@ -372,6 +378,10 @@ class CombatConfig:
     emergency_retreat_threshold: int = 0  # % quân số để rút lui khẩn cấp (0 = tắt)
     offensive_stratagem_id: int = 0  # 0: Không dùng, 93: Phản khách, 95: Cầm tặc...
     focus_fire_ratio: int = 1  # Số tướng đánh 1 mục tiêu (1, 2, 3)
+    auto_capture_boss: bool = False  # Tự động bắt Boss bằng ngân bảo khi sĩ khí < capture_boss_max_morale
+    capture_boss_max_morale: int = 60  # Ngưỡng sĩ khí tối đa để kích hoạt Cầm Hoạch (action = 5)
+    notification_config: Optional[Any] = None  # Cấu hình NotificationConfig phát cảnh báo đa kênh
+    server_id: int = 0
 
 
 class BattleEngine:
@@ -567,6 +577,17 @@ class BattleEngine:
                 pass
         return False
 
+    def can_capture_boss(self, battle_id: int, pos_id: int, dest_pos_id: int) -> dict:
+        """Kiểm tra điều kiện bắt BOSS qua Common.ashx?id=71."""
+        payload = {
+            "battleid": str(battle_id),
+            "posid": str(pos_id),
+            "destposid": str(dest_pos_id),
+            "_": "",
+        }
+        res = self._post_gateway("Common.ashx", 71, payload, referer_path=f"/battle/{battle_id}")
+        return res if isinstance(res, dict) else {"ret": -1}
+
     def get_general_military_info(self, general_id: int, city_id: int = 0) -> Optional[dict]:
         """Lấy thông tin cấu hình tác chiến của võ tướng từ Common.ashx?id=12."""
         data = self._post_gateway(
@@ -720,8 +741,73 @@ class BattleEngine:
         only_boss_left = bool(state.boss_troops and not non_boss_enemies)
 
         if only_boss_left and cfg.leave_boss_last:
-            # Cô lập BOSS: Chuyển toàn bộ quân ta về thế Phòng ngự (3)
             boss = state.boss_troops[0]
+
+            # 1. Tự động bắt Boss bằng Ngân bảo khi sĩ khí < capture_boss_max_morale
+            if cfg.auto_capture_boss and boss.morale < cfg.capture_boss_max_morale:
+                lead_our = state.our_troops[0]
+                chk = self.can_capture_boss(battle_id, lead_our.position, boss.position)
+                fee = chk.get("fee", 0) if isinstance(chk, dict) else 0
+                ratio = chk.get("ratio", 0) if isinstance(chk, dict) else 0
+                ret = chk.get("ret", -1) if isinstance(chk, dict) else -1
+
+                if ret == 30:  # Không đủ ngân bảo
+                    fee_msg = (
+                        f"      ⚠️ [Bắt sống BOSS] Không đủ ngân bảo ({fee} 元宝) để bắt Boss [{boss.general_name}]. "
+                        f"Chuyển toàn quân sang thế Phòng ngự."
+                    )
+                    if on_log:
+                        on_log(fee_msg)
+                    logs.append(fee_msg)
+                    for our in state.our_troops:
+                        self.change_target_attack(battle_id, our.position, boss.position, action=3)
+                        our.attack_action = 3
+                        our.target_id = boss.position
+                    return logs
+
+                ok = self.change_target_attack(battle_id, lead_our.position, boss.position, action=5)
+                if ok:
+                    lead_our.attack_action = 5
+                    lead_our.target_id = boss.position
+                    cap_msg = (
+                        f"      🎯 [Cầm Hoạch] Tướng [{lead_our.general_name}] thi triển lệnh Bắt sống BOSS [{boss.general_name}] "
+                        f"bằng Ngân bảo (Chi phí: {fee} ngân bảo, Tỷ lệ: {ratio}%)!"
+                    )
+                    if on_log:
+                        on_log(cap_msg)
+                    logs.append(cap_msg)
+
+                # Chuyển các tướng còn lại sang phòng ngự (action = 3) để tránh sát thương làm chết Boss
+                for our in state.our_troops[1:]:
+                    if our.attack_action != 3 or our.target_id != boss.position:
+                        ok3 = self.change_target_attack(battle_id, our.position, boss.position, action=3)
+                        if ok3:
+                            our.attack_action = 3
+                            our.target_id = boss.position
+                            def_msg = f"      🛡️ [Bảo toàn BOSS] Tướng [{our.general_name}] chuyển thế Phòng ngự (3) yểm trợ"
+                            if on_log:
+                                on_log(def_msg)
+                            logs.append(def_msg)
+                return logs
+
+            # 2. Tự động bắt nhưng sĩ khí còn cao (>= capture_boss_max_morale): Duy trì bào mòn sĩ khí
+            elif cfg.auto_capture_boss and boss.morale >= cfg.capture_boss_max_morale:
+                for our in state.our_troops:
+                    act = 1  # Tấn công thường để hạ sĩ khí
+                    ok = self.change_target_attack(battle_id, our.position, boss.position, action=act)
+                    if ok:
+                        our.attack_action = act
+                        our.target_id = boss.position
+                        wear_msg = (
+                            f"      ⚔️ [Bào mòn BOSS] Sĩ khí Boss [{boss.general_name}] còn cao ({boss.morale}% >= {cfg.capture_boss_max_morale}%). "
+                            f"Tướng [{our.general_name}] tấn công hạ sĩ khí..."
+                        )
+                        if on_log:
+                            on_log(wear_msg)
+                        logs.append(wear_msg)
+                return logs
+
+            # 3. Mặc định leave_boss_last: Cô lập BOSS, chuyển toàn bộ quân ta về thế Phòng ngự (3)
             for our in state.our_troops:
                 if our.attack_action != 3 or our.target_id != boss.position:
                     ok = self.change_target_attack(battle_id, our.position, boss.position, action=3)
@@ -1219,6 +1305,26 @@ class BattleEngine:
                         on_boss_alert(alert_msg)
                     if not on_boss_alert or on_boss_alert != on_log:
                         _log(alert_msg)
+
+                    # Bắn thông báo đa kênh bất đồng bộ (Desktop Toast & Telegram)
+                    try:
+                        from .coords import coords_from_mid
+                        from .notifications import dispatch_boss_alert
+
+                        coords = coords_from_mid(state.map_id) if state.map_id else None
+                        srv_id = getattr(cfg, "server_id", 0) or getattr(self.gateway, "server_id", 0)
+                        dispatch_boss_alert(
+                            boss_name=boss_name,
+                            position=boss.position,
+                            site=site_name,
+                            battle_id=battle_id,
+                            server_id=srv_id,
+                            map_coords=coords,
+                            config=getattr(cfg, "notification_config", None),
+                            on_log=_log,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Lỗi kích hoạt thông báo đa kênh: {e}")
 
                 _log(f"   ⚔️ [Chiến trường - Hiệp {state.bout}]")
 

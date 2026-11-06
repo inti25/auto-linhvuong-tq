@@ -34,7 +34,8 @@ from .gateway import GatewayClient
 from .engine import AutomationEngine, TaskStatus
 from .locks import TargetLocks
 from .logger import open_logs_directory, setup_logger
-from .profile import BaseBinhManConfig, CityCraftConfig, CraftProfile, Profile, ProfileStore
+from .notifications import NotificationConfig, dispatch_boss_alert
+from .profile import BaseBinhManConfig, CityCraftConfig, CraftProfile, NotificationProfile, Profile, ProfileStore
 from .gui import set_app_icon
 
 logger = logging.getLogger("linhvuong.dashboard")
@@ -679,6 +680,13 @@ class Dashboard(tk.Frame):
         self.dt_dest_x_var = tk.StringVar(value="")
         self.dt_dest_y_var = tk.StringVar(value="")
 
+        # Cấu hình Thông Báo Đa Kênh & Bắt BOSS (ADR-0036)
+        from .notifications import NotificationConfig
+        self.notification_config = NotificationConfig()
+        self.bt_auto_capture_boss_var = tk.BooleanVar(value=False)
+        self.bt_capture_morale_var = tk.StringVar(value="60")
+        self._notify_win = None
+
         # Cấu hình Chế Tạo Quân Giới (ADR-0031)
         self.craft_configs: dict[int, CityCraftConfig] = {}
         self._craft_running: bool = False
@@ -796,6 +804,14 @@ class Dashboard(tk.Frame):
             command=lambda: open_logs_directory(),
         )
         self.open_logs_btn.pack(side="right", padx=(0, 6))
+
+        self.open_notify_btn = ttk.Button(
+            top,
+            text="🔔 Cài Đặt Thông Báo",
+            style="Action.TButton",
+            command=self._open_notification_settings_dialog,
+        )
+        self.open_notify_btn.pack(side="right", padx=(0, 6))
 
         if self.proxy_pool:
             self.rotate_proxy_btn = ttk.Button(
@@ -1501,7 +1517,10 @@ class Dashboard(tk.Frame):
                 "auto_cleanse_confusion": bool(self.bt_cleanse_var.get()) if hasattr(self, "bt_cleanse_var") else True,
                 "emergency_retreat_threshold": self.bt_retreat_var.get() if hasattr(self, "bt_retreat_var") else "0",
                 "stratagem_combo_idx": self.bt_stratagem_combo.current() if hasattr(self, "bt_stratagem_combo") else 0,
+                "auto_capture_boss": bool(self.bt_auto_capture_boss_var.get()) if hasattr(self, "bt_auto_capture_boss_var") else False,
+                "capture_boss_max_morale": self.bt_capture_morale_var.get() if hasattr(self, "bt_capture_morale_var") else "60",
             },
+            "notifications": self.notification_config.to_dict() if hasattr(self, "notification_config") else {},
         }
 
         # Thu thập Hàng đợi Xây dựng (đa căn cứ & tương thích ngược)
@@ -2018,6 +2037,10 @@ class Dashboard(tk.Frame):
                     self.bt_stratagem_combo.current(int(cb_data["stratagem_combo_idx"]))
                 except Exception:
                     pass
+            if hasattr(self, "bt_auto_capture_boss_var") and "auto_capture_boss" in cb_data:
+                self.bt_auto_capture_boss_var.set(bool(cb_data["auto_capture_boss"]))
+            if hasattr(self, "bt_capture_morale_var") and "capture_boss_max_morale" in cb_data:
+                self.bt_capture_morale_var.set(str(cb_data["capture_boss_max_morale"]))
             loaded_sections.append("Chiến Trường")
 
         # 9. Chế Tạo Quân Giới (ADR-0031)
@@ -2037,6 +2060,13 @@ class Dashboard(tk.Frame):
                 if hasattr(self, "_refresh_craft_tree"):
                     self._refresh_craft_tree()
                 loaded_sections.append("Chế Tạo Quân Giới")
+
+        # 10. Thông Báo Đa Kênh (ADR-0036)
+        if "notifications" in data and isinstance(data["notifications"], dict):
+            notif_data = data["notifications"]
+            if hasattr(self, "notification_config"):
+                self.notification_config = NotificationConfig.from_dict(notif_data)
+            loaded_sections.append("Thông Báo")
 
         return loaded_sections
 
@@ -6762,6 +6792,150 @@ class Dashboard(tk.Frame):
             self.mo_status_lbl.configure(text="Đang dừng tiến trình luyện sĩ khí...")
         self.mo_stop_btn.configure(state="disabled")
 
+    def _open_notification_settings_dialog(self):
+        """Mở cửa sổ cài đặt Thông Báo Đa Kênh & Tự Động Bắt BOSS (ADR-0036)."""
+        if hasattr(self, "_notify_win") and self._notify_win and self._notify_win.winfo_exists():
+            self._notify_win.lift()
+            self._notify_win.focus_force()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("🔔 Cài Đặt Thông Báo & Bắt BOSS")
+        win.geometry("520x480")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        self._notify_win = win
+
+        # Khởi tạo biến từ self.notification_config và combat vars
+        v_toast = tk.BooleanVar(value=self.notification_config.notify_desktop_toast)
+        v_sound = tk.BooleanVar(value=self.notification_config.notify_sound)
+        v_tele = tk.BooleanVar(value=self.notification_config.notify_telegram)
+        v_token = tk.StringVar(value=self.notification_config.telegram_bot_token)
+        v_chat_id = tk.StringVar(value=self.notification_config.telegram_chat_id)
+
+        v_capture = tk.BooleanVar(value=self.bt_auto_capture_boss_var.get() if hasattr(self, "bt_auto_capture_boss_var") else False)
+        v_morale = tk.StringVar(value=self.bt_capture_morale_var.get() if hasattr(self, "bt_capture_morale_var") else "60")
+
+        # Tiêu đề
+        top_frame = tk.Frame(win, bg=BG)
+        top_frame.pack(fill="x", padx=16, pady=(12, 6))
+        tk.Label(
+            top_frame,
+            text="🔔 Cấu Hình Thông Báo & Bắt BOSS",
+            bg=BG,
+            fg=FG,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            top_frame,
+            text="Cảnh báo tức thời khi phát hiện BOSS & Tự động bắt bằng Ngân bảo",
+            bg=BG,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+        ).pack(anchor="w")
+
+        # Khung 1: Các kênh thông báo
+        f_channels = ttk.LabelFrame(win, text="Kênh Thông Báo Cảnh Báo", style="Card.TLabelframe")
+        f_channels.pack(fill="x", padx=16, pady=6)
+
+        c1 = tk.Frame(f_channels, bg=CARD)
+        c1.pack(fill="x", padx=8, pady=4)
+        ttk.Checkbutton(c1, text="🖥️ Thông báo Windows Native Desktop Toast", variable=v_toast, style="TCheckbutton").pack(anchor="w")
+
+        c2 = tk.Frame(f_channels, bg=CARD)
+        c2.pack(fill="x", padx=8, pady=4)
+        ttk.Checkbutton(c2, text="🔊 Chuông cảnh báo hệ thống (System Beep/Sound)", variable=v_sound, style="TCheckbutton").pack(anchor="w")
+
+        c3 = tk.Frame(f_channels, bg=CARD)
+        c3.pack(fill="x", padx=8, pady=4)
+        ttk.Checkbutton(c3, text="✈️ Gửi tin nhắn qua Telegram Bot", variable=v_tele, style="TCheckbutton").pack(anchor="w")
+
+        f_tele = tk.Frame(f_channels, bg=CARD)
+        f_tele.pack(fill="x", padx=8, pady=(2, 8))
+
+        r_tok = tk.Frame(f_tele, bg=CARD)
+        r_tok.pack(fill="x", pady=2)
+        tk.Label(r_tok, text="Bot Token:", bg=CARD, fg=FG, font=("Segoe UI", 9), width=12, anchor="w").pack(side="left")
+        e_token = ttk.Entry(r_tok, textvariable=v_token, width=38, show="*")
+        e_token.pack(side="left", fill="x", expand=True)
+
+        r_cid = tk.Frame(f_tele, bg=CARD)
+        r_cid.pack(fill="x", pady=2)
+        tk.Label(r_cid, text="Chat ID:", bg=CARD, fg=FG, font=("Segoe UI", 9), width=12, anchor="w").pack(side="left")
+        e_cid = ttk.Entry(r_cid, textvariable=v_chat_id, width=38)
+        e_cid.pack(side="left", fill="x", expand=True)
+
+        # Khung 2: Tự Động Bắt BOSS
+        f_boss = ttk.LabelFrame(win, text="Tự Động Bắt BOSS Bằng Ngân Bảo", style="Card.TLabelframe")
+        f_boss.pack(fill="x", padx=16, pady=6)
+
+        b1 = tk.Frame(f_boss, bg=CARD)
+        b1.pack(fill="x", padx=8, pady=4)
+        ttk.Checkbutton(
+            b1,
+            text="Tự động bắt BOSS bằng Ngân bảo khi chỉ còn BOSS",
+            variable=v_capture,
+            style="TCheckbutton",
+        ).pack(anchor="w")
+
+        b2 = tk.Frame(f_boss, bg=CARD)
+        b2.pack(fill="x", padx=8, pady=(0, 6))
+        tk.Label(b2, text="Ngưỡng sĩ khí kích hoạt bắt (Sĩ khí < ):", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        ttk.Entry(b2, textvariable=v_morale, width=6).pack(side="left", padx=(0, 4))
+        tk.Label(b2, text="điểm (Mặc định 60)", bg=CARD, fg=MUTED, font=("Segoe UI", 8)).pack(side="left")
+
+        # Nhãn hiển thị trạng thái test
+        status_lbl = tk.Label(win, text="", bg=BG, fg="#4da3ff", font=("Segoe UI", 9))
+        status_lbl.pack(fill="x", padx=16, pady=(2, 2))
+
+        # Khung nút thao tác
+        btn_frame = tk.Frame(win, bg=BG)
+        btn_frame.pack(fill="x", padx=16, pady=(8, 12))
+
+        def on_test():
+            status_lbl.config(text="Đang gửi thử nghiệm thông báo...", fg="#ff9f43")
+            test_cfg = NotificationConfig(
+                notify_desktop_toast=v_toast.get(),
+                notify_sound=v_sound.get(),
+                notify_telegram=v_tele.get(),
+                telegram_bot_token=v_token.get().strip(),
+                telegram_chat_id=v_chat_id.get().strip(),
+            )
+            server_id = getattr(self.roster, "server_id", 0) if getattr(self, "roster", None) else 0
+            if not server_id and hasattr(self, "gateway") and hasattr(self.gateway, "server_id"):
+                server_id = getattr(self.gateway, "server_id", 0)
+
+            dispatch_boss_alert(
+                boss_name="[Thử Nghiệm] Tào Tháo",
+                position=11,
+                site="Chiến trường",
+                battle_id=9999,
+                server_id=int(server_id) if str(server_id).isdigit() else 0,
+                config=test_cfg,
+            )
+            status_lbl.config(text="✅ Đã gửi tín hiệu thông báo thử nghiệm!", fg=SUCCESS)
+
+        def on_save():
+            self.notification_config.notify_desktop_toast = bool(v_toast.get())
+            self.notification_config.notify_sound = bool(v_sound.get())
+            self.notification_config.notify_telegram = bool(v_tele.get())
+            self.notification_config.telegram_bot_token = v_token.get().strip()
+            self.notification_config.telegram_chat_id = v_chat_id.get().strip()
+
+            if hasattr(self, "bt_auto_capture_boss_var"):
+                self.bt_auto_capture_boss_var.set(bool(v_capture.get()))
+            m_val = v_morale.get().strip()
+            if hasattr(self, "bt_capture_morale_var"):
+                self.bt_capture_morale_var.set(m_val if m_val.isdigit() else "60")
+
+            if hasattr(self, "_append_bt_log"):
+                self._append_bt_log("🔔 Đã lưu cài đặt Thông báo và Tự động bắt BOSS.")
+            win.destroy()
+
+        ttk.Button(btn_frame, text="🧪 Thử Nghiệm Thông Báo", style="Action.TButton", command=on_test).pack(side="left")
+        ttk.Button(btn_frame, text="💾 Lưu Cấu Hình", style="Success.TButton", command=on_save).pack(side="right")
+        ttk.Button(btn_frame, text="Đóng", command=win.destroy).pack(side="right", padx=(0, 6))
+
     # =========================================================================
     # TAB 6: CHIẾN TRƯỜNG & MƯU LƯỢC
     # =========================================================================
@@ -6843,6 +7017,27 @@ class Dashboard(tk.Frame):
         tk.Label(cfg_r2, text="Rút lui khẩn cấp (mưu 92 khi lính < %):", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
         self.bt_retreat_var = tk.StringVar(value="0")
         ttk.Entry(cfg_r2, textvariable=self.bt_retreat_var, width=4).pack(side="left", padx=(0, 6))
+
+        cfg_r3 = tk.Frame(cfg_frame, bg=CARD)
+        cfg_r3.pack(fill="x", pady=2, padx=4)
+
+        ttk.Checkbutton(
+            cfg_r3,
+            text="Tự động bắt BOSS bằng Ngân bảo (Yuanbao)",
+            variable=self.bt_auto_capture_boss_var,
+            style="TCheckbutton",
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Label(cfg_r3, text="khi Sĩ khí <", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 2))
+        ttk.Entry(cfg_r3, textvariable=self.bt_capture_morale_var, width=4).pack(side="left", padx=(0, 2))
+        tk.Label(cfg_r3, text="điểm", bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(side="left", padx=(0, 16))
+
+        ttk.Button(
+            cfg_r3,
+            text="🔔 Cài Đặt Thông Báo & Bắt BOSS",
+            style="Action.TButton",
+            command=self._open_notification_settings_dialog,
+        ).pack(side="left", padx=(0, 6))
 
         # Thân giao diện: 2 Bảng (Trái: Phe Ta, Phải: Phe Địch)
         body = tk.Frame(parent, bg=BG)
@@ -7056,6 +7251,10 @@ class Dashboard(tk.Frame):
 
         win_raw = self.bt_window_var.get() if hasattr(self, "bt_window_var") else "15"
         retreat_raw = self.bt_retreat_var.get() if hasattr(self, "bt_retreat_var") else "0"
+        morale_raw = self.bt_capture_morale_var.get() if hasattr(self, "bt_capture_morale_var") else "60"
+        server_id = getattr(self.roster, "server_id", 0) if getattr(self, "roster", None) else 0
+        if not server_id and hasattr(self, "gateway") and hasattr(self.gateway, "server_id"):
+            server_id = getattr(self.gateway, "server_id", 0)
 
         return CombatConfig(
             auto_counter_formation=bool(self.bt_auto_counter_var.get()) if hasattr(self, "bt_auto_counter_var") else True,
@@ -7067,6 +7266,10 @@ class Dashboard(tk.Frame):
             auto_cleanse_confusion=bool(self.bt_cleanse_var.get()) if hasattr(self, "bt_cleanse_var") else True,
             emergency_retreat_threshold=int(retreat_raw) if retreat_raw.isdigit() else 0,
             offensive_stratagem_id=s_id,
+            auto_capture_boss=bool(self.bt_auto_capture_boss_var.get()) if hasattr(self, "bt_auto_capture_boss_var") else False,
+            capture_boss_max_morale=int(morale_raw) if str(morale_raw).isdigit() else 60,
+            notification_config=getattr(self, "notification_config", None),
+            server_id=int(server_id) if str(server_id).isdigit() else 0,
         )
 
     def _bt_auto_thread(self):

@@ -277,5 +277,35 @@ def test_binh_man_multi_base_profile():
     assert b999.target_cavalry == "8000"
 
 
+def test_notification_and_combat_profile_roundtrip():
+    prof = Profile()
+    prof.combat.auto_capture_boss = True
+    prof.combat.capture_boss_max_morale = "55"
+    prof.notifications.notify_desktop_toast = True
+    prof.notifications.notify_sound = False
+    prof.notifications.notify_telegram = True
+    prof.notifications.telegram_bot_token = "12345:TOKEN"
+    prof.notifications.telegram_chat_id = "-100123456"
+
+    d = prof.to_dict()
+    assert d["combat"]["auto_capture_boss"] is True
+    assert d["combat"]["capture_boss_max_morale"] == "55"
+    assert d["notifications"]["notify_desktop_toast"] is True
+    assert d["notifications"]["notify_sound"] is False
+    assert d["notifications"]["notify_telegram"] is True
+    assert d["notifications"]["telegram_bot_token"] == "12345:TOKEN"
+    assert d["notifications"]["telegram_chat_id"] == "-100123456"
+
+    loaded = Profile.from_dict(d)
+    assert loaded.combat.auto_capture_boss is True
+    assert loaded.combat.capture_boss_max_morale == "55"
+    assert loaded.notifications.notify_desktop_toast is True
+    assert loaded.notifications.notify_sound is False
+    assert loaded.notifications.notify_telegram is True
+    assert loaded.notifications.telegram_bot_token == "12345:TOKEN"
+    assert loaded.notifications.telegram_chat_id == "-100123456"
+
+
+
 
 

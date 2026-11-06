@@ -99,7 +99,16 @@ _Avoid_: Đội hình
 Không gian diễn ra trận giao chiến giữa quân ta và quân địch theo từng hiệp đấu.
 
 **Bắt sống BOSS**:
-Hành động giữ Tướng Chủ hoặc BOSS của quân địch (slot 19) sống đến cuối trận (sau khi tiêu diệt hết lính bảo vệ) để chiêu hàng hoặc bắt sống.
+Hành động nhận diện BOSS dã ngoại / Thất Man (định danh qua cờ hiệu đặc biệt `0x20` / `flag = 32` hoặc danh hiệu Boss tối cao, xuất hiện tại ô 11 hoặc các vị trí chỉ huy địch) và cô lập BOSS sống đến cuối trận (sau khi tiêu diệt hết lính bảo vệ có cờ thường `0x10`) bằng cách chuyển toàn bộ quân ta sang thế Phòng ngự để người chơi vào thi triển lệnh Cầm Hoạch (`action = 5` qua `Common.ashx?id=71`) bắt sống Boss.
+_Avoid_: Giữ slot 19, đánh chết Boss, diệt sạch toàn bộ
+
+**Tự Động Bắt BOSS Bằng Ngân Bảo**:
+Tính năng tự động gửi lệnh Cầm Hoạch (`OPT.ashx?id=54, action=5`) để bắt sống BOSS Man bằng Ngân Bảo (Nguyên Bảo) ngay khi sĩ khí của BOSS giảm xuống dưới ngưỡng an toàn (< 60), đồng thời kiểm tra chi phí và tỷ lệ qua `Common.ashx?id=71`, điều chuyển các đạo quân khác sang thế Phòng Ngự (`action=3`) để tránh đánh chết Boss.
+_Avoid_: Bắt mù quáng, cắn vcoin vô tội vạ, spam action 5 khi sĩ khí cao
+
+**Thông Báo Đa Kênh**:
+Cơ chế phát tín hiệu cảnh báo tức thì đồng thời qua Windows Desktop Toast (kèm âm thanh chuông cảnh báo hệ thống), ghi log giao diện ứng dụng và đẩy tin nhắn từ xa qua Telegram Bot khi hệ thống phát hiện sự kiện đặc biệt (như BOSS xuất hiện trên chiến trường).
+_Avoid_: Báo lẻ kênh, notification đơn lẻ, log thông thường
 
 **An Dân**:
 Hành động tế trời hoặc phát lương thực (`OPT.ashx?id=4`) khôi phục lòng dân và sĩ khí thành trì, triệt tiêu dân nộ để ngăn ngừa bạo loạn.

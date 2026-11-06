@@ -680,28 +680,30 @@ def test_troop_from_raw_man_monsters_at_pos_19_not_identified_as_boss():
 
 def test_boss_man_detection_ashigaru_taisho_and_tribal_bosses():
     """Kiểm tra nhận diện chính xác Boss Man tộc:
-    - [足轻大将] (Túc Khinh Đại Tướng) tại vị trí 19 hoặc bất kỳ vị trí nào
-    - [倭国足轻大将] có tiền tố tên bộ tộc Uy Quốc
-    - Các Boss Man khác: 侍大将, 南蛮大王, 匈奴单于, 突厥可汗, 带来洞主
+    - [卑弥呼] (Himiko - Oa Quốc) với cờ flag 32 (0x20) là BOSS Thất Man.
+    - [足轻大将], [侍大将] với flag 16 là quái hộ vệ thông thường -> KHÔNG phải BOSS.
+    - Các Boss Man khác: 南蛮大王, 匈奴单于, 突厥可汗, 带来洞主, 山越大首领 -> là BOSS.
     - Đồng thời không nhận diện nhầm quái thường: 倭国足轻, 足轻队长, 乌桓千夫长."""
-    # 1. Boss Man Uy Quốc (VD: 足轻大将)
+    # 1. Boss Thất Man Oa Quốc (卑弥呼 với cờ 0x20 = 32)
+    raw_himiko = [11, "", 0, "卑弥呼", 0, "", 0, 0, 5, 100, 0, 0, 2207, 2329, 0, 0, 0, 0, "", 32]
+    t_himiko = BattleTroop.from_raw(raw_himiko)
+    assert t_himiko.is_boss is True, "卑弥呼 (flag 32) tại vị trí 11 phải được nhận diện là BOSS Thất Man"
+
+    # 2. Quái hộ vệ Oa Quốc (足轻大将, 侍大将 với cờ 16) KHÔNG phải Boss
     raw_ashigaru = [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
     t1 = BattleTroop.from_raw(raw_ashigaru)
-    assert t1.is_boss is True, "足轻大将 tại vị trí 19 phải được nhận diện là BOSS"
+    assert t1.is_boss is False, "足轻大将 (flag 16) là quái hộ vệ, không được coi là BOSS"
 
-    # 2. Có tiền tố bộ tộc Uy Quốc (倭国足轻大将)
     raw_woguo_ashigaru = [19, "", 0, "倭国足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
     t2 = BattleTroop.from_raw(raw_woguo_ashigaru)
-    assert t2.is_boss is True, "倭国足轻大将 phải được nhận diện là BOSS dù có tiền tố 倭国"
+    assert t2.is_boss is False, "倭国足轻大将 (flag 16) là quái hộ vệ, không được coi là BOSS"
 
-    # 3. Xuất hiện tại vị trí khác vị trí 19 (ví dụ pos 11)
     raw_pos11 = [11, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
     t3 = BattleTroop.from_raw(raw_pos11)
-    assert t3.is_boss is True, "足轻大将 tại vị trí 11 vẫn phải là BOSS"
+    assert t3.is_boss is False, "足轻大将 tại vị trí 11 (flag 16) không phải là BOSS"
 
-    # 4. Các thủ lĩnh / Boss Man tộc khác
+    # 3. Các thủ lĩnh / Boss Man tộc khác có danh hiệu Boss tối cao
     boss_cases = [
-        ("侍大将", 19),
         ("南蛮大王", 19),
         ("匈奴单于", 19),
         ("突厥可汗", 19),
@@ -737,7 +739,7 @@ def test_track_battle_boss_alert_format_and_deduplication():
     mock_gw._headers.return_value = {}
     mock_gw.current_user_id = 1001
 
-    boss_raw = [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+    boss_raw = [11, "", 0, "卑弥呼", 0, "", 0, 0, 5, 100, 0, 0, 2207, 2329, 0, 0, 0, 0, "", 32]
     our_raw = [1, "Player", 1001, "Triệu Vân", 5001, "", 2001, 0, 1, 100, 0, 2000, 0, 2000, 0, 1, 19, 0, "", 1]
 
     # Hiệp 1: Còn cả ta và boss -> Hiệp 2: Kết thúc
@@ -786,12 +788,12 @@ def test_track_battle_boss_alert_format_and_deduplication():
     )
 
     assert report.boss_detected is True
-    assert report.boss_name == "足轻大将"
+    assert report.boss_name == "卑弥呼"
 
     # Kiểm tra log phát hiện boss đúng định dạng
-    boss_alerts = [m for m in logged_messages if "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in m]
+    boss_alerts = [m for m in logged_messages if "🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 11!" in m]
     assert len(boss_alerts) == 1, f"Thông báo boss phải được log đúng 1 lần, thực tế: {len(boss_alerts)} lần ({boss_alerts})"
-    assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in boss_alerts[0]
+    assert "🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 11!" in boss_alerts[0]
 
 
 def test_troop_from_raw_real_server_mixed_troops_soldier_count():
@@ -958,9 +960,10 @@ def test_binh_man_pos_11_regular_troop_and_bujiang_not_identified_as_boss():
     assert state.enemy_troops[0].is_boss is False
 
     # Đồng thời đảm bảo Boss thật (足轻大将, 侍大将) tại vị trí 11 vẫn được nhận diện chính xác
+# Đồng thời đảm bảo Boss thật (卑弥呼 với cờ 32 / 0x20) tại vị trí 11 được nhận diện chính xác
     real_boss_pos11 = BattleTroop.from_raw(
-        [11, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 1500, 0, 1500, 0, 0, 0, 0, "", 16]
+        [11, "", 0, "卑弥呼", 0, "", 0, 0, 5, 100, 0, 0, 2207, 2329, 0, 0, 0, 0, "", 32]
     )
-    assert real_boss_pos11.is_boss is True, "Boss thật [足轻大将] tại vị trí 11 phải được nhận diện là BOSS"
+    assert real_boss_pos11.is_boss is True, "Boss thật [卑弥呼] tại vị trí 11 phải được nhận diện là BOSS"
 
 

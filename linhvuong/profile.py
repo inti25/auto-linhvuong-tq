@@ -405,6 +405,75 @@ class DiTraiProfile:
 
 
 @dataclass
+class NotificationProfile:
+    desktop_enabled: bool = True
+    sound_enabled: bool = True
+    telegram_enabled: bool = False
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
+    @property
+    def notify_desktop_toast(self) -> bool:
+        return self.desktop_enabled
+
+    @notify_desktop_toast.setter
+    def notify_desktop_toast(self, val: bool):
+        self.desktop_enabled = val
+
+    @property
+    def notify_sound(self) -> bool:
+        return self.sound_enabled
+
+    @notify_sound.setter
+    def notify_sound(self, val: bool):
+        self.sound_enabled = val
+
+    @property
+    def notify_telegram(self) -> bool:
+        return self.telegram_enabled
+
+    @notify_telegram.setter
+    def notify_telegram(self, val: bool):
+        self.telegram_enabled = val
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "NotificationProfile":
+        if not isinstance(data, dict):
+            return cls()
+        d_val = data.get("notify_desktop_toast")
+        if d_val is None:
+            d_val = data.get("desktop_enabled", True)
+
+        s_val = data.get("notify_sound")
+        if s_val is None:
+            s_val = data.get("sound_enabled", True)
+
+        t_val = data.get("notify_telegram")
+        if t_val is None:
+            t_val = data.get("telegram_enabled", False)
+
+        return cls(
+            desktop_enabled=bool(d_val),
+            sound_enabled=bool(s_val),
+            telegram_enabled=bool(t_val),
+            telegram_bot_token=str(data.get("telegram_bot_token", "")).strip(),
+            telegram_chat_id=str(data.get("telegram_chat_id", "")).strip(),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "desktop_enabled": self.desktop_enabled,
+            "sound_enabled": self.sound_enabled,
+            "telegram_enabled": self.telegram_enabled,
+            "notify_desktop_toast": self.desktop_enabled,
+            "notify_sound": self.sound_enabled,
+            "notify_telegram": self.telegram_enabled,
+            "telegram_bot_token": self.telegram_bot_token,
+            "telegram_chat_id": self.telegram_chat_id,
+        }
+
+
+@dataclass
 class CombatProfile:
     auto_counter_formation: bool = True
     formation_window_seconds: str = "15"
@@ -415,6 +484,8 @@ class CombatProfile:
     auto_cleanse_confusion: bool = True
     emergency_retreat_threshold: str = "0"
     stratagem_combo_idx: int = 0
+    auto_capture_boss: bool = False
+    capture_boss_max_morale: str = "60"
 
     @classmethod
     def from_dict(cls, data: dict) -> "CombatProfile":
@@ -430,6 +501,8 @@ class CombatProfile:
             auto_cleanse_confusion=bool(data.get("auto_cleanse_confusion", True)),
             emergency_retreat_threshold=str(data.get("emergency_retreat_threshold", "0")),
             stratagem_combo_idx=int(data.get("stratagem_combo_idx", 0)),
+            auto_capture_boss=bool(data.get("auto_capture_boss", False)),
+            capture_boss_max_morale=str(data.get("capture_boss_max_morale", "60")),
         )
 
 
@@ -507,6 +580,7 @@ class Profile:
     ditrai: DiTraiProfile = field(default_factory=DiTraiProfile)
     combat: CombatProfile = field(default_factory=CombatProfile)
     crafting: CraftProfile = field(default_factory=CraftProfile)
+    notifications: NotificationProfile = field(default_factory=NotificationProfile)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -528,6 +602,8 @@ class Profile:
                 k: asdict(v) if not isinstance(v, dict) else v
                 for k, v in self.crafting.cities.items()
             }
+        if "notifications" in data and hasattr(self.notifications, "to_dict"):
+            data["notifications"] = self.notifications.to_dict()
         return data
 
     @classmethod
@@ -560,6 +636,7 @@ class Profile:
             ditrai=DiTraiProfile.from_dict(data.get("ditrai", {})),
             combat=CombatProfile.from_dict(data.get("combat", {})),
             crafting=CraftProfile.from_dict(craft_raw),
+            notifications=NotificationProfile.from_dict(data.get("notifications", {})),
         )
 
 

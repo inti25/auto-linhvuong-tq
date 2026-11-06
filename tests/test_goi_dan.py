@@ -533,9 +533,9 @@ def test_goi_dan_concurrent_morale_training_all_generals():
 
 
 def test_goi_dan_detects_and_logs_boss_man():
-    """Kiểm tra Gọi Man nhận diện Boss Man (VD: 足轻大将 tại vị trí 19)
+    """Kiểm tra Gọi Man nhận diện Boss Man (VD: 卑弥呼 tại vị trí 19 với flag=32)
     và log cảnh báo chính xác ra nhật ký:
-    VD: 🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!"""
+    VD: 🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 19!"""
     server = FakeServer(
         handlers={
             "Common.ashx?id=32": {
@@ -570,7 +570,7 @@ def test_goi_dan_detects_and_logs_boss_man():
                     "defend_total": 1,
                     "troops": [
                         [1, "Player", 100, "Gen 50", 50, "", 123, 0, 1, 100, 0, 0, 5000, 5000, 0, 0, 0, 0, "", 1],
-                        [19, "", 0, "足轻大将", 0, "", 0, 0, 4, 100, 0, 3000, 0, 3000, 0, 0, 0, 0, "", 16],
+                        [19, "", 0, "卑弥呼", 0, "", 0, 0, 4, 100, 0, 3000, 0, 3000, 0, 0, 0, 0, "", 32],
                     ],
                 },
                 {"ret": 13, "troops": []},
@@ -598,9 +598,9 @@ def test_goi_dan_detects_and_logs_boss_man():
     out = task.run_once()
     assert out == "battle_tracked"
 
-    boss_alerts = [m for m in notifies if "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in m]
+    boss_alerts = [m for m in notifies if "🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 19!" in m]
     assert len(boss_alerts) == 1, f"Gọi Man phải log cảnh báo boss đúng 1 lần: {notifies}"
-    assert "🐉 PHÁT HIỆN BOSS [足轻大将] tại vị trí 19!" in boss_alerts[0]
+    assert "🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 19!" in boss_alerts[0]
 
 
 

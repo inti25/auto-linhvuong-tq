@@ -2635,6 +2635,66 @@ def test_building_task_respects_resource_city_checkbox():
         dash.destroy()
 
 
+def test_notification_and_boss_capture_gui():
+    """Kiểm tra cấu hình Thông Báo Đa Kênh & Tự Động Bắt BOSS trên Dashboard (ADR-0036)."""
+    dash = safe_dashboard()
+    try:
+        dash._loaded(dummy_roster())
+        # 1. Variables and components
+        assert hasattr(dash, "notification_config")
+        assert hasattr(dash, "bt_auto_capture_boss_var")
+        assert hasattr(dash, "bt_capture_morale_var")
+        assert dash.bt_capture_morale_var.get() == "60"
+        assert dash.bt_auto_capture_boss_var.get() is False
+
+        # 2. _build_combat_config
+        dash.bt_auto_capture_boss_var.set(True)
+        dash.bt_capture_morale_var.set("55")
+        dash.notification_config.notify_telegram = True
+        dash.notification_config.telegram_bot_token = "123:ABC"
+
+        cfg = dash._build_combat_config()
+        assert cfg.auto_capture_boss is True
+        assert cfg.capture_boss_max_morale == 55
+        assert cfg.notification_config is not None
+        assert cfg.notification_config.notify_telegram is True
+
+        # 3. Notification Settings Dialog
+        dash._open_notification_settings_dialog()
+        assert dash._notify_win is not None
+        assert dash._notify_win.winfo_exists()
+
+        # Re-opening dialog should lift existing window
+        dash._open_notification_settings_dialog()
+        assert dash._notify_win.winfo_exists()
+
+        # Destroy dialog
+        dash._notify_win.destroy()
+        dash._notify_win = None
+
+        # 4. Profile Collect & Apply roundtrip
+        prof = dash._collect_unified_profile()
+        assert "notifications" in prof
+        assert prof["combat"]["auto_capture_boss"] is True
+        assert prof["combat"]["capture_boss_max_morale"] == "55"
+        assert prof["notifications"]["telegram_bot_token"] == "123:ABC"
+
+        # Reset vars and reapply
+        dash.bt_auto_capture_boss_var.set(False)
+        dash.bt_capture_morale_var.set("60")
+        dash.notification_config.telegram_bot_token = ""
+
+        sections = dash._apply_unified_profile(prof)
+        assert "Chiến Trường" in sections
+        assert "Thông Báo" in sections
+        assert dash.bt_auto_capture_boss_var.get() is True
+        assert dash.bt_capture_morale_var.get() == "55"
+        assert dash.notification_config.telegram_bot_token == "123:ABC"
+    finally:
+        dash.destroy()
+
+
+
 
 
 
