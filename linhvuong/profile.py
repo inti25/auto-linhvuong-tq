@@ -173,6 +173,7 @@ class ThaoPhatProfile:
 
 @dataclass
 class GoiDanProfile:
+    city_id: Optional[int] = None
     mode_idx: int = 0
     radius: str = "5"
     auto_recover: bool = True
@@ -204,12 +205,16 @@ class GoiDanProfile:
         raw_gens = data.get("generals", [])
         gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
 
+        raw_cid = data.get("city_id")
+        cid = int(raw_cid) if raw_cid is not None and str(raw_cid).isdigit() else None
+
         first_type = t_types[0] if t_types else 301
         auto_rec = data.get("auto_recruit")
         if auto_rec is None:
             auto_rec = data.get("auto_recover", True)
 
         return cls(
+            city_id=cid,
             mode_idx=int(data.get("mode_idx", 0)),
             radius=str(data.get("radius", "5")),
             auto_recover=bool(data.get("auto_recover", auto_rec)),

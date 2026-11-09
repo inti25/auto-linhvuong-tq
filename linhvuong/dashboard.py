@@ -317,6 +317,14 @@ class GoiDanAutoRunner(BaseTaskRunner):
             try:
                 res = self.task.run_once()
                 self.log(f"Lượt {cycle}: Kết quả -> {res}")
+                if res == "call_failed:236":
+                    self.log("⚠️ Máy chủ chưa mở sự kiện Gọi Vong Linh (mã lỗi 236: 当前没有相关活动). Tạm dừng nhiệm vụ Gọi Man.")
+                    self.status_cb("Sự kiện chưa mở")
+                    break
+                elif res == "call_failed:90":
+                    self.log("❌ Hết đạo cụ gọi mục tiêu trong túi đồ (mã lỗi 90). Tạm dừng nhiệm vụ Gọi Man.")
+                    self.status_cb("Hết đạo cụ")
+                    break
             except CaptchaRequired:
                 self.logger.warning("Server yêu cầu Captcha! Dừng nhiệm vụ Gọi Dân.")
                 self.log("⚠️ Server yêu cầu Captcha! Dừng nhiệm vụ để giải thủ công.")
@@ -1463,6 +1471,7 @@ class Dashboard(tk.Frame):
                 "interval": self.tp_interval_var.get() if hasattr(self, "tp_interval_var") else "10",
             },
             "goi_dan": {
+                "city_id": self.roster.cities[self.gd_city_combo.current()].id if (hasattr(self, "gd_city_combo") and self.roster and self.roster.cities and 0 <= self.gd_city_combo.current() < len(self.roster.cities)) else None,
                 "mode_idx": self.gd_mode_combo.current() if hasattr(self, "gd_mode_combo") else 0,
                 "target_type": self._get_gd_target_type() if hasattr(self, "_get_gd_target_type") else 301,
                 "target_types": self.gd_target_dropdown.get_selected() if hasattr(self, "gd_target_dropdown") else [301],
@@ -1864,6 +1873,20 @@ class Dashboard(tk.Frame):
             if "generals" in gd_data and isinstance(gd_data["generals"], list):
                 gd_gens = [int(x) for x in gd_data["generals"] if str(x).isdigit()]
                 self._pending_gd_generals = set(gd_gens)
+                target_cid = int(gd_data["city_id"]) if ("city_id" in gd_data and str(gd_data["city_id"]).isdigit()) else None
+                if not target_cid and gd_gens and self.roster and self.roster.cities:
+                    for c in self.roster.cities:
+                        c_gens = {g.id for g in self.roster.generals_of(c.id)}
+                        if any(gid in c_gens for gid in gd_gens):
+                            target_cid = c.id
+                            break
+                if target_cid and hasattr(self, "gd_city_combo") and self.roster and self.roster.cities:
+                    for idx, c in enumerate(self.roster.cities):
+                        if c.id == target_cid:
+                            if self.gd_city_combo.current() != idx:
+                                self.gd_city_combo.current(idx)
+                                self._on_gd_city_selected()
+                            break
                 if hasattr(self, "gd_gen_tree") and self.gd_gen_tree.get_children():
                     for iid in self.gd_gen_tree.get_children():
                         vals = list(self.gd_gen_tree.item(iid, "values"))
@@ -2748,7 +2771,7 @@ class Dashboard(tk.Frame):
         target_type = target_types[0]
         mode = "vong_linh" if target_type == 301 else "dan"
         radius = int(self.gd_radius_var.get() or "5")
-        locks = TargetLocks()
+        locks = getattr(self, "shared_target_locks", None) or TargetLocks()
         scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
         ctx = TaskContext(self.gateway, scanner, locks, notify=lambda m: self.after(0, self._append_gd_log, m))
 

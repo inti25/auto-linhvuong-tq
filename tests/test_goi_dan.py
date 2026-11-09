@@ -603,6 +603,130 @@ def test_goi_dan_detects_and_logs_boss_man():
     assert "🐉 PHÁT HIỆN BOSS [卑弥呼] tại vị trí 19!" in boss_alerts[0]
 
 
+def test_goi_dan_vong_linh_call_error_notifications():
+    """Kiểm tra gọi Vong Linh (ID 301) thông báo chính xác mã lỗi 236, 90, 39."""
+    # 1. Mã 236: Chưa mở sự kiện Vong Linh
+    server236 = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 236},
+        }
+    )
+    ctx236, alerts236 = ctx_for(server236)
+    task236 = GoiDan(ctx236, generals=[10], origin=(2, 2), radius=5, mode="vong_linh", city_id=123)
+    out236 = task236.run_once()
+    assert out236 == "call_failed:236"
+    assert any("chưa mở sự kiện Vong Linh" in a and "236" in a for a in alerts236)
+
+    # 2. Mã 90: Hết đạo cụ
+    server90 = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 90},
+        }
+    )
+    ctx90, alerts90 = ctx_for(server90)
+    task90 = GoiDan(ctx90, generals=[10], origin=(2, 2), radius=5, mode="vong_linh", city_id=123)
+    out90 = task90.run_once()
+    assert out90 == "call_failed:90"
+    assert any("Hết Bùa Vong Linh" in a and "90" in a for a in alerts90)
+
+
+def test_goi_dan_vong_linh_retries_scanning_with_delay_after_call():
+    """Khi OPT.ashx?id=69 thành công (ret=0), Vong Linh cần 1-2s mới xuất hiện trên map.
+    GoiDan phải thử quét lại có trễ và mở rộng bán kính quét tìm Vong Linh.
+    """
+    sleeps = []
+
+    def delayed_map_view():
+        if len(sleeps) >= 1:
+            return {"npc_tent": [man(2, 4, 888, VONG_LINH)]}
+        return {"npc_tent": []}
+
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        }
+    )
+    orig_post = server.post
+
+    def custom_post(url, data=None, headers=None, timeout=None):
+        if "Map.ashx?id=6" in url:
+            return Resp(delayed_map_view())
+        return orig_post(url, data, headers, timeout)
+
+    server.post = custom_post
+
+    ctx, _ = ctx_for(server)
+    task = GoiDan(
+        ctx,
+        generals=[10],
+        origin=(2, 2),
+        radius=5,
+        mode="vong_linh",
+        city_id=123,
+        sleep_fn=sleeps.append,
+    )
+    out = task.run_once()
+    assert out == "called_and_attacked"
+    assert len(sleeps) >= 1  # Có gọi sleep giữa các lượt quét
+
+
+def test_goi_dan_locks_existing_target_before_attack():
+    """Mục tiêu có sẵn quanh thành phải được khóa (TargetLocks) trước khi tấn công."""
+    mid = mid_from_coords(2, 2)
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(2, 2, 777, VONG_LINH)]}},
+        handlers={"OPT.ashx?id=53": {"ret": 0}},
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(ctx, generals=[10], origin=(2, 2), radius=5, mode="vong_linh", city_id=123)
+    out = task.run_once()
+    assert out == "attacked"
+    assert ctx.locks.is_locked(777)
+
+
+def test_goi_dan_runner_stops_on_call_failed_236_and_90():
+    """GoiDanAutoRunner phải dừng nhiệm vụ khi gặp mã lỗi 236 (chưa mở sự kiện) hoặc 90 (hết bùa)
+    thay vì spam vòng lặp vô hạn lên server.
+    """
+    from linhvuong.dashboard import GoiDanAutoRunner
+
+    class MockTask:
+        mode = "vong_linh"
+        stop_event = None
+
+        def __init__(self, ret_err):
+            self.ret_err = ret_err
+            self.calls = 0
+
+        def run_once(self):
+            self.calls += 1
+            return self.ret_err
+
+    # 1. Thử nghiệm mã lỗi 236
+    task236 = MockTask("call_failed:236")
+    logs236, statuses236 = [], []
+    runner236 = GoiDanAutoRunner(task236, interval=0.01, log_cb=logs236.append, status_cb=statuses236.append)
+    runner236.run()
+    assert task236.calls == 1
+    assert any("236" in l for l in logs236)
+    assert "Sự kiện chưa mở" in statuses236
+
+    # 2. Thử nghiệm mã lỗi 90
+    task90 = MockTask("call_failed:90")
+    logs90, statuses90 = [], []
+    runner90 = GoiDanAutoRunner(task90, interval=0.01, log_cb=logs90.append, status_cb=statuses90.append)
+    runner90.run()
+    assert task90.calls == 1
+    assert any("90" in l for l in logs90)
+    assert "Hết đạo cụ" in statuses90
+
+
+
+
 
 
 

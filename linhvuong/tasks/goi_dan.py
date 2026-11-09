@@ -121,6 +121,25 @@ class GoiDan:
                 "_": "",
             }
 
+    def _scan_with_retry(self, curr_type: int) -> Optional[Target]:
+        """Quét tìm mục tiêu vừa gọi quanh thành, thử lại với trễ và mở rộng bán kính nếu là Vong Linh."""
+        effective_radius = max(self.radius, 10) if curr_type == VONG_LINH else self.radius
+        target = None
+        for attempt in range(3):
+            if attempt > 0:
+                self.sleep_fn(1.5)
+            r = self.radius if (attempt == 0 and curr_type != VONG_LINH) else effective_radius
+            target = self.ctx.scanner.find_nearest(
+                *self.origin,
+                r,
+                [curr_type],
+                skip_capital_radius=self.skip_capital_radius,
+                owner_id=int(self.city_id or 0),
+            )
+            if target is not None:
+                break
+        return target
+
     def call_target(self) -> tuple[Optional[Target], Optional[str]]:
         """Kích hoạt API gọi quái theo đúng chế độ đã cấu hình, xoay vòng qua target_types."""
         # Chuyển focus thành nếu có city_id
@@ -157,16 +176,34 @@ class GoiDan:
                     self.ctx.notify(f"⚠️ Mục tiêu {curr_type} đang bận hoặc đã tồn tại, tiến hành quét tìm...")
                 self._current_type_idx = (idx + 1) % total_types
                 self.target_type = curr_type
-                target = self.ctx.scanner.find_nearest(
-                    *self.origin,
-                    self.radius,
-                    [curr_type],
-                    skip_capital_radius=self.skip_capital_radius,
-                )
+                target = self._scan_with_retry(curr_type)
                 if target is None:
                     return None, "target_not_found_after_call"
                 return target, None
+            elif ret_call == 236:
+                if self.ctx.notify:
+                    if curr_type == VONG_LINH:
+                        self.ctx.notify("⚠️ Gọi Vong Linh thất bại: Máy chủ chưa mở sự kiện Vong Linh (mã lỗi 236: 当前没有相关活动).")
+                    else:
+                        self.ctx.notify(f"⚠️ Gọi mục tiêu {curr_type} thất bại: Sự kiện chưa mở (mã lỗi 236).")
+                last_ret = ret_call
+                continue
+            elif ret_call == 90:
+                if self.ctx.notify:
+                    if curr_type == VONG_LINH:
+                        self.ctx.notify("❌ Hết Bùa Vong Linh (追风铁令) trong túi đồ (mã lỗi 90)!")
+                    else:
+                        self.ctx.notify(f"❌ Hết đạo cụ gọi mục tiêu {curr_type} trong túi đồ (mã lỗi 90)!")
+                last_ret = ret_call
+                continue
+            elif ret_call == 39:
+                if self.ctx.notify:
+                    self.ctx.notify(f"⚠️ Vị trí quanh thành đang bị chiếm dụng (mã lỗi 39) khi gọi mục tiêu {curr_type}.")
+                last_ret = ret_call
+                continue
             elif ret_call != RET_OK:
+                if self.ctx.notify:
+                    self.ctx.notify(f"⚠️ Gọi mục tiêu {curr_type} thất bại (mã lỗi: {ret_call}).")
                 last_ret = ret_call
                 continue
 
@@ -180,13 +217,10 @@ class GoiDan:
                 return Target(x, y, int(resp_call["new_target_id"]), int(resp_call.get("new_target_type", curr_type))), None
 
             # Quét tìm mục tiêu vừa xuất hiện quanh thành
-            target = self.ctx.scanner.find_nearest(
-                *self.origin,
-                self.radius,
-                [curr_type],
-                skip_capital_radius=self.skip_capital_radius,
-            )
+            target = self._scan_with_retry(curr_type)
             if target is None:
+                if self.ctx.notify:
+                    self.ctx.notify(f"⚠️ Đã kích hoạt gọi mục tiêu {curr_type} thành công nhưng chưa định vị được trên bản đồ.")
                 return None, "target_not_found_after_call"
             return target, None
 
@@ -306,8 +340,10 @@ class GoiDan:
             self.radius,
             self.target_types,
             skip_capital_radius=self.skip_capital_radius,
+            owner_id=int(self.city_id or 0),
         )
         if target is not None:
+            self.ctx.locks.try_lock(target.target_id, LockReason.CLAIMED, owner=int(self.city_id or 0))
             result = attack(
                 self.ctx,
                 target,
