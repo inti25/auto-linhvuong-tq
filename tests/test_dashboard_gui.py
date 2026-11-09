@@ -1119,12 +1119,14 @@ def test_dashboard_unified_internal_and_research_controls():
         r = dummy_roster()
         dash._loaded(r)
 
-        # 1. Quản lý nhà: [Hạ] đặt cấp mục tiêu về 0
+        # 1. Quản lý nhà: [Hạ] đặt cấp mục tiêu theo ô nhập và tự tích chọn Chạy
         bld_items = dash.bld_tree.get_children()
         first_bld = bld_items[0]
+        dash.bld_target_lvl_var.set("0")
         dash.bld_tree.selection_set(first_bld)
         dash._lower_bld_target_lvl()
         assert int(dash.bld_tree.item(first_bld, "values")[4]) == 0
+        assert dash.bld_tree.item(first_bld, "values")[0] == "☑"
         assert dash.bld_target_lvl_var.get() == "0"
 
         # 2. Base controls: Chọn, Bỏ chọn, Chọn NC, Bỏ NC
@@ -1356,33 +1358,21 @@ def test_dashboard_current_and_target_levels_sync_and_tagging():
 
 
 def test_two_way_target_level_binding():
-    """Kiểm tra cơ chế đồng bộ hai chiều của ô nhập Cấp mục tiêu khi chọn công trình và kỹ thuật."""
+    """Kiểm tra cơ chế ô nhập Cấp mục tiêu: Quản lý nhà giữ nguyên số đã nhập & tự check Chạy khi bấm Nâng/Hạ; Kỹ thuật giữ nguyên."""
     dash = safe_dashboard()
     try:
-        # 1. Quản lý nhà (bld_tree): Khi chọn item, ô nhập cập nhật theo item
-        # Đặt Quan Phủ (pid 1) MT=25
-        dash.bld_tree.selection_set("1")
+        # 1. Quản lý nhà (bld_tree):
+        # Ban đầu công trình 1 có Chạy = "☐", MT = 20
+        assert dash.bld_tree.item("1", "values")[0] == "☐"
+        assert int(dash.bld_tree.item("1", "values")[4]) == 20
+
+        # Điền cấp mục tiêu 25 trước, sau đó chọn công trình 1 -> ô nhập KHÔNG bị ghi đè về 20
         dash.bld_target_lvl_var.set("25")
-        dash._set_bld_target_lvl()
-        assert int(dash.bld_tree.item("1", "values")[4]) == 25
-
-        # Đặt Tường Thành (pid 2) MT=0 (Hạ)
-        dash.bld_tree.selection_set("2")
-        dash._lower_bld_target_lvl()
-        assert int(dash.bld_tree.item("2", "values")[4]) == 0
-        assert dash.bld_target_lvl_var.get() == "0"
-
-        # Chọn lại Quan Phủ -> ô nhập phải nhảy về 25 (hai chiều)
         dash.bld_tree.selection_set("1")
         dash._on_bld_tree_selected()
         assert dash.bld_target_lvl_var.get() == "25"
 
-        # Chọn lại Tường Thành -> ô nhập phải nhảy về 0
-        dash.bld_tree.selection_set("2")
-        dash._on_bld_tree_selected()
-        assert dash.bld_target_lvl_var.get() == "0"
-
-        # Click mô phỏng trên dòng (không phải cột checkbox)
+        # Click mô phỏng trên dòng công trình 1 -> ô nhập vẫn giữ nguyên "25"
         ev = MagicMock()
         ev.x = 20
         ev.y = 20
@@ -1392,19 +1382,60 @@ def test_two_way_target_level_binding():
         assert dash.bld_tree.selection() == ("1",)
         assert dash.bld_target_lvl_var.get() == "25"
 
-        # Kiểm tra nhóm đa ô đất (group)
+        # Bấm Nâng -> Cấp MT thành 25 và checkbox Chạy tự động check "☑"
+        dash._set_bld_target_lvl()
+        assert int(dash.bld_tree.item("1", "values")[4]) == 25
+        assert dash.bld_tree.item("1", "values")[0] == "☑"
+
+        # Điền cấp mục tiêu 5, chọn Tường Thành (pid 2, đang "☐"), bấm Hạ -> Cấp MT = 5 và tự động check "☑"
+        assert dash.bld_tree.item("2", "values")[0] == "☐"
+        dash.bld_target_lvl_var.set("5")
+        dash.bld_tree.selection_set("2")
+        dash._on_bld_tree_selected()
+        assert dash.bld_target_lvl_var.get() == "5"
+        dash._lower_bld_target_lvl()
+        assert int(dash.bld_tree.item("2", "values")[4]) == 5
+        assert dash.bld_tree.item("2", "values")[0] == "☑"
+        assert dash.bld_target_lvl_var.get() == "5"
+
+        # Chọn lại Quan Phủ (pid 1, MT=25) -> ô nhập vẫn giữ nguyên "5" (không load MT của Quan Phủ lên)
+        dash.bld_tree.selection_set("1")
+        dash._on_bld_tree_selected()
+        assert dash.bld_target_lvl_var.get() == "5"
+
+        # Kiểm tra nhóm đa ô đất (group): ban đầu chưa check ("☐")
         plans = [
-            {"pid": 11, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 5, "target_level": 15, "enabled": True},
-            {"pid": 12, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 8, "target_level": 18, "enabled": True},
+            {"pid": 11, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 5, "target_level": 15, "enabled": False},
+            {"pid": 12, "gid": 3, "name": "民房 - Nhà Dân", "cur_lvl": 8, "target_level": 18, "enabled": False},
         ]
         dash._render_bld_tree_from_plans(plans)
+        assert dash.bld_tree.item("group_3", "values")[0] == "☐"
+
+        # Điền 22, chọn group_3 -> ô nhập vẫn giữ nguyên "22"
+        dash.bld_target_lvl_var.set("22")
         dash.bld_tree.selection_set("group_3")
         dash._on_bld_tree_selected()
-        assert dash.bld_target_lvl_var.get() == "18"
+        assert dash.bld_target_lvl_var.get() == "22"
 
-        dash.bld_tree.selection_set("11")
-        dash._on_bld_tree_selected()
-        assert dash.bld_target_lvl_var.get() == "15"
+        # Bấm Nâng trên group_3 -> cả 2 ô con và group_3 đều nhận MT=22 và tự động check "☑"
+        dash._set_bld_target_lvl()
+        assert int(dash.bld_tree.item("11", "values")[4]) == 22
+        assert int(dash.bld_tree.item("12", "values")[4]) == 22
+        assert dash.bld_tree.item("11", "values")[0] == "☑"
+        assert dash.bld_tree.item("12", "values")[0] == "☑"
+        assert dash.bld_tree.item("group_3", "values")[0] == "☑"
+
+        # Bỏ chọn con 11 và 12, sau đó điền 0 và bấm Hạ trên group_3 -> cả nhóm nhận MT=0 và tự check "☑"
+        dash._select_all_bld(False)
+        assert dash.bld_tree.item("group_3", "values")[0] == "☐"
+        dash.bld_target_lvl_var.set("0")
+        dash.bld_tree.selection_set("group_3")
+        dash._lower_bld_target_lvl()
+        assert int(dash.bld_tree.item("11", "values")[4]) == 0
+        assert int(dash.bld_tree.item("12", "values")[4]) == 0
+        assert dash.bld_tree.item("11", "values")[0] == "☑"
+        assert dash.bld_tree.item("12", "values")[0] == "☑"
+        assert dash.bld_tree.item("group_3", "values")[0] == "☑"
 
         # Kiểm tra _collect_bld_plans_from_tree an toàn với cur_lvl = "-"
         dash.bld_tree.item("11", values=("☑", 11, 3, "-", 15))

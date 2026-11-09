@@ -300,7 +300,7 @@ Cấp độ thực tế của công trình kiến trúc hoặc công nghệ kỹ
 _Avoid_: Cấp thực tế, level hiện tại, current level
 
 **Cấp Mục Tiêu** (Cấp MT):
-Cấp độ mong muốn do người chơi thiết lập trong hàng đợi quy hoạch để bot tự động điều phối tiến trình nâng cấp (hoặc hạ cấp/dỡ bỏ) đạt tới.
+Cấp độ mong muốn do người chơi thiết lập trong hàng đợi quy hoạch để bot tự động điều phối tiến trình nâng cấp (hoặc hạ cấp/dỡ bỏ) đạt tới. Khi chọn công trình trong Hàng Đợi Xây Dựng, giá trị Cấp Mục Tiêu đang nhập được giữ nguyên độc lập và khi xác nhận Nâng hoặc Hạ thì công trình (hoặc toàn bộ nhóm công trình) tự động được tích chọn vào diện thi công.
 _Avoid_: Cấp đích, target level, max level
 
 **Trạng Thái Thi Công Mặc Định**:

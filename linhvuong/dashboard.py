@@ -4666,20 +4666,28 @@ class Dashboard(tk.Frame):
         if not sel:
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 công trình trong bảng!")
             return
-        lvl = 0
-        self.bld_target_lvl_var.set("0")
+        try:
+            lvl = int(self.bld_target_lvl_var.get())
+            if lvl < 0 or lvl > 40:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 40 (0: dỡ bỏ)!")
+            return
+
         for item in sel:
             if not self.bld_tree.exists(item):
                 continue
             if item.startswith("group_"):
                 for child in self.bld_tree.get_children(item):
                     c_vals = list(self.bld_tree.item(child, "values"))
+                    c_vals[0] = "☑"
                     c_vals[4] = lvl
                     self.bld_tree.item(child, values=c_vals)
                     self._update_bld_tree_row_style(child)
                 self._update_group_summary(item)
             else:
                 vals = list(self.bld_tree.item(item, "values"))
+                vals[0] = "☑"
                 vals[4] = lvl
                 self.bld_tree.item(item, values=vals)
                 self._update_bld_tree_row_style(item)
@@ -5210,12 +5218,14 @@ class Dashboard(tk.Frame):
             if item.startswith("group_"):
                 for child in self.bld_tree.get_children(item):
                     c_vals = list(self.bld_tree.item(child, "values"))
+                    c_vals[0] = "☑"
                     c_vals[4] = lvl
                     self.bld_tree.item(child, values=c_vals)
                     self._update_bld_tree_row_style(child)
                 self._update_group_summary(item)
             else:
                 vals = list(self.bld_tree.item(item, "values"))
+                vals[0] = "☑"
                 vals[4] = lvl
                 self.bld_tree.item(item, values=vals)
                 self._update_bld_tree_row_style(item)
@@ -5255,18 +5265,7 @@ class Dashboard(tk.Frame):
         self._append_bld_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} công trình.")
 
     def _on_bld_tree_selected(self, _event=None):
-        sel = self.bld_tree.selection()
-        if not sel:
-            return
-        item = sel[0]
-        if not self.bld_tree.exists(item):
-            return
-        vals = self.bld_tree.item(item, "values")
-        if len(vals) > 4:
-            try:
-                self.bld_target_lvl_var.set(str(vals[4]))
-            except Exception:
-                pass
+        pass
 
     def _on_bld_tree_click(self, event):
         item = self.bld_tree.identify_row(event.y)
@@ -5293,8 +5292,6 @@ class Dashboard(tk.Frame):
                     self.bld_tree.item(child, values=c_vals)
                     self._update_bld_tree_row_style(child)
                 self._update_group_summary(item)
-            if len(vals) > 4:
-                self.bld_target_lvl_var.set(str(vals[4]))
             self._save_current_bld_tree_to_cache()
             return
 
@@ -5306,9 +5303,6 @@ class Dashboard(tk.Frame):
             if parent and parent.startswith("group_"):
                 self._update_group_summary(parent)
             self._save_current_bld_tree_to_cache()
-
-        if len(vals) > 4:
-            self.bld_target_lvl_var.set(str(vals[4]))
 
     def _on_bld_bases_click(self, event):
         item = self.bld_bases_tree.identify_row(event.y)
