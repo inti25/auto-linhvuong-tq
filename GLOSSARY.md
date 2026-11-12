@@ -371,6 +371,10 @@ _Avoid_: Ping proxy, test ip, proxy check
 Cơ chế tự động phát hiện lỗi gián đoạn kết nối proxy (`ProxyError`, `ConnectTimeout`) trong lúc bot đang vận hành, tức thì đánh dấu proxy hỏng, kích hoạt Điểm Cầu Proxy sống kế tiếp vào phiên kết nối và tự động thử lại yêu cầu dở dang.
 _Avoid_: Chuyển proxy thủ công, restart session, switch proxy
 
+**Nguồn Proxy Công Cộng** (`PublicProxySource`):
+Nguồn cung cấp danh sách proxy miễn phí được tích hợp sẵn (như ProxyScrape SOCKS5 JSON) hoặc qua liên kết ngoài, hỗ trợ cơ chế tiền lọc chất lượng (độ trễ, tỷ lệ hoạt động) trước khi đưa vào bể kiểm định.
+_Avoid_: FreeProxyList, ProxyScrapeFeed, danh sách proxy chùa
+
 
 
 

@@ -9,11 +9,12 @@ Hỗ trợ:
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+import json
 import logging
 import re
 import threading
 import time
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 from urllib.parse import quote, urlsplit
 
 import requests
@@ -21,6 +22,11 @@ import requests
 from .auth import USER_AGENT, normalize_proxy_url
 
 logger = logging.getLogger("linhvuong.proxy")
+
+DEFAULT_FREE_PROXY_URL = (
+    "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/refs/heads/main/"
+    "proxies/protocols/socks5/data.json"
+)
 
 
 @dataclass
@@ -151,8 +157,112 @@ class ProxyPool:
         self.on_failover = on_failover
         self._lock = threading.Lock()
 
-    def load_from_text(self, text: str, default_protocol: Optional[str] = None) -> int:
-        """Nạp danh sách proxy từ chuỗi văn bản (nhiều dòng). Trả về số proxy nạp được."""
+    def load_from_json(
+        self,
+        data: Union[str, List[Any], Dict[str, Any]],
+        default_protocol: Optional[str] = None,
+        max_candidates: int = 50,
+    ) -> int:
+        """Nạp danh sách proxy từ JSON (hỗ trợ ProxyScrape hoặc cấu trúc có khóa proxies/data).
+
+        Tự động tiền lọc theo độ trễ ước tính (latency_ms tăng dần) và tỷ lệ hoạt động (uptime_percent giảm dần),
+        lấy tối đa max_candidates proxy tiềm năng nhất để tối ưu thời gian kiểm tra tới máy chủ game.
+        """
+        raw_items: List[Any] = []
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+            except Exception as ex:
+                logger.debug(f"Không thể giải mã chuỗi JSON: {ex}")
+                return 0
+        else:
+            parsed = data
+
+        if isinstance(parsed, list):
+            raw_items = parsed
+        elif isinstance(parsed, dict):
+            raw_items = parsed.get("proxies") or parsed.get("data") or []
+
+        candidates: List[Dict[str, Any]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            ip = item.get("ip") or item.get("host")
+            port = item.get("port")
+            if not ip or not port:
+                continue
+            try:
+                port_num = int(port)
+                if not (1 <= port_num <= 65535):
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            try:
+                latency = float(item.get("latency_ms") or item.get("latency") or 99999.0)
+            except (ValueError, TypeError):
+                latency = 99999.0
+
+            try:
+                uptime = float(item.get("uptime_percent") or item.get("uptime") or 0.0)
+            except (ValueError, TypeError):
+                uptime = 0.0
+
+            proto_raw = str(item.get("protocol") or default_protocol or self.default_protocol).lower()
+            if proto_raw in ("socks5", "socks5h"):
+                proto = "socks5h"
+            elif proto_raw in ("http", "https"):
+                proto = "http"
+            else:
+                proto = default_protocol or self.default_protocol
+
+            candidates.append({
+                "host": str(ip).strip(),
+                "port": port_num,
+                "protocol": proto,
+                "latency_ms": latency,
+                "uptime_percent": uptime,
+            })
+
+        if not candidates:
+            return 0
+
+        # Sắp xếp ưu tiên: latency thấp nhất, uptime cao nhất
+        candidates.sort(key=lambda x: (x["latency_ms"], -x["uptime_percent"]))
+        selected = candidates[:max_candidates]
+
+        with self._lock:
+            new_endpoints: List[ProxyEndpoint] = [
+                ProxyEndpoint(
+                    host=c["host"],
+                    port=c["port"],
+                    protocol=c["protocol"],
+                    explicit_protocol=True,
+                )
+                for c in selected
+            ]
+            if new_endpoints:
+                self.endpoints = new_endpoints
+                self.active_index = 0
+            return len(new_endpoints)
+
+    def load_from_text(
+        self,
+        text: str,
+        default_protocol: Optional[str] = None,
+        max_candidates: int = 50,
+    ) -> int:
+        """Nạp danh sách proxy từ chuỗi văn bản (dòng hoặc JSON). Trả về số proxy nạp được."""
+        stripped = text.strip()
+        if stripped.startswith(("[", "{")):
+            json_count = self.load_from_json(
+                stripped,
+                default_protocol=default_protocol,
+                max_candidates=max_candidates,
+            )
+            if json_count > 0:
+                return json_count
+
         proto = default_protocol or self.default_protocol
         with self._lock:
             new_endpoints: List[ProxyEndpoint] = []
@@ -165,7 +275,12 @@ class ProxyPool:
                 self.active_index = 0
             return len(new_endpoints)
 
-    def fetch_from_url(self, url: Optional[str] = None, timeout: float = 10.0) -> int:
+    def fetch_from_url(
+        self,
+        url: Optional[str] = None,
+        timeout: float = 10.0,
+        max_candidates: int = 50,
+    ) -> int:
         """Tải danh sách proxy từ URL nguồn. Trả về số proxy tải được."""
         target_url = url or self.url
         if not target_url:
@@ -179,7 +294,7 @@ class ProxyPool:
         )
         resp.raise_for_status()
         self.url = target_url
-        count = self.load_from_text(resp.text)
+        count = self.load_from_text(resp.text, max_candidates=max_candidates)
         logger.info(f"Đã tải thành công {count} proxy từ URL.")
         return count
 

@@ -222,3 +222,21 @@ def test_login_window_loads_and_persists_proxy_url(temp_settings):
         except Exception:
             pass
 
+
+def test_login_window_fill_free_proxy(temp_settings):
+    from linhvuong.proxy import DEFAULT_FREE_PROXY_URL
+
+    win = safe_login_window()
+    win.withdraw()
+    try:
+        win.proxy_url_var.set("")
+        win._fill_free_proxy()
+        assert win.proxy_url_var.get() == DEFAULT_FREE_PROXY_URL
+        assert "ProxyScrape SOCKS5 Free" in win.status.get()
+    finally:
+        try:
+            win.destroy()
+        except Exception:
+            pass
+
+

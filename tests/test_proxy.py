@@ -3,7 +3,7 @@ import pytest
 import requests
 
 from linhvuong.gateway import GatewayClient
-from linhvuong.proxy import ProxyEndpoint, ProxyPool
+from linhvuong.proxy import DEFAULT_FREE_PROXY_URL, ProxyEndpoint, ProxyPool
 
 
 def test_proxy_endpoint_from_line_lenient_parsing():
@@ -240,3 +240,86 @@ def test_auth_login_handles_proxy_403_forbidden():
             login(sess, 57, "testuser", "testpass", proxy="http://proxy:8080")
         assert "Proxy từ chối kết nối (HTTP 403)" in str(exc_info.value)
         assert "client_connect_invalid_ip" in str(exc_info.value)
+
+
+def test_default_free_proxy_url_constant():
+    assert "ProxyScrape" in DEFAULT_FREE_PROXY_URL
+    assert "socks5" in DEFAULT_FREE_PROXY_URL
+    assert DEFAULT_FREE_PROXY_URL.endswith("data.json")
+
+
+def test_proxy_pool_load_from_json_proxyscrape_format_and_prefiltering():
+    sample_data = [
+        # Candidate 1: High latency, low uptime
+        {"protocol": "socks5", "ip": "1.1.1.1", "port": 1080, "latency_ms": 3500.0, "uptime_percent": 20.0},
+        # Candidate 2: Low latency, high uptime (best)
+        {"protocol": "socks5", "ip": "2.2.2.2", "port": 1080, "latency_ms": 200.0, "uptime_percent": 99.0},
+        # Candidate 3: Medium latency
+        {"protocol": "socks5", "ip": "3.3.3.3", "port": 1080, "latency_ms": 800.0, "uptime_percent": 50.0},
+        # Candidate 4: Invalid port
+        {"protocol": "socks5", "ip": "4.4.4.4", "port": -1, "latency_ms": 100.0},
+        # Candidate 5: Missing IP
+        {"protocol": "socks5", "port": 1080},
+    ]
+
+    pool = ProxyPool()
+    # Test max_candidates=2
+    count = pool.load_from_json(sample_data, max_candidates=2)
+    assert count == 2
+    assert len(pool.endpoints) == 2
+    # 2.2.2.2 has lowest latency (200ms) -> ranked 1st
+    assert pool.endpoints[0].host == "2.2.2.2"
+    assert pool.endpoints[0].port == 1080
+    assert pool.endpoints[0].protocol == "socks5h"
+    assert pool.endpoints[0].explicit_protocol is True
+    # 3.3.3.3 has next lowest latency (800ms) -> ranked 2nd
+    assert pool.endpoints[1].host == "3.3.3.3"
+
+
+def test_proxy_pool_load_from_text_auto_detects_json():
+    json_text = """[
+        {"protocol": "socks5", "ip": "103.151.123.45", "port": 1080, "latency_ms": 150.0, "uptime_percent": 80.0},
+        {"protocol": "http", "ip": "103.151.123.46", "port": 8080, "latency_ms": 300.0, "uptime_percent": 90.0}
+    ]"""
+
+    pool = ProxyPool()
+    count = pool.load_from_text(json_text)
+    assert count == 2
+    assert pool.endpoints[0].host == "103.151.123.45"
+    assert pool.endpoints[0].protocol == "socks5h"
+    assert pool.endpoints[1].host == "103.151.123.46"
+    assert pool.endpoints[1].protocol == "http"
+
+
+def test_proxy_pool_load_from_json_nested_data():
+    nested = {
+        "proxies": [
+            {"protocol": "socks5", "ip": "123.45.67.89", "port": 1080, "latency_ms": 120.0, "uptime_percent": 95.0}
+        ]
+    }
+    pool = ProxyPool()
+    count = pool.load_from_json(nested)
+    assert count == 1
+    assert pool.endpoints[0].host == "123.45.67.89"
+
+
+def test_proxy_pool_fetch_from_url_json_payload():
+    import json
+
+    pool = ProxyPool(url=DEFAULT_FREE_PROXY_URL)
+    fake_items = [
+        {"protocol": "socks5", "ip": f"10.0.0.{i}", "port": 1080, "latency_ms": float(i * 10), "uptime_percent": 90.0}
+        for i in range(1, 100)
+    ]
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps(fake_items)
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp):
+        count = pool.fetch_from_url(max_candidates=50)
+        # Should be capped at top 50
+        assert count == 50
+        assert len(pool.endpoints) == 50
+        assert pool.endpoints[0].host == "10.0.0.1"
+        assert pool.endpoints[-1].host == "10.0.0.50"
+

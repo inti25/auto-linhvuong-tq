@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional
 import requests
 
 from .auth import LoginError, login, normalize_proxy_url, parse_server_id
-from .proxy import ProxyPool
+from .proxy import DEFAULT_FREE_PROXY_URL, ProxyPool
 
 SETTINGS = Path("gui_settings.json")  # chỉ lưu server, tài khoản, cấu hình proxy; không lưu mật khẩu game
 BG, CARD, FG, ACCENT = "#14161f", "#1e2130", "#e8eaf2", "#6c7bff"
@@ -184,7 +184,8 @@ class LoginWindow(tk.Tk):
         ttk.Label(card, text="URL Proxy List").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 14))
         purl_frame = tk.Frame(card, bg=CARD)
         purl_frame.grid(row=5, column=1, sticky="ew", pady=4)
-        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=19).pack(side="left", fill="x", expand=True)
+        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=15).pack(side="left", fill="x", expand=True)
+        ttk.Button(purl_frame, text="⚡ Free", width=6, command=self._fill_free_proxy).pack(side="left", padx=(4, 0))
         ttk.Button(purl_frame, text="🔄 Test", width=6, command=self._test_proxy_url).pack(side="left", padx=(4, 0))
 
         proxy_fields = [
@@ -352,6 +353,10 @@ class LoginWindow(tk.Tk):
                     self.pass_var.set(pwd)
             except Exception:
                 pass
+
+    def _fill_free_proxy(self):
+        self.proxy_url_var.set(DEFAULT_FREE_PROXY_URL)
+        self.status.set("Đã điền ProxyScrape SOCKS5 Free. Bấm '🔄 Test' để kiểm tra.")
 
     def _test_proxy_url(self):
         url = self.proxy_url_var.get().strip()
@@ -578,7 +583,8 @@ class AccountLoginFrame(tk.Frame):
         ttk.Label(card, text="URL Proxy List").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 14))
         purl_frame = tk.Frame(card, bg=CARD)
         purl_frame.grid(row=4, column=1, sticky="ew", pady=4)
-        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=19).pack(side="left", fill="x", expand=True)
+        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=15).pack(side="left", fill="x", expand=True)
+        ttk.Button(purl_frame, text="⚡ Free", width=6, command=self._fill_free_proxy).pack(side="left", padx=(4, 0))
         ttk.Button(purl_frame, text="🔄 Test", width=6, command=self._test_proxy_url).pack(side="left", padx=(4, 0))
 
         proxy_fields = [
@@ -647,6 +653,10 @@ class AccountLoginFrame(tk.Frame):
                         self.proxy_pass_var.set(p)
                     finally:
                         self._updating_proxy = False
+
+    def _fill_free_proxy(self):
+        self.proxy_url_var.set(DEFAULT_FREE_PROXY_URL)
+        self.status.set("Đã điền ProxyScrape SOCKS5 Free. Bấm '🔄 Test' để kiểm tra.")
 
     def _test_proxy_url(self):
         url = self.proxy_url_var.get().strip()
