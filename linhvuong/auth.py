@@ -1,61 +1,16 @@
 """Đăng nhập Linh Vương (dùng chung cho CLI và GUI)."""
 
-import os
-import re
 import time
 from typing import Optional
 from urllib.parse import quote, urlsplit
 
 import requests
-import urllib3.util.connection as _urllib3_cn
 
 LOGIN_URL = "http://pass.dipan.com/aspx/LoginAPI.aspx"
-DEFAULT_GAME_SERVER_IP = "60.191.28.93"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
-
-_GAME_DOMAIN_RE = re.compile(r"^(?:pass|sg\d*)\.dipan\.com$", re.IGNORECASE)
-_direct_ip: Optional[str] = os.environ.get("LINHVUONG_DIRECT_IP", DEFAULT_GAME_SERVER_IP).strip() or None
-_orig_create_connection = _urllib3_cn.create_connection
-_direct_ip_installed = False
-
-
-def is_game_domain(host: str) -> bool:
-    """Kiểm tra host có phải domain đăng nhập/game của Linh Vương không."""
-    return bool(host and _GAME_DOMAIN_RE.match(host.strip()))
-
-
-def set_direct_ip(ip: Optional[str]) -> None:
-    """Thiết lập IP kết nối trực tiếp cho domain game (None để tắt, dùng DNS thường)."""
-    global _direct_ip
-    _direct_ip = ip.strip() if isinstance(ip, str) and ip.strip() else None
-
-
-def get_direct_ip() -> Optional[str]:
-    """Trả về IP đang được dùng để kết nối trực tiếp (hoặc None nếu dùng DNS)."""
-    return _direct_ip
-
-
-def install_direct_ip_resolver() -> None:
-    """Cài đặt bộ định tuyến kết nối thẳng tới IP server, bỏ qua tra cứu DNS domain."""
-    global _direct_ip_installed
-    if _direct_ip_installed:
-        return
-
-    def _direct_ip_create_connection(address, *args, **kwargs):
-        host, port = address
-        target_ip = _direct_ip
-        if target_ip and isinstance(host, str) and is_game_domain(host):
-            address = (target_ip, port)
-        return _orig_create_connection(address, *args, **kwargs)
-
-    _urllib3_cn.create_connection = _direct_ip_create_connection
-    _direct_ip_installed = True
-
-
-install_direct_ip_resolver()
 
 
 class LoginError(Exception):
