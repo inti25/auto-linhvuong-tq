@@ -37,6 +37,8 @@ class CityBuildingConfig:
 class BuildingProfile:
     slots: int = 3
     auto_speedup: bool = False
+    speedup_item: str = "Ngân Bảo"
+    speedup_hours: str = "1"
     auto_boost: bool = True
     auto_comfort: bool = True
     even_upgrade: bool = False
@@ -48,6 +50,13 @@ class BuildingProfile:
     plans: list[dict] = field(default_factory=list)
     cities: dict[str, CityBuildingConfig] = field(default_factory=dict)
 
+    @property
+    def speedup_paytype(self) -> int:
+        item_lower = self.speedup_item.lower()
+        if "coin" in item_lower or "xu" in item_lower:
+            return 1
+        return 2  # Ngân Bảo (点券) hoặc Lệnh Bài
+
     @classmethod
     def from_dict(cls, data: dict) -> "BuildingProfile":
         if not isinstance(data, dict):
@@ -58,9 +67,20 @@ class BuildingProfile:
             for cid_str, cinfo in raw_cities.items():
                 cities_map[str(cid_str)] = CityBuildingConfig.from_dict(cinfo)
 
+        item = data.get("speedup_item")
+        if not item and "speedup_paytype" in data:
+            try:
+                item = "Coin" if int(data["speedup_paytype"]) == 1 else "Ngân Bảo"
+            except (ValueError, TypeError):
+                item = "Ngân Bảo"
+        elif not item:
+            item = "Ngân Bảo"
+
         return cls(
             slots=int(data.get("slots", 3)),
             auto_speedup=bool(data.get("auto_speedup", False)),
+            speedup_item=str(item),
+            speedup_hours=str(data.get("speedup_hours", "1")),
             auto_boost=bool(data.get("auto_boost", True)),
             auto_comfort=bool(data.get("auto_comfort", True)),
             even_upgrade=bool(data.get("even_upgrade", False)),

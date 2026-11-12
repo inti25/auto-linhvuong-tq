@@ -218,6 +218,8 @@ def test_dashboard_unified_profile_export_and_import(tmp_path):
         # Cấu hình các giá trị test trên GUI
         dash.bld_slots_combo.set("2")
         dash.bld_speedup_var.set(True)
+        dash.bld_speedup_item_combo.set("Coin")
+        dash.bld_speedup_hours_var.set("3")
         dash.bld_target_lvl_var.set("27")
         dash._set_bld_target_lvl_all()
 
@@ -241,6 +243,8 @@ def test_dashboard_unified_profile_export_and_import(tmp_path):
         # Thay đổi dữ liệu trên GUI để kiểm tra nạp lại
         dash.bld_slots_combo.set("1")
         dash.bld_speedup_var.set(False)
+        dash.bld_speedup_item_combo.set("Ngân Bảo")
+        dash.bld_speedup_hours_var.set("1")
         dash.bld_target_lvl_var.set("10")
         dash._set_bld_target_lvl_all()
         dash.bld_open_box_var.set(False)
@@ -260,6 +264,8 @@ def test_dashboard_unified_profile_export_and_import(tmp_path):
         # Kiểm tra dữ liệu được khôi phục chính xác
         assert dash.bld_slots_combo.get() == "2"
         assert dash.bld_speedup_var.get() is True
+        assert dash.bld_speedup_item_combo.get() == "Coin"
+        assert dash.bld_speedup_hours_var.get() == "3"
         assert dash.bld_open_box_var.get() is True
         assert dash.bld_box_combo.current() == 1
         assert dash.bld_box_max_var.get() == "8"

@@ -49,12 +49,19 @@ def load_build_task(
     auto_open_box = cfg.get("auto_open_box", False)
     even_upgrade = cfg.get("even_upgrade", False)
     max_slots = cfg.get("max_slots", 3)
+    speedup_hours = 1.0
+    paytype = cfg.get("paytype", 1)
 
     if profile and profile.building:
         b_prof = profile.building
         max_slots = b_prof.slots
         auto_boost = b_prof.auto_boost
         auto_speedup = b_prof.auto_speedup
+        try:
+            speedup_hours = float(b_prof.speedup_hours)
+        except (ValueError, TypeError):
+            speedup_hours = 1.0
+        paytype = b_prof.speedup_paytype
         auto_comfort = b_prof.auto_comfort
         auto_open_box = b_prof.auto_open_box
         even_upgrade = b_prof.even_upgrade
@@ -138,7 +145,8 @@ def load_build_task(
         plans=plans,
         max_slots=max_slots,
         auto_speedup=auto_speedup,
-        paytype=cfg.get("paytype", 1),
+        speedup_hours=speedup_hours,
+        paytype=paytype,
         auto_comfort=auto_comfort,
         auto_boost=auto_boost,
         auto_open_box=auto_open_box,

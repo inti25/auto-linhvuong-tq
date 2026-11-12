@@ -1430,6 +1430,8 @@ class Dashboard(tk.Frame):
             "building": {
                 "slots": int(self.bld_slots_combo.get()) if hasattr(self, "bld_slots_combo") and self.bld_slots_combo.get() else 3,
                 "auto_speedup": bool(self.bld_speedup_var.get()) if hasattr(self, "bld_speedup_var") else False,
+                "speedup_item": self.bld_speedup_item_combo.get() if hasattr(self, "bld_speedup_item_combo") else "Ngân Bảo",
+                "speedup_hours": self.bld_speedup_hours_var.get() if hasattr(self, "bld_speedup_hours_var") else "1",
                 "auto_boost": bool(self.bld_boost_var.get()) if hasattr(self, "bld_boost_var") else True,
                 "auto_comfort": bool(self.bld_comfort_var.get()) if hasattr(self, "bld_comfort_var") else True,
                 "auto_open_box": bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False,
@@ -1609,6 +1611,18 @@ class Dashboard(tk.Frame):
                 self.bld_slots_combo.set(str(bld_data["slots"]))
             if hasattr(self, "bld_speedup_var") and "auto_speedup" in bld_data:
                 self.bld_speedup_var.set(bool(bld_data["auto_speedup"]))
+            if hasattr(self, "bld_speedup_item_combo") and "speedup_item" in bld_data:
+                val = str(bld_data["speedup_item"])
+                if val in ("Ngân Bảo", "Coin", "Lệnh Bài"):
+                    self.bld_speedup_item_combo.set(val)
+            elif hasattr(self, "bld_speedup_item_combo") and "speedup_paytype" in bld_data:
+                try:
+                    pt = int(bld_data["speedup_paytype"])
+                    self.bld_speedup_item_combo.set("Coin" if pt == 1 else "Ngân Bảo")
+                except (ValueError, TypeError):
+                    pass
+            if hasattr(self, "bld_speedup_hours_var") and "speedup_hours" in bld_data:
+                self.bld_speedup_hours_var.set(str(bld_data["speedup_hours"]))
             if hasattr(self, "bld_boost_var") and "auto_boost" in bld_data:
                 self.bld_boost_var.set(bool(bld_data["auto_boost"]))
             if hasattr(self, "bld_comfort_var") and "auto_comfort" in bld_data:
@@ -4263,7 +4277,7 @@ class Dashboard(tk.Frame):
             font=("Segoe UI", 9),
         ).pack(side="left", padx=2)
 
-        self.bld_speedup_item_combo = ttk.Combobox(r_spd, state="readonly", width=8, values=["Ngân Bảo", "Lệnh Bài"])
+        self.bld_speedup_item_combo = ttk.Combobox(r_spd, state="readonly", width=8, values=["Ngân Bảo", "Coin"])
         self.bld_speedup_item_combo.set("Ngân Bảo")
         self.bld_speedup_item_combo.pack(side="left", padx=2)
 
@@ -5840,12 +5854,21 @@ class Dashboard(tk.Frame):
                 auto_fallback_box = bool(self.bld_box_fallback_var.get()) if hasattr(self, "bld_box_fallback_var") else True
                 city_auto_open_box = auto_open_box and (cid in self._selected_resource_cities)
 
+                try:
+                    spd_hours = float(self.bld_speedup_hours_var.get().strip() or "1")
+                except (ValueError, AttributeError):
+                    spd_hours = 1.0
+
+                spd_paytype = 1 if hasattr(self, "bld_speedup_item_combo") and self.bld_speedup_item_combo.get() == "Coin" else 2
+
                 task = BuildingTask(
                     gateway=self.gateway,
                     city_id=cid,
                     plans=plans,
                     max_slots=max_slots,
                     auto_speedup=self.bld_speedup_var.get(),
+                    speedup_hours=spd_hours,
+                    paytype=spd_paytype,
                     auto_boost=self.bld_boost_var.get(),
                     auto_comfort=self.bld_comfort_var.get(),
                     auto_open_box=city_auto_open_box,

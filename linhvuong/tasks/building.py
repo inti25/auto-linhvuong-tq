@@ -169,7 +169,8 @@ class BuildingTask:
         plans: list[BuildingPlan],
         max_slots: int = 3,
         auto_speedup: bool = False,
-        paytype: int = 1,
+        speedup_hours: float = 1.0,
+        paytype: int = 2,
         auto_comfort: bool = True,
         auto_boost: bool = False,
         auto_open_box: bool = False,
@@ -187,7 +188,11 @@ class BuildingTask:
         self.plans = plans
         self.max_slots = max_slots
         self.auto_speedup = auto_speedup
-        self.paytype = paytype
+        try:
+            self.speedup_hours = max(0.0, float(speedup_hours))
+        except (ValueError, TypeError):
+            self.speedup_hours = 1.0
+        self.paytype = int(paytype)
         self.auto_comfort = auto_comfort
         self.auto_boost = auto_boost
         self.auto_open_box = auto_open_box
@@ -337,16 +342,17 @@ class BuildingTask:
                 }
         return buildings_map
 
-    def speedup_slot(self, slot_id: int) -> bool:
-        """Sử dụng vật phẩm tăng tốc xây dựng hoàn thành ngay lập tức."""
+    def speedup_slot(self, slot_id: int, paytype: Optional[int] = None) -> bool:
+        """Sử dụng vật phẩm tăng tốc xây dựng (giảm 50% thời gian thi công)."""
+        pt = paytype if paytype is not None else self.paytype
         resp = self.gateway.call(
             "OPT.ashx",
             69,
             {
                 "type": "1",
-                "param1": str(self.city_id),
-                "param2": str(slot_id),
-                "paytype": str(self.paytype),
+                "param1": str(slot_id),
+                "param2": str(self.city_id),
+                "paytype": str(pt),
                 "_": "",
             },
         ) or {}
@@ -354,7 +360,70 @@ class BuildingTask:
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
-        return ret == RET_OK
+        if ret != RET_OK:
+            err_map = {
+                4: "Mã thành trì không hợp lệ",
+                8: "Vị trí công trình không hợp lệ",
+                30: "Không đủ Coin (元宝)",
+                31: "Không có nhà đang xây ở slot này",
+                45: "Không đủ Ngân Bảo (点券)",
+                999: "Lỗi không xác định",
+            }
+            msg = err_map.get(ret, f"Lỗi mã {ret}")
+            self._log(f"❌ Tăng tốc thất bại cho slot {slot_id}: {msg}")
+            return False
+        return True
+
+    def process_speedup(self) -> int:
+        """Tăng tốc các công trình đang thi công theo cơ chế chuẩn ZBuild.
+
+        Mỗi lần gọi OPT.ashx?id=69 giảm 50% thời gian thi công còn lại.
+        Vòng lặp giảm thời gian cho mỗi slot chạy cho đến khi thời gian còn lại
+        < target_hours * 3600 (mặc định 1h = 3600s) hoặc tối đa 10 lần.
+        """
+        target_seconds = int(self.speedup_hours * 3600)
+        active_slots = self.get_active_upgrade_slots()
+        if not active_slots:
+            return 0
+
+        total_speedups = 0
+        for item in active_slots:
+            if isinstance(item, (list, tuple)):
+                if len(item) < 1:
+                    continue
+                slot = int(item[0])
+                time_left = int(item[4]) if len(item) >= 5 else 0
+            elif isinstance(item, dict):
+                slot = int(item.get("slot") or item.get("pid") or 1)
+                time_left = int(item.get("time_left") or item.get("time") or 0)
+            else:
+                continue
+
+            if time_left <= target_seconds:
+                self._log(f"   ✓ Slot {slot}: còn {time_left // 60} phút (< {self.speedup_hours:g}h), không cần tăng tốc")
+                continue
+
+            self._log(f"   🔄 Slot {slot}: còn {time_left // 60} phút, cần giảm xuống < {self.speedup_hours:g}h")
+            current_time = time_left
+            speedup_count = 0
+
+            while current_time > target_seconds and speedup_count < 10:
+                success = self.speedup_slot(slot)
+                if not success:
+                    self._log(f"      ❌ Tăng tốc thất bại ở lần {speedup_count + 1}")
+                    break
+                speedup_count += 1
+                current_time //= 2
+                self._log(f"      ✅ Lần {speedup_count}: còn {current_time // 60} phút")
+
+            if speedup_count > 0:
+                self._log(f"   ✅ Đã tăng tốc {speedup_count} lần cho slot {slot}")
+                total_speedups += speedup_count
+
+        if total_speedups > 0:
+            self._c77_cache = None
+
+        return total_speedups
 
     def _order_plans_by_type_even(
         self, plans_list: list[BuildingPlan], real_buildings: dict[int, dict]
@@ -445,33 +514,22 @@ class BuildingTask:
         if self.auto_comfort:
             self.check_and_comfort_city()
 
-        # 3. Kiểm tra các slot nâng cấp đang bận
+        # 3. Tự động tăng tốc các slot đang thi công theo cơ chế ZBuild
+        if self.auto_speedup:
+            self.process_speedup()
+
+        # 4. Kiểm tra các slot nâng cấp đang bận
         active_slots = self.get_active_upgrade_slots()
         if len(active_slots) >= self.max_slots:
-            if self.auto_speedup:
-                for slot_idx in range(1, len(active_slots) + 1):
-                    self.speedup_slot(slot_idx)
-                active_slots = self.get_active_upgrade_slots()
-                if len(active_slots) >= self.max_slots:
-                    if not getattr(self, "_synced_once", False):
-                        try:
-                            rb = self.get_real_buildings()
-                            self._synced_once = True
-                            if self.on_sync_data:
-                                self.on_sync_data(self.city_id, {k: dict(v) for k, v in rb.items()})
-                        except Exception:
-                            pass
-                    return "slots_busy"
-            else:
-                if not getattr(self, "_synced_once", False):
-                    try:
-                        rb = self.get_real_buildings()
-                        self._synced_once = True
-                        if self.on_sync_data:
-                            self.on_sync_data(self.city_id, {k: dict(v) for k, v in rb.items()})
-                    except Exception:
-                        pass
-                return "slots_busy"
+            if not getattr(self, "_synced_once", False):
+                try:
+                    rb = self.get_real_buildings()
+                    self._synced_once = True
+                    if self.on_sync_data:
+                        self.on_sync_data(self.city_id, {k: dict(v) for k, v in rb.items()})
+                except Exception:
+                    pass
+            return "slots_busy"
 
         available_slots = self.max_slots - len(active_slots)
         if available_slots <= 0:
@@ -594,7 +652,8 @@ class BuildingTask:
                         self.deferred_pids.discard(plan.pid)
                     self._log(f"{icon} Đang {action_verb} slot {plan.pid} ({bname}) từ cấp {cur_lvl} {'lên' if action_type == 1 else 'xuống'} {next_lvl}")
                     if self.auto_speedup:
-                        self.speedup_slot(1)
+                        self._c77_cache = None
+                        self.process_speedup()
                     processed_count += 1
                     busy_pids.add(plan.pid)
                     built_any_in_pass = True

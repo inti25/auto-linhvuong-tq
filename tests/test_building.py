@@ -303,10 +303,13 @@ def test_building_task_demolish_to_zero_freely():
 
 
 def test_building_task_downgrade_with_auto_speedup():
-    # Q4: Cơ chế tăng tốc áp dụng đồng bộ cho cả hạ cấp
+    # Cơ chế tăng tốc chuẩn: tự động giảm 50% thời gian thi công cho slot bằng Ngân Bảo (paytype=2)
     server = FakeServer(
         handlers={
-            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "Common.ashx?id=77": [
+                {"ret": 0, "list": []},
+                {"ret": 0, "list": [[101, "NB", 0, 0, [[5, 4, 9, 2, 7200]], []]]},
+            ],
             "City.ashx?id=5": {
                 "ret": 0,
                 "infos": [
@@ -319,16 +322,108 @@ def test_building_task_downgrade_with_auto_speedup():
     )
     gw = GatewayClient(57, server, sleep=lambda s: None)
     plans = [BuildingPlan(pid=5, gid=4, target_level=5, name="Kho")]
-    task = BuildingTask(gw, city_id=101, plans=plans, auto_speedup=True, auto_comfort=False, auto_boost=False)
+    task = BuildingTask(gw, city_id=101, plans=plans, auto_speedup=True, speedup_hours=1.0, paytype=2, auto_comfort=False, auto_boost=False)
     out = task.run_once()
     assert out == "upgrading"
 
-    # Kiểm tra gọi lệnh tăng tốc slot
+    # Kiểm tra gọi lệnh tăng tốc đúng param1=slot 5, param2=city_id 101, paytype=2 (Ngân Bảo)
     speedup_calls = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
     assert len(speedup_calls) == 1
     assert speedup_calls[0]["type"] == "1"
-    assert speedup_calls[0]["param1"] == "101"
-    assert speedup_calls[0]["param2"] == "1"
+    assert speedup_calls[0]["param1"] == "5"
+    assert speedup_calls[0]["param2"] == "101"
+    assert speedup_calls[0]["paytype"] == "2"
+
+
+def test_process_speedup_halving_loop_to_target_hours():
+    # 15000s -> 7500s -> 3750s -> 1875s (<= 3600s: 3 lần giảm 50%)
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 0, 0, [[12, 11, 8, 1, 15000]], []]],
+            },
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=101, plans=[], speedup_hours=1.0, paytype=2)
+    speedup_count = task.process_speedup()
+    assert speedup_count == 3
+
+    calls = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert len(calls) == 3
+    assert all(c["param1"] == "12" for c in calls)
+    assert all(c["param2"] == "101" for c in calls)
+    assert all(c["paytype"] == "2" for c in calls)
+
+
+def test_process_speedup_already_below_target_hours():
+    # 1800s (30 phút) < 1h (3600s): không gọi tăng tốc
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 0, 0, [[3, 3, 5, 1, 1800]], []]],
+            },
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=101, plans=[], speedup_hours=1.0, paytype=2)
+    speedup_count = task.process_speedup()
+    assert speedup_count == 0
+
+    calls = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert len(calls) == 0
+
+
+def test_process_speedup_max_10_iterations_cap():
+    # Thời gian thi công cực lớn: bị chặn lại ở tối đa 10 lần như ZBuild
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 0, 0, [[1, 1, 20, 1, 10_000_000]], []]],
+            },
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=101, plans=[], speedup_hours=1.0, paytype=2)
+    speedup_count = task.process_speedup()
+    assert speedup_count == 10
+
+    calls = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert len(calls) == 10
+    assert all(c["param1"] == "1" for c in calls)
+    assert all(c["param2"] == "101" for c in calls)
+    assert all(c["paytype"] == "2" for c in calls)
+
+
+def test_process_speedup_stops_on_server_error():
+    # Dừng vòng lặp khi server báo lỗi (ví dụ hết Ngân Bảo: ret 45)
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 0, 0, [[8, 6, 12, 1, 10000]], []]],
+            },
+            "OPT.ashx?id=69": [
+                {"ret": 0},   # Lần 1 thành công
+                {"ret": 45},  # Lần 2 thất bại (thiếu Ngân Bảo)
+            ],
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=101, plans=[], speedup_hours=1.0, paytype=2)
+    speedup_count = task.process_speedup()
+    assert speedup_count == 1
+
+    calls = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert len(calls) == 2
+    assert all(c["param1"] == "8" for c in calls)
+    assert all(c["param2"] == "101" for c in calls)
 
 
 def test_building_task_handles_ret_36_minimum_level():
