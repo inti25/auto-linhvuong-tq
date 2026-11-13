@@ -332,7 +332,7 @@ class MoraleTrainer:
                 needs_sync = (
                     cid not in last_city_sync
                     or (now - last_city_sync[cid] >= self.poll_interval)
-                    or any(st["upgrading_time"] <= 0 and st["current_morale"] < target_morale for st in c_targets)
+                    or any(st.pop("_just_finished_countdown", False) for st in c_targets)
                 )
 
                 if needs_sync:
@@ -346,7 +346,8 @@ class MoraleTrainer:
                                 st["current_morale"] = cur_m
                                 st["upgrading_time"] = up_t
 
-            # 2. Xử lý từng tướng trong danh sách active
+            # 2. Xử lý từng tướng trong danh sách active (gom kích hoạt OPT 47 rồi đồng bộ API 76 theo thành)
+            triggered_in_city: dict[int, list[tuple[dict, int]]] = {}
             for st in active_targets:
                 if stop_event and stop_event.is_set():
                     break
@@ -402,14 +403,51 @@ class MoraleTrainer:
 
                 if ret == 0:
                     st["step_count"] += 1
+                    triggered_in_city.setdefault(cid, []).append((st, add_point))
+                    # Giãn cách vi mô ngẫu nhiên 100ms - 250ms giữa các request kích hoạt để bảo vệ socket và chống bot
+                    if self.poll_interval >= 0.1:
+                        import random
+                        time.sleep(random.uniform(0.1, 0.25))
+                else:
+                    # Kiểm tra lại xem có phải do đang bận luyện dở chưa kịp cập nhật (tránh mã lỗi 40 lặp lại)
                     cur_m, new_up_t = self.get_general_morale_info(cid, gid)
+                    if new_up_t > 0:
+                        st["upgrading_time"] = new_up_t
+                        if cur_m is not None:
+                            st["current_morale"] = cur_m
+                        continue
+
+                    err_msg = f"Máy chủ phản hồi mã lỗi {ret}"
+                    if ret == 15:
+                        err_msg = "Máy chủ phản hồi mã lỗi 15: Thiếu tài nguyên (lúa/vàng)"
+                    logger.warning(
+                        f"Luyện sĩ khí tướng {gid} tại thành {cid} thất bại: {err_msg}"
+                    )
+                    _finish_general(gid, False, curr, err_msg)
+
+            # Đồng bộ theo lô 1 request Common.ashx?id=76 cho mỗi thành vừa kích hoạt thành công
+            for cid, trig_list in triggered_in_city.items():
+                if stop_event and stop_event.is_set():
+                    break
+                city_info = self.get_city_generals_morale_info(cid)
+                last_city_sync[cid] = time.time()
+                for st, add_point in trig_list:
+                    if st["completed"]:
+                        continue
+                    gid = st["general_id"]
+                    curr = st["current_morale"]
+                    if gid in city_info:
+                        cur_m, new_up_t = city_info[gid]
+                    else:
+                        cur_m, new_up_t = None, 0
+
                     if cur_m is None:
                         # Fallback cập nhật lạc quan (dành cho server mock / unit tests)
                         curr += add_point
                         st["current_morale"] = curr
                         if on_step:
                             _dispatch_on_step(
-                                lambda c, t, m: on_step(gid, c, t, m),
+                                lambda c, t, m, _gid=gid: on_step(_gid, c, t, m),
                                 curr,
                                 target_morale,
                                 f"Đã tăng +{add_point} ({curr}/{target_morale})",
@@ -438,31 +476,11 @@ class MoraleTrainer:
                         else:
                             if on_step:
                                 _dispatch_on_step(
-                                    lambda c, t, m: on_step(gid, c, t, m),
+                                    lambda c, t, m, _gid=gid: on_step(_gid, c, t, m),
                                     cur_m,
                                     target_morale,
                                     f"Đã kích hoạt +{add_point} ({cur_m}/{target_morale})",
                                 )
-                    # Giãn cách vi mô ngẫu nhiên 100ms - 250ms giữa các request kích hoạt để bảo vệ socket và chống bot
-                    if self.poll_interval >= 0.1:
-                        import random
-                        time.sleep(random.uniform(0.1, 0.25))
-                else:
-                    # Kiểm tra lại xem có phải do đang bận luyện dở chưa kịp cập nhật (tránh mã lỗi 40 lặp lại)
-                    cur_m, new_up_t = self.get_general_morale_info(cid, gid)
-                    if new_up_t > 0:
-                        st["upgrading_time"] = new_up_t
-                        if cur_m is not None:
-                            st["current_morale"] = cur_m
-                        continue
-
-                    err_msg = f"Máy chủ phản hồi mã lỗi {ret}"
-                    if ret == 15:
-                        err_msg = "Máy chủ phản hồi mã lỗi 15: Thiếu tài nguyên (lúa/vàng)"
-                    logger.warning(
-                        f"Luyện sĩ khí tướng {gid} tại thành {cid} thất bại: {err_msg}"
-                    )
-                    _finish_general(gid, False, curr, err_msg)
 
             # 3. Tính toán nhịp nghỉ giữa các tick và cập nhật đếm ngược cục bộ
             remaining = [st for st in states.values() if not st["completed"]]
@@ -483,6 +501,8 @@ class MoraleTrainer:
             for st in remaining:
                 if st["upgrading_time"] > 0:
                     st["upgrading_time"] = max(0, st["upgrading_time"] - int(max(1, tick_step)))
+                    if st["upgrading_time"] == 0:
+                        st["_just_finished_countdown"] = True
 
         return {
             gid: {
@@ -504,6 +524,7 @@ class MoraleTrainer:
         base_gens: Optional[dict[int, Any]] = None,
         on_notify: Optional[Callable[[str], None]] = None,
         stop_event: Optional[threading.Event] = None,
+        refresh_from_server: bool = False,
     ) -> tuple[bool, list[str]]:
         """Kiểm tra và kích hoạt nâng sĩ khí đồng loạt cho toàn bộ đạo quân trong 1 bước chu kỳ (run_once).
 
@@ -518,8 +539,9 @@ class MoraleTrainer:
         target_morale = min(100, max(1, target_morale))
         wait_reasons: list[str] = []
 
-        # Nếu không truyền base_gens từ ngoài vào, đọc trực tiếp từ API 76
-        gens_morale_info = self.get_city_generals_morale_info(base_id) if base_id else {}
+        # Chỉ đọc lại API 76 nếu caller yêu cầu làm mới hoặc base_gens chưa đủ thông tin
+        need_fetch = refresh_from_server or not base_gens or any(gid not in base_gens for gid in general_ids)
+        gens_morale_info = self.get_city_generals_morale_info(base_id) if (base_id and need_fetch) else {}
 
         import random
 

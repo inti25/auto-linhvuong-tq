@@ -129,13 +129,23 @@ class GoiDan:
             if attempt > 0:
                 self.sleep_fn(1.5)
             r = self.radius if (attempt == 0 and curr_type != VONG_LINH) else effective_radius
-            target = self.ctx.scanner.find_nearest(
-                *self.origin,
-                r,
-                [curr_type],
-                skip_capital_radius=self.skip_capital_radius,
-                owner_id=int(self.city_id or 0),
-            )
+            try:
+                target = self.ctx.scanner.find_nearest(
+                    *self.origin,
+                    r,
+                    [curr_type],
+                    skip_capital_radius=self.skip_capital_radius,
+                    owner_id=int(self.city_id or 0),
+                    use_cache=False,
+                )
+            except TypeError:
+                target = self.ctx.scanner.find_nearest(
+                    *self.origin,
+                    r,
+                    [curr_type],
+                    skip_capital_radius=self.skip_capital_radius,
+                    owner_id=int(self.city_id or 0),
+                )
             if target is not None:
                 break
         return target
@@ -176,6 +186,9 @@ class GoiDan:
                     self.ctx.notify(f"⚠️ Mục tiêu {curr_type} đang bận hoặc đã tồn tại, tiến hành quét tìm...")
                 self._current_type_idx = (idx + 1) % total_types
                 self.target_type = curr_type
+                invalidate = getattr(self.ctx.gateway, "invalidate_map_cache", None)
+                if callable(invalidate):
+                    invalidate()
                 target = self._scan_with_retry(curr_type)
                 if target is None:
                     return None, "target_not_found_after_call"
@@ -216,7 +229,10 @@ class GoiDan:
                 x, y = coords_from_mid(int(resp_call["new_target_mid"]))
                 return Target(x, y, int(resp_call["new_target_id"]), int(resp_call.get("new_target_type", curr_type))), None
 
-            # Quét tìm mục tiêu vừa xuất hiện quanh thành
+            # Quét tìm mục tiêu vừa xuất hiện quanh thành (vô hiệu hóa cache bản đồ vì mới gọi quái)
+            invalidate = getattr(self.ctx.gateway, "invalidate_map_cache", None)
+            if callable(invalidate):
+                invalidate()
             target = self._scan_with_retry(curr_type)
             if target is None:
                 if self.ctx.notify:
@@ -231,7 +247,12 @@ class GoiDan:
         roster = None
         if self.target_army and self.target_army.total > 0 and self.auto_recruit and self.city_id:
             try:
-                roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.city_id])
+                roster = fetch_roster(
+                    self.ctx.gateway,
+                    only_base_ids=[self.city_id],
+                    include_civil=False,
+                    include_cities=False,
+                )
             except Exception:
                 roster = None
 
@@ -300,18 +321,24 @@ class GoiDan:
         # 1. Chuẩn bị quân lực & Luyện sĩ khí trước khi gọi/xuất quân
         if self.city_id and self.target_army is not None and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale):
             try:
-                roster = fetch_roster(self.ctx.gateway, only_base_ids=[self.city_id])
+                roster = fetch_roster(
+                    self.ctx.gateway,
+                    only_base_ids=[self.city_id],
+                    include_civil=False,
+                    include_cities=False,
+                )
                 city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
             except Exception:
                 roster = None
                 city_gens = {}
 
             # Trị thương & Bổ sung lính
+            troops_added = False
             for gid in self.generals:
                 self.provisioner.heal_general(self.city_id, gid)
                 if self.auto_recruit and self.target_army and self.target_army.total > 0 and roster:
                     cur_army = roster.army_of(gid)
-                    self.provisioner.adjust_troops(
+                    adj_res = self.provisioner.adjust_troops(
                         base_id=self.city_id,
                         general_id=gid,
                         current_army=cur_army,
@@ -319,6 +346,8 @@ class GoiDan:
                         auto_recruit=True,
                         on_log=self.ctx.notify,
                     )
+                    if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                        troops_added = True
 
             # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
             if self.auto_morale and city_gens:
@@ -330,6 +359,7 @@ class GoiDan:
                     base_gens=city_gens,
                     on_notify=self.ctx.notify,
                     stop_event=getattr(self.ctx, "stop_event", None),
+                    refresh_from_server=troops_added,
                 )
                 if not ready:
                     return "waiting_morale"

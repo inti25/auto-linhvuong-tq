@@ -361,9 +361,11 @@ class BinhManAutoRunner(BaseTaskRunner):
     def _run_base_worker(self, task: BinhMan):
         base_label = getattr(task, "base_name", "") or f"Căn cứ {task.origin_id}"
         cycle = 0
+        consec_no_target = 0
         while not self.stop_event.is_set():
             cycle += 1
             has_action = False
+            res = None
             try:
                 res = task.run_once()
                 prefix = f"[{base_label}] " if len(self.tasks) > 1 else ""
@@ -383,7 +385,14 @@ class BinhManAutoRunner(BaseTaskRunner):
             if self.stop_event.is_set():
                 break
 
-            wait_time = 1.0 if has_action else self.interval
+            if res == "no_target":
+                consec_no_target += 1
+                backoff_factor = 1.5 ** min(consec_no_target - 1, 3)
+                wait_time = min(60.0, self.interval * backoff_factor)
+            else:
+                consec_no_target = 0
+                wait_time = 1.0 if has_action else self.interval
+
             if self.wait_cycle(wait_time if not has_action else min(wait_time, 2.0)):
                 break
 
@@ -460,6 +469,29 @@ class BuildingAutoRunner(BaseTaskRunner):
             cycle += 1
             all_completed = True
             try:
+                now_mono = time.monotonic()
+                tasks_needing_c77 = [
+                    t for t in self.tasks
+                    if getattr(t, "gateway", None) is not None
+                    and hasattr(t, "set_c77_cache")
+                    and (
+                        getattr(t, "auto_boost", False)
+                        or getattr(t, "auto_speedup", False)
+                        or not getattr(t, "_synced_once", False)
+                        or now_mono >= getattr(t, "_busy_until", 0.0)
+                    )
+                ]
+                if len(tasks_needing_c77) > 1:
+                    shared_resp = tasks_needing_c77[0].gateway.call(
+                        "Common.ashx", 77, {"cid": str(tasks_needing_c77[0].city_id), "_": ""}
+                    ) or {}
+                    if shared_resp.get("ret", 0) in (110, 73):
+                        raise CaptchaRequired()
+                    if shared_resp and shared_resp.get("ret", -1) == 0:
+                        fetched_at = time.time()
+                        for t in tasks_needing_c77:
+                            t.set_c77_cache(shared_resp, fetched_at)
+
                 for t in self.tasks:
                     if self.stop_event.is_set():
                         break
@@ -1342,7 +1374,7 @@ class Dashboard(tk.Frame):
             self.craft_status_lbl.config(text="Đã dừng chế tạo tự động.")
 
     def _craft_worker_loop(self):
-        crafter = WeaponCrafter(self.gateway)
+        crafter = WeaponCrafter(self.gateway, workshop_cache_ttl=300.0)
         while self._craft_running and not self._craft_stop_event.is_set():
             now = time.time()
             for cid, cfg in list(self.craft_configs.items()):
@@ -1371,7 +1403,7 @@ class Dashboard(tk.Frame):
 
                     succ_cnt = 0
                     last_ret = 0
-                    for wid in wids:
+                    for idx, wid in enumerate(wids):
                         if self._craft_stop_event.is_set():
                             break
                         succ, ret, msg = crafter.craft_once(
@@ -1379,6 +1411,7 @@ class Dashboard(tk.Frame):
                             wid,
                             amount,
                             notify=lambda m: self._log_global(m),
+                            switch_city=(idx == 0),
                         )
                         last_ret = ret
                         if succ:
@@ -2786,7 +2819,14 @@ class Dashboard(tk.Frame):
         mode = "vong_linh" if target_type == 301 else "dan"
         radius = int(self.gd_radius_var.get() or "5")
         locks = getattr(self, "shared_target_locks", None) or TargetLocks()
-        scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
+        scanner = Scanner(
+            self.gateway,
+            locks,
+            delay=0.0,
+            sleep=lambda s: None,
+            map_cache_ttl=4.0,
+            capitals_cache_ttl=300.0,
+        )
         ctx = TaskContext(self.gateway, scanner, locks, notify=lambda m: self.after(0, self._append_gd_log, m))
 
         try:
@@ -2902,8 +2942,8 @@ class Dashboard(tk.Frame):
                                 err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
                                 self.after(0, self._append_gd_log, f"   [Chiêu mộ] ⚠️ Chiêu mộ thất bại ({err_desc})")
 
-                    fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
                     city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                    troops_added = False
                     for gid in sel_gens:
                         g = city_gens.get(gid)
                         gname = g.name if g else str(gid)
@@ -2920,17 +2960,29 @@ class Dashboard(tk.Frame):
                             for stype, diff, succ, ret_code in results:
                                 tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(stype, "Quân")
                                 if succ:
+                                    if diff > 0:
+                                        troops_added = True
                                     self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ✅ Thành công")
                                 else:
                                     err_desc = ERROR_MESSAGES.get(ret_code, f"Mã lỗi: {ret_code}")
                                     self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
                         else:
                             self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
+                else:
+                    fresh_roster = None
+                    city_gens = {}
+                    troops_added = False
 
                 # 3. Luyện sĩ khí đồng loạt bằng MoraleTrainer (ADR-0032)
                 if auto_morale:
-                    fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
-                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                    if fresh_roster is None:
+                        fresh_roster = fetch_roster(
+                            self.gateway,
+                            only_base_ids=[city_id],
+                            include_civil=False,
+                            include_cities=False,
+                        )
+                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
                     trainer = MoraleTrainer(self.gateway)
                     def _on_notify_gd(msg):
                         self.after(0, self._append_gd_log, f"   {msg}")
@@ -2940,6 +2992,7 @@ class Dashboard(tk.Frame):
                         target_morale=min_morale,
                         base_gens=city_gens,
                         on_notify=_on_notify_gd,
+                        refresh_from_server=troops_added,
                     )
 
                 self.after(0, self._append_gd_log, "🏁 Hoàn tất tiến trình biên chế Gọi Man!")
@@ -3777,7 +3830,14 @@ class Dashboard(tk.Frame):
             camp_id = int(cfg.camp_id) if (mode == 1 and cfg.camp_id and str(cfg.camp_id).lstrip("-").isdigit()) else (b.id if (mode == 1 and b.is_camp) else None)
             parent_id = int(cfg.parent_city_id) if (cfg.parent_city_id and str(cfg.parent_city_id).isdigit()) else b.id
 
-            scanner = Scanner(self.gateway, self.shared_target_locks, delay=0.0, sleep=lambda s: None)
+            scanner = Scanner(
+                self.gateway,
+                self.shared_target_locks,
+                delay=0.0,
+                sleep=lambda s: None,
+                map_cache_ttl=4.0,
+                capitals_cache_ttl=300.0,
+            )
             ctx = TaskContext(self.gateway, scanner, self.shared_target_locks, notify=lambda m, bname=b.name: self.after(0, self._append_bm_log, f"[{bname}] {m}"))
             peers = [p for p in all_peers if p.base_id != b.id]
 
@@ -3910,7 +3970,14 @@ class Dashboard(tk.Frame):
             man_types = [7, 8, 9, 10]
 
         locks = self.shared_target_locks
-        scanner = Scanner(self.gateway, locks, delay=0.0, sleep=lambda s: None)
+        scanner = Scanner(
+            self.gateway,
+            locks,
+            delay=0.0,
+            sleep=lambda s: None,
+            map_cache_ttl=4.0,
+            capitals_cache_ttl=300.0,
+        )
         ctx = TaskContext(self.gateway, scanner, locks, notify=lambda m: self.after(0, self._append_bm_log, m))
 
         try:
@@ -3989,11 +4056,18 @@ class Dashboard(tk.Frame):
             for gid in sel_gens:
                 prov.heal_general(city_id, gid)
 
+            fresh_roster = None
+            troops_added = False
             if target_army.total > 0 and auto_recruit:
-                fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                fresh_roster = fetch_roster(
+                    self.gateway,
+                    only_base_ids=[city_id],
+                    include_civil=False,
+                    include_cities=False,
+                )
                 for gid in sel_gens:
                     army = fresh_roster.army_of(gid)
-                    prov.adjust_troops(
+                    adj_res = prov.adjust_troops(
                         base_id=city_id,
                         general_id=gid,
                         current_army=army,
@@ -4001,9 +4075,17 @@ class Dashboard(tk.Frame):
                         auto_recruit=True,
                         on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
                     )
+                    if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                        troops_added = True
 
             if auto_morale:
-                fresh_roster = fetch_roster(self.gateway, only_base_ids=[city_id])
+                if fresh_roster is None:
+                    fresh_roster = fetch_roster(
+                        self.gateway,
+                        only_base_ids=[city_id],
+                        include_civil=False,
+                        include_cities=False,
+                    )
                 city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
                 trainer = MoraleTrainer(self.gateway)
                 def _on_notify_bm_city(msg):
@@ -4014,17 +4096,27 @@ class Dashboard(tk.Frame):
                     target_morale=min_morale,
                     base_gens=city_gens,
                     on_notify=_on_notify_bm_city,
+                    refresh_from_server=troops_added,
                 )
         else:
             camp_id = base_id
             for gid in sel_gens:
                 prov.heal_general(camp_id, gid)
 
+            fresh_roster = None
+            troops_added = False
+            rechecked = None
+            moved_to_parent = False
             if target_army.total > 0:
-                fresh_roster = fetch_roster(self.gateway, only_base_ids=[camp_id])
+                fresh_roster = fetch_roster(
+                    self.gateway,
+                    only_base_ids=[camp_id],
+                    include_civil=False,
+                    include_cities=False,
+                )
                 for gid in sel_gens:
                     army = fresh_roster.army_of(gid)
-                    prov.adjust_troops(
+                    adj_res = prov.adjust_troops(
                         base_id=camp_id,
                         general_id=gid,
                         current_army=army,
@@ -4032,8 +4124,19 @@ class Dashboard(tk.Frame):
                         auto_recruit=False,
                         on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
                     )
+                    if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                        troops_added = True
 
-                rechecked = fetch_roster(self.gateway, only_base_ids=[camp_id])
+                rechecked = (
+                    fetch_roster(
+                        self.gateway,
+                        only_base_ids=[camp_id],
+                        include_civil=False,
+                        include_cities=False,
+                    )
+                    if troops_added
+                    else fresh_roster
+                )
                 def_gens = []
                 for gid in sel_gens:
                     a = rechecked.army_of(gid)
@@ -4054,12 +4157,21 @@ class Dashboard(tk.Frame):
                             min_morale=min_morale,
                             on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
                         )
+                        moved_to_parent = True
                     else:
                         self.after(0, self._append_bm_log, f"⚠️ {prefix}Quân đồn trú tại trại không đủ và chưa chọn Thành mẹ! Vui lòng chọn Thành mẹ.")
 
             if auto_morale:
-                fresh_roster = fetch_roster(self.gateway, only_base_ids=[camp_id])
-                camp_gens = {g.id: g for g in fresh_roster.generals_of(camp_id)}
+                if rechecked is not None and not moved_to_parent:
+                    camp_roster = rechecked
+                else:
+                    camp_roster = fetch_roster(
+                        self.gateway,
+                        only_base_ids=[camp_id],
+                        include_civil=False,
+                        include_cities=False,
+                    )
+                camp_gens = {g.id: g for g in camp_roster.generals_of(camp_id)}
                 trainer = MoraleTrainer(self.gateway)
                 def _on_notify_bm_camp(msg):
                     self.after(0, self._append_bm_log, f"   {prefix}{msg}")
@@ -4069,6 +4181,7 @@ class Dashboard(tk.Frame):
                     target_morale=min_morale,
                     base_gens=camp_gens,
                     on_notify=_on_notify_bm_camp,
+                    refresh_from_server=troops_added,
                 )
 
     def _manual_adjust_bm_troops(self):
@@ -5740,11 +5853,16 @@ class Dashboard(tk.Frame):
                     new_plans.append(new_plan)
 
         # Lưu lại cache
+        has_struct_change = (new_plans != cached_plans)
         if target_city_id is not None:
             self._city_building_plans[target_city_id] = new_plans
 
-        # 4. Cập nhật giao diện in-place nếu căn cứ này đang hiển thị
-        if (target_city_id == self._current_bld_city_id or self._current_bld_city_id is None) and hasattr(self, "bld_tree"):
+        # 4. Cập nhật giao diện in-place nếu căn cứ này đang hiển thị (bỏ qua render lại nếu không đổi khi auto-cycle)
+        if (
+            (target_city_id == self._current_bld_city_id or self._current_bld_city_id is None)
+            and hasattr(self, "bld_tree")
+            and (not from_auto_cycle or has_struct_change or level_changes)
+        ):
             sel = self.bld_tree.selection()
             self._render_bld_tree_from_plans(new_plans)
             if sel and self.bld_tree.exists(sel[0]):
@@ -6170,6 +6288,15 @@ class Dashboard(tk.Frame):
             if not from_auto_cycle:
                 self._append_logis_log("ℹ️ Server không trả về dữ liệu kỹ thuật.")
             return
+
+        cache = getattr(self, "_last_synced_tech_snapshot", None)
+        if cache is None:
+            cache = {}
+            self._last_synced_tech_snapshot = cache
+        prev_snapshot = cache.get(city_id)
+        if from_auto_cycle and prev_snapshot == levels_map:
+            return
+        cache[city_id] = dict(levels_map)
 
         level_changes = []
         for iid in self.res_tree.get_children(""):

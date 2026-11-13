@@ -156,6 +156,7 @@ class ProxyPool:
         self.default_protocol = default_protocol
         self.on_failover = on_failover
         self._lock = threading.Lock()
+        self._refetch_lock = threading.Lock()
 
     def load_from_json(
         self,
@@ -453,16 +454,20 @@ class ProxyPool:
                 self.active_index = found_idx
                 new_ep = self.endpoints[found_idx]
 
-        # Nếu không còn proxy nào sống và có URL cấu hình, tự động fetch lại
+        # Nếu không còn proxy nào sống và có URL cấu hình, tự động fetch lại (chống thundering herd đa luồng)
         if new_ep is None and self.url:
-            logger.info("Toàn bộ proxy trong pool đã cạn/chết. Đang tự động tải lại qua URL...")
-            try:
-                self.fetch_from_url(self.url)
-                alive = self.check_all()
-                if alive:
-                    new_ep = alive[0]
-            except Exception as ex:
-                logger.error(f"Tự động tải lại proxy qua URL thất bại: {ex}")
+            with self._refetch_lock:
+                # Kiểm tra xem luồng khác vừa refetch xong chưa
+                new_ep = self.get_active()
+                if new_ep is None:
+                    logger.info("Toàn bộ proxy trong pool đã cạn/chết. Đang tự động tải lại qua URL...")
+                    try:
+                        self.fetch_from_url(self.url)
+                        alive = self.check_all()
+                        if alive:
+                            new_ep = alive[0]
+                    except Exception as ex:
+                        logger.error(f"Tự động tải lại proxy qua URL thất bại: {ex}")
 
         if new_ep:
             logger.info(f"Hoán đổi proxy thành công: {old_ep.display_name if old_ep else 'None'} -> {new_ep.display_name}")

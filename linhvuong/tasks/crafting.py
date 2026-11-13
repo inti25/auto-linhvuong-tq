@@ -11,6 +11,7 @@ Tuân thủ ADR-0031:
 """
 
 import logging
+import time
 from typing import Callable, Optional
 
 from ..gateway import GatewayClient
@@ -130,17 +131,39 @@ def get_required_workshop_gids(weapon_id: int) -> tuple[int, int]:
 class WeaponCrafter:
     """Dịch vụ điều phối chế tạo quân giới tại thành trì."""
 
-    def __init__(self, gateway: GatewayClient):
+    def __init__(self, gateway: GatewayClient, workshop_cache_ttl: float = 0.0):
         self.gateway = gateway
+        self.workshop_cache_ttl = max(0.0, float(workshop_cache_ttl))
+        self._city_workshops_cache: dict[int, tuple[float, list[tuple[int, int]]]] = {}
+
+    def _lookup_cached_workshop(
+        self, city_id: int, allowed_gids: tuple[int, int]
+    ) -> Optional[tuple[Optional[int], Optional[int]]]:
+        if self.workshop_cache_ttl <= 0:
+            return None
+        entry = self._city_workshops_cache.get(city_id)
+        if entry is None:
+            return None
+        ts, pairs = entry
+        if (time.monotonic() - ts) >= self.workshop_cache_ttl:
+            self._city_workshops_cache.pop(city_id, None)
+            return None
+        for pid, gid in pairs:
+            if gid in allowed_gids and pid > 0:
+                return pid, gid
+        return (None, None)
 
     def find_workshop(self, city_id: int, weapon_id: int) -> tuple[Optional[int], Optional[int]]:
         """Truy vấn danh sách công trình trong thành (City.ashx?id=5) và tìm (pid, gid) của xưởng."""
+        allowed_gids = get_required_workshop_gids(weapon_id)
+        cached = self._lookup_cached_workshop(city_id, allowed_gids)
+        if cached is not None:
+            return cached
+
         resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
-
-        allowed_gids = get_required_workshop_gids(weapon_id)
 
         # Định dạng danh sách công trình từ City.ashx?id=5:
         # Máy chủ Linh Vương trả về 'infos': [[pid, gid, name, level, status, finish_time], ...]
@@ -152,23 +175,32 @@ class WeaponCrafter:
             or resp.get("build")
             or []
         )
+        pairs: list[tuple[int, int]] = []
+        matched: Optional[tuple[int, int]] = None
         for b in buildings:
             if isinstance(b, dict):
                 gid = int(b.get("gid", 0))
                 pid = int(b.get("pid", 0))
-                if gid in allowed_gids and pid > 0:
-                    return pid, gid
+                if pid > 0 and gid > 0:
+                    pairs.append((pid, gid))
+                    if matched is None and gid in allowed_gids:
+                        matched = (pid, gid)
             elif isinstance(b, (list, tuple)) and len(b) >= 2:
                 try:
                     # Cấu trúc list từ 'infos': [pid, gid, ...]
                     pid = int(b[0])
                     gid = int(b[1])
-                    if gid in allowed_gids and pid > 0:
-                        return pid, gid
+                    if pid > 0 and gid > 0:
+                        pairs.append((pid, gid))
+                        if matched is None and gid in allowed_gids:
+                            matched = (pid, gid)
                 except (ValueError, TypeError):
                     continue
 
-        return None, None
+        if self.workshop_cache_ttl > 0 and pairs:
+            self._city_workshops_cache[city_id] = (time.monotonic(), pairs)
+
+        return matched if matched is not None else (None, None)
 
     def find_workshop_plot(self, city_id: int, weapon_id: int) -> Optional[int]:
         """Truy vấn vị trí ô đất (pid) của xưởng phù hợp."""
@@ -182,6 +214,7 @@ class WeaponCrafter:
         amount: int,
         faster: int = 1,
         notify: Optional[Callable[[str], None]] = None,
+        switch_city: bool = True,
     ) -> tuple[bool, int, str]:
         """Thực hiện 1 lượt chế tạo quân giới tại thành qua OPT.ashx?id=38.
 
@@ -192,12 +225,14 @@ class WeaponCrafter:
 
         w_name = get_weapon_name(weapon_id)
 
-        # 1. Chuyển tiêu điểm thành phố qua City.ashx?id=50
-        self.gateway.call("City.ashx", 50, {"tid": str(city_id), "_": ""})
+        # 1. Chuyển tiêu điểm thành phố qua City.ashx?id=50 (có thể bỏ qua nếu đã focus trong cùng chu kỳ)
+        if switch_city:
+            self.gateway.call("City.ashx", 50, {"tid": str(city_id), "_": ""})
 
         # 2. Tìm vị trí ô đất và mã xưởng phù hợp trong thành
         plot_id, workshop_gid = self.find_workshop(city_id, weapon_id)
         if plot_id is None or workshop_gid is None:
+            self._city_workshops_cache.pop(city_id, None)
             err_msg = f"❌ Thành (ID: {city_id}) chưa xây dựng công xưởng phù hợp để chế tạo '{w_name}'!"
             if notify:
                 notify(err_msg)

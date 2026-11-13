@@ -1329,3 +1329,98 @@ def test_process_speedup_handles_unix_timestamp():
     speedup_count = task.process_speedup()
     assert speedup_count == 1
 
+
+def test_building_task_does_not_build_when_slot_check_fails():
+    # Khi cả Common.ashx?id=77 và Build.ashx?id=2 đều lỗi/timeout, không được phép gửi OPT.ashx?id=65
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 999},
+            "Build.ashx?id=2": {"ret": 8},
+            "City.ashx?id=5": {"ret": 0, "infos": [[1, 1, "Quan Phủ", 5, 0, 0]]},
+            "OPT.ashx?id=65": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [BuildingPlan(pid=1, gid=1, target_level=10), BuildingPlan(pid=2, gid=2, target_level=10)]
+    task = BuildingTask(gw, city_id=101, plans=plans, max_slots=3, auto_comfort=False, auto_boost=False)
+
+    out = task.run_once()
+    assert out == "slots_read_failed"
+    assert [d for k, d in server.calls if k == "OPT.ashx?id=65"] == []
+
+
+def test_building_task_shared_c77_miss_requeries_own_city_before_fallback():
+    # Runner tiêm shared cache Common.ashx?id=77 của thành 101 (chỉ chứa thành 101).
+    # Thành 102 đã đủ 3 công trình xây dựng -> phải tự hỏi lại Common.ashx?id=77 với cid=102 và dừng ngay,
+    # không được rơi xuống fallback Build.ashx?id=2 lỗi rồi gửi OPT.ashx?id=65.
+    class _PerCityServer:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            self.calls.append((key, dict(data or {})))
+            if key == "Common.ashx?id=77":
+                cid = int((data or {}).get("cid", 0))
+                if cid == 101:
+                    return Resp({"ret": 0, "list": [[101, "C1", 0, 1000, [], []]]})
+                return Resp({
+                    "ret": 0,
+                    "list": [[102, "C2", 0, 1000, [[1, 1, 5, 1, 120], [2, 2, 5, 1, 240], [3, 3, 5, 1, 360]], []]],
+                })
+            if key == "Build.ashx?id=2":
+                return Resp({"ret": 8})
+            if key == "City.ashx?id=5":
+                return Resp({"ret": 0, "infos": [[4, 4, "Kho", 5, 0, 0]]})
+            return Resp({"ret": 0})
+
+    server = _PerCityServer()
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    t1 = BuildingTask(gw, city_id=101, plans=[], max_slots=3, auto_comfort=False, auto_boost=False)
+    t2 = BuildingTask(gw, city_id=102, plans=[BuildingPlan(pid=4, gid=4, target_level=10)], max_slots=3, auto_comfort=False, auto_boost=False)
+
+    shared = gw.call("Common.ashx", 77, {"cid": "101", "_": ""})
+    t1.set_c77_cache(shared)
+    t2.set_c77_cache(shared)
+
+    assert t1.run_once() == "all_buildings_completed"
+    assert t2.run_once() == "slots_busy"
+    assert [d for k, d in server.calls if k == "OPT.ashx?id=65" and str(d.get("tid")) == "102"] == []
+
+
+def test_building_task_rechecks_slots_and_stops_on_unexpected_opt65_failure_when_full():
+    # Khi server thực tế đã đủ 3 công trình đang xây (ví dụ queue vừa đầy sau lần check đầu),
+    # nếu OPT.ashx?id=65 trả lỗi bất thường (ngoài 261/245/36/32/37), task phải kiểm tra lại slot
+    # và dừng ngay thay vì spam OPT.ashx?id=65 cho các công trình khác trong danh sách.
+    c77_responses = [
+        {"ret": 0, "list": [[101, "NB", 0, 1000, [[1, 1, 5, 1, 120], [2, 2, 5, 1, 240]], []]]},
+        {"ret": 0, "list": [[101, "NB", 0, 1000, [[1, 1, 5, 1, 120], [2, 2, 5, 1, 240], [3, 3, 5, 1, 360]], []]]},
+    ]
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": lambda: c77_responses.pop(0),
+            "City.ashx?id=5": {
+                "ret": 0,
+                "infos": [
+                    [4, 4, "Kho", 5, 0, 0],
+                    [5, 5, "Dân cư", 5, 0, 0],
+                    [6, 6, "Trại gỗ", 5, 0, 0],
+                ],
+            },
+            "OPT.ashx?id=65": {"ret": 29},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    plans = [
+        BuildingPlan(pid=4, gid=4, target_level=10),
+        BuildingPlan(pid=5, gid=5, target_level=10),
+        BuildingPlan(pid=6, gid=6, target_level=10),
+    ]
+    task = BuildingTask(gw, city_id=101, plans=plans, max_slots=3, auto_comfort=False, auto_boost=False)
+
+    out = task.run_once()
+    assert out == "slots_busy"
+    opt65_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    assert len(opt65_calls) == 1
+
+

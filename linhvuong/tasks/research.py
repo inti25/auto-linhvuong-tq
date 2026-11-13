@@ -10,11 +10,13 @@ Reverse engineered chính xác từ ZBuild.exe:
   6. Tự động dùng Binh Pháp tăng tốc hoàn thành tức thì nếu được bật: OPT.ashx?id=180.
 """
 
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from ..gateway import GatewayClient
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
+from .building import parse_remaining_seconds
 
 TECH_NAMES = {
     1: "种植技巧 - làm thực",
@@ -81,6 +83,12 @@ class ResearchTask:
         self.on_sync_data = on_sync_data
         self._cached_levels: dict[int, int] = {}
         self._synced_once: bool = False
+        self._cached_univ_info: Optional[tuple[int, int]] = None
+        self._busy_until: float = 0.0
+        self._last_tech_status: Optional[tuple[bool, Optional[int]]] = None
+        self._last_research_time_left: int = 0
+        self._resource_cooldown_until: float = 0.0
+        self.resource_cooldown: float = 90.0
 
     def is_research_ongoing(self) -> tuple[bool, Optional[int]]:
         """Kiểm tra xem hiện tại có công nghệ nào đang được nghiên cứu không qua City.ashx?id=37."""
@@ -89,12 +97,15 @@ class ResearchTask:
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
+        self._last_research_time_left = 0
         tech_info = resp.get("tech")
         # Hỗ trợ dạng mảng từ server thật: [tech_id, cur_level, time_left]
         if isinstance(tech_info, (list, tuple)) and len(tech_info) > 0:
             try:
                 tid = int(tech_info[0])
                 if tid > 0:
+                    if len(tech_info) >= 3:
+                        self._last_research_time_left = parse_remaining_seconds(tech_info[2])
                     return True, tid
             except (ValueError, TypeError):
                 pass
@@ -102,12 +113,17 @@ class ResearchTask:
         elif isinstance(tech_info, dict):
             tid = tech_info.get("techid") or tech_info.get("id") or 0
             if int(tid) > 0:
+                raw_t = tech_info.get("time_left") if tech_info.get("time_left") is not None else tech_info.get("time")
+                self._last_research_time_left = parse_remaining_seconds(raw_t)
                 return True, int(tid)
 
         return False, None
 
-    def get_university_info(self) -> tuple[Optional[int], int]:
+    def get_university_info(self, use_cache: bool = True) -> tuple[Optional[int], int]:
         """Tìm vị trí ô đất (pid) và loại kiến trúc (gid: 6=Đại Học Điện, 59=Thái Học Điện) trong thành."""
+        if use_cache and self._cached_univ_info is not None:
+            return self._cached_univ_info
+
         resp = self.gateway.call("City.ashx", 5, {"tid": str(self.city_id), "_": ""}) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
@@ -119,13 +135,17 @@ class ResearchTask:
                 try:
                     gid = int(b[1])
                     if gid in (6, 59):
-                        return int(b[0]), gid
+                        info = (int(b[0]), gid)
+                        self._cached_univ_info = info
+                        return info
                 except (ValueError, TypeError):
                     pass
             elif isinstance(b, dict):
                 gid = int(b.get("gid", 0))
                 if gid in (6, 59):
-                    return int(b.get("pid", 0)), gid
+                    info = (int(b.get("pid", 0)), gid)
+                    self._cached_univ_info = info
+                    return info
         return None, 6
 
     def get_university_pid(self) -> Optional[int]:
@@ -155,6 +175,7 @@ class ResearchTask:
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
         if ret != RET_OK:
+            self._cached_univ_info = None
             self.notify(f"⚠️ Thành ID={self.city_id} không lấy được kỹ thuật (mã {ret}, kiểm tra lại Viện Đại Học).")
             return {}
 
@@ -180,14 +201,29 @@ class ResearchTask:
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
+        if ret == RET_OK:
+            self._busy_until = 0.0
         return ret == RET_OK
 
     def run_once(self) -> str:
+        now_mono = time.monotonic()
+        if not self.auto_art_of_war and getattr(self, "_synced_once", False) and now_mono < self._busy_until:
+            if self.on_sync_data and self._cached_levels:
+                try:
+                    self.on_sync_data(self.city_id, self._cached_levels, self._last_tech_status)
+                except Exception:
+                    pass
+            return "research_busy"
+
         # 1. Kiểm tra xem viện Đại Học có đang bận nghiên cứu không
         is_busy, current_tech_id = self.is_research_ongoing()
         tech_status = (is_busy, current_tech_id) if is_busy else None
+        self._last_tech_status = tech_status
 
         if is_busy:
+            self._resource_cooldown_until = 0.0
+            if not self.auto_art_of_war and self._last_research_time_left > 0:
+                self._busy_until = now_mono + min(float(self._last_research_time_left), 1800.0)
             # Nếu bận nhưng chưa đọc cấp độ lần nào, đọc 1 lần để UI có cấp độ khởi tạo
             if not getattr(self, "_synced_once", False):
                 try:
@@ -210,7 +246,11 @@ class ResearchTask:
                 return "art_of_war_used"
             return "research_busy"
 
-        # 2. Lấy cấp độ các kỹ thuật hiện tại
+        self._busy_until = 0.0
+        if getattr(self, "_synced_once", False) and now_mono < self._resource_cooldown_until:
+            return "insufficient_resources"
+
+        # 2. Lấy cấp độ các kỹ thuật hiện tại (đã chuyển focus City.ashx?id=50 bên trong)
         current_levels = self.get_current_tech_levels()
         if not current_levels:
             self.notify(f"⚠️ Không đọc được thông tin kỹ thuật từ thành ID={self.city_id} (kiểm tra lại Viện Đại Học).")
@@ -240,10 +280,7 @@ class ResearchTask:
         if not eligible_plans:
             return "all_techs_completed"
 
-        # 4. Chuyển thành thị focus về Thành Nghiên Cứu (City.ashx?id=50)
-        self.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""})
-
-        # 5. Gửi lệnh nghiên cứu kỹ thuật qua OPT.ashx?id=44, tự động bỏ qua nếu mã 245/261
+        # 4. Gửi lệnh nghiên cứu kỹ thuật qua OPT.ashx?id=44 (focus thành đã được đặt tại Bước 2)
         last_ret = RET_OK
         for target_tech, current_level in eligible_plans:
             resp_research = self.gateway.call(
@@ -261,6 +298,7 @@ class ResearchTask:
                 raise CaptchaRequired()
 
             if ret == RET_OK:
+                self._resource_cooldown_until = 0.0
                 self.notify(f"🔬 Bắt đầu nghiên cứu: {target_tech.name} (từ cấp {current_level} lên {current_level + 1})")
                 if self.auto_art_of_war:
                     self.use_art_of_war()
@@ -276,6 +314,7 @@ class ResearchTask:
                 continue
 
             if ret in (32, 37):
+                self._resource_cooldown_until = time.monotonic() + self.resource_cooldown
                 self.notify(f"⚠️ Không đủ tài nguyên để nghiên cứu {target_tech.name}")
                 return "insufficient_resources"
 

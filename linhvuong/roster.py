@@ -147,46 +147,51 @@ _ROLES = {1: "van", 2: "vo"}
 def fetch_roster(
     gateway: GatewayClient,
     only_base_ids: Optional[Iterable[int]] = None,
+    include_civil: bool = True,
+    include_cities: bool = True,
 ) -> Roster:
     roster = Roster()
-    # 1. Lấy danh sách Thành chính từ Common.ashx?id=29
-    resp = gateway.call("Common.ashx", 29, {}) or {}
     cities_map = {}
-    for c in resp.get("city", []):
-        cid = int(c[0])
-        cities_map[cid] = City(id=cid, name=str(c[1]), type="Thành")
-    roster.cities = list(cities_map.values())
-
-    # 2. Bổ sung Doanh trại và tọa độ từ City.ashx?id=7 nếu có
     camps_map = {}
-    resp_c7 = gateway.call("City.ashx", 7, {"_": ""}) or {}
-    infos = resp_c7.get("infos") or resp_c7.get("citys", [])
-    if isinstance(infos, list):
-        for item in infos:
-            if isinstance(item, list) and len(item) > 7:
-                cid = int(item[1])
-                cname = str(item[2])
-                cx = int(item[4])
-                cy = int(item[5])
-                clevel = int(item[7])
-                ctype_val = int(item[8]) if len(item) > 8 else 1
-                is_camp = ctype_val not in (1, 2, 3, 4)
-                if is_camp:
-                    camps_map[cid] = City(
-                        id=cid, name=cname, type="Doanh trại", pos_x=cx, pos_y=cy, level=clevel
-                    )
-                elif cid in cities_map:
-                    cities_map[cid] = City(
-                        id=cid, name=cname, type="Thành", pos_x=cx, pos_y=cy, level=clevel
-                    )
+
+    if include_cities:
+        # 1. Lấy danh sách Thành chính từ Common.ashx?id=29
+        resp = gateway.call("Common.ashx", 29, {}) or {}
+        for c in resp.get("city", []):
+            cid = int(c[0])
+            cities_map[cid] = City(id=cid, name=str(c[1]), type="Thành")
         roster.cities = list(cities_map.values())
 
-    # 3. Quét danh sách Văn quan (type=1) và Võ tướng (type=2) từ Common.ashx?id=32
+        # 2. Bổ sung Doanh trại và tọa độ từ City.ashx?id=7 nếu có
+        resp_c7 = gateway.call("City.ashx", 7, {"_": ""}) or {}
+        infos = resp_c7.get("infos") or resp_c7.get("citys", [])
+        if isinstance(infos, list):
+            for item in infos:
+                if isinstance(item, list) and len(item) > 7:
+                    cid = int(item[1])
+                    cname = str(item[2])
+                    cx = int(item[4])
+                    cy = int(item[5])
+                    clevel = int(item[7])
+                    ctype_val = int(item[8]) if len(item) > 8 else 1
+                    is_camp = ctype_val not in (1, 2, 3, 4)
+                    if is_camp:
+                        camps_map[cid] = City(
+                            id=cid, name=cname, type="Doanh trại", pos_x=cx, pos_y=cy, level=clevel
+                        )
+                    elif cid in cities_map:
+                        cities_map[cid] = City(
+                            id=cid, name=cname, type="Thành", pos_x=cx, pos_y=cy, level=clevel
+                        )
+            roster.cities = list(cities_map.values())
+
+    # 3. Quét danh sách Văn quan (type=1, tùy chọn) và Võ tướng (type=2) từ Common.ashx?id=32
     raw_generals_by_cid: dict[int, list[tuple[int, list]]] = {}
     martial_cids: set[int] = set()
     city_ids = set(cities_map.keys())
+    types_to_fetch = (1, 2) if include_civil else (2,)
 
-    for type_ in (1, 2):
+    for type_ in types_to_fetch:
         resp = gateway.call("Common.ashx", 32, {"type": str(type_)}) or {}
         for entry in resp.get("list", []):
             cid = int(entry[0])

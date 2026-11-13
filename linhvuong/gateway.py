@@ -22,6 +22,7 @@ class GatewayClient:
         timeout: float = 30,
         relogin_callback: Optional[Callable[[], bool]] = None,
         proxy_pool: Optional[Any] = None,
+        max_failovers: int = 3,
     ):
         self.server_id = server_id
         self.session = session
@@ -30,8 +31,12 @@ class GatewayClient:
         self.timeout = timeout
         self.relogin_callback = relogin_callback
         self.proxy_pool = proxy_pool
+        self.max_failovers = max(0, int(max_failovers))
         self._relogin_lock = threading.Lock()
+        self._proxy_lock = threading.Lock()
         self._last_relogin_time = 0.0
+        self._map_cache: dict[int, tuple[float, dict]] = {}
+        self._map_cache_lock = threading.Lock()
         headers_attr = getattr(self.session, "headers", None)
         if headers_attr is not None and hasattr(headers_attr, "update"):
             try:
@@ -62,7 +67,7 @@ class GatewayClient:
     def base_url(self) -> str:
         return f"http://sg{self.server_id}.dipan.com"
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, referer: Optional[str] = None) -> dict[str, str]:
         return {
             "User-Agent": USER_AGENT,
             "Accept": "text/javascript, text/html, application/xml, text/xml, */*",
@@ -70,33 +75,46 @@ class GatewayClient:
             "X-Requested-With": "XMLHttpRequest",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Origin": self.base_url,
-            "Referer": self.base_url + "/",
+            "Referer": referer or (self.base_url + "/"),
         }
 
-    def call(self, endpoint: str, api_id: int, data: dict[str, Any]) -> Optional[dict]:
+    def call(
+        self,
+        endpoint: str,
+        api_id: int,
+        data: Any,
+        referer: Optional[str] = None,
+        query_suffix: Optional[str] = None,
+    ) -> Optional[dict]:
         """POST tới <endpoint>?id=<api_id>. Retry tuyến tính khi HTTP 502/503/504."""
         url = f"{self.base_url}/GateWay/{endpoint}?id={api_id}"
+        if query_suffix:
+            url = f"{url}&{query_suffix}"
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Request: POST {endpoint}?id={api_id} | Data: {data}")
 
+        headers = self._headers(referer=referer)
         relogin_attempted = False
+        failovers_used = 0
         attempt = 0
         while attempt < self.max_retries:
             attempt += 1
             try:
                 resp = self.session.post(
-                    url, data=data, headers=self._headers(), timeout=self.timeout
+                    url, data=data, headers=headers, timeout=self.timeout
                 )
             except Exception as e:
                 logger.warning(
                     f"Lỗi mạng khi gọi {endpoint}?id={api_id} (lần {attempt}/{self.max_retries}): {e}"
                 )
-                if self.proxy_pool and getattr(self.session, "proxies", None):
+                if self.proxy_pool and getattr(self.session, "proxies", None) and failovers_used < self.max_failovers:
                     err_str = str(e).lower()
                     if any(k in err_str for k in ("proxy", "connect", "timeout", "reset", "refused", "eof")):
                         logger.info("Phát hiện sự cố kết nối Proxy. Đang kích hoạt Proxy Failover...")
-                        new_ep = self.proxy_pool.failover(self.session)
+                        with self._proxy_lock:
+                            new_ep = self.proxy_pool.failover(self.session)
                         if new_ep:
+                            failovers_used += 1
                             logger.info(f"Đã chuyển sang proxy mới: {new_ep.display_name}. Đang thử lại yêu cầu...")
                             attempt -= 1
                             self._sleep(0.5)
@@ -105,10 +123,12 @@ class GatewayClient:
                 continue
 
             if resp.status_code in (502, 504):
-                if self.proxy_pool and getattr(self.session, "proxies", None):
+                if self.proxy_pool and getattr(self.session, "proxies", None) and failovers_used < self.max_failovers:
                     logger.warning(f"Máy chủ/Proxy trả về HTTP {resp.status_code}. Đang kích hoạt Proxy Failover...")
-                    new_ep = self.proxy_pool.failover(self.session)
+                    with self._proxy_lock:
+                        new_ep = self.proxy_pool.failover(self.session)
                     if new_ep:
+                        failovers_used += 1
                         logger.info(f"Đã chuyển sang proxy mới: {new_ep.display_name}. Đang thử lại yêu cầu...")
                         attempt -= 1
                         self._sleep(0.5)
@@ -201,6 +221,33 @@ class GatewayClient:
         )
         return None
 
-    def map_view(self, mid: int) -> Optional[dict]:
-        """Map.ashx?id=6: các thực thể quanh một Mid."""
-        return self.call("Map.ashx", 6, {"mid": str(mid), "_": ""})
+    def invalidate_map_cache(self, mid: Optional[int] = None) -> None:
+        """Xóa cache Map.ashx?id=6 cho một mid hoặc toàn bộ bản đồ."""
+        with self._map_cache_lock:
+            if mid is None:
+                self._map_cache.clear()
+            else:
+                self._map_cache.pop(int(mid), None)
+
+    def map_view(self, mid: int, cache_ttl: float = 0.0) -> Optional[dict]:
+        """Map.ashx?id=6: các thực thể quanh một Mid. Có hỗ trợ TTL cache chia sẻ giữa các runner."""
+        mid_int = int(mid)
+        if cache_ttl > 0:
+            now = time.monotonic()
+            with self._map_cache_lock:
+                entry = self._map_cache.get(mid_int)
+                if entry is not None and (now - entry[0]) < cache_ttl:
+                    return entry[1]
+
+        data = self.call("Map.ashx", 6, {"mid": str(mid_int), "_": ""})
+        if cache_ttl > 0 and data is not None:
+            now = time.monotonic()
+            with self._map_cache_lock:
+                if len(self._map_cache) > 1000:
+                    expired = [k for k, (ts, _) in self._map_cache.items() if (now - ts) >= cache_ttl]
+                    for k in expired:
+                        self._map_cache.pop(k, None)
+                    if len(self._map_cache) > 1000:
+                        self._map_cache.clear()
+                self._map_cache[mid_int] = (now, data)
+        return data

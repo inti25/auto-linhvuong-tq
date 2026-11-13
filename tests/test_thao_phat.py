@@ -137,13 +137,11 @@ def test_auto_runner_execution_and_stop():
     c32_busy = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 24, 4, 100, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": c76,
         "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_busy,
-            {"ret": 0, "list": []}, c32_idle,
+            c32_idle,  # Bước 1
+            c32_busy,  # Bước 5 iter 1 (đang bận)
+            c32_idle,  # Bước 5 iter 2 (về thành)
         ],
         "OPT.ashx?id=6": {"ret": 0},
         "OPT.ashx?id=47": {"ret": 0},
@@ -167,6 +165,7 @@ def test_auto_runner_execution_and_stop():
         log_fn=lambda m: logs.append(m),
         check_interval=0.01,
     )
+    runner.wait_cycle = lambda s, jitter=2.0: stop_event.wait(min(s, 0.01))
 
     def stopper():
         for _ in range(100):
@@ -324,12 +323,8 @@ def test_auto_runner_proactive_recruits_when_insufficient():
     c27 = {"ret": 0, "list": [[15230, "NB", 2]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": c76,
-        "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_idle,
-        ],
+        "Common.ashx?id=32": c32_idle,
         "Common.ashx?id=27": c27,
         "OPT.ashx?id=41": {"ret": 0},
         "OPT.ashx?id=6": {"ret": 0},
@@ -391,22 +386,13 @@ def test_auto_runner_waits_for_morale_upgrade_and_rechecks():
     c32_high_morale = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 95, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": [
-            c76_initial,    # Bước 1: kiểm tra rảnh rỗi
-            c76_initial,    # Bước 2: chuẩn bị biên chế
-            c76_initial,    # Bước 3 iter 1: phát hiện morale 85 < 95 (up_t=0) -> gọi adjust_morale
+            c76_initial,    # Bước 1: kiểm tra rảnh rỗi + lấy sĩ khí 85 (< 95, up_t=0) -> gọi adjust_morale
             c76_upgrading,  # Bước 3 iter 2: kiểm tra nâng sĩ khí (5s <= 300s, 85+10=95 >= 95 -> OK)
-            c76_upgrading,  # Kiểm tra lại trước khi xuất quân (5s <= 300s -> sẵn sàng)
-            c76_done,       # Bước 5: Theo dõi sau xuất quân
         ],
         "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_low_morale,  # Bước 1
-            {"ret": 0, "list": []}, c32_low_morale,  # Bước 2
-            {"ret": 0, "list": []}, c32_low_morale,  # Bước 3 iter 1
-            {"ret": 0, "list": []}, c32_low_morale,  # Bước 3 iter 2
-            {"ret": 0, "list": []}, c32_low_morale,  # Kiểm tra lại
-            {"ret": 0, "list": []}, c32_high_morale, # Bước 5
+            c32_low_morale,   # Bước 1
+            c32_high_morale,  # Bước 5
         ],
         "OPT.ashx?id=47": {"ret": 0},
         "OPT.ashx?id=62": {"ret": 0},
@@ -471,23 +457,12 @@ def test_auto_runner_waits_when_morale_upgrade_exceeds_travel_time():
     c32_low = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 85, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": [
-            c76_initial,   # Bước 1
-            c76_initial,   # Bước 2
-            c76_too_long,  # Bước 3 wait loop lần 1 (350s > 300s)
-            c76_ready,     # Bước 3 wait loop lần 2 (300s <= 300s)
-            c76_ready,     # Kiểm tra lại (300s <= 300s)
-            c76_ready,     # Bước 5
+            c76_initial,   # Bước 1 (up_t=0, morale 85 < 95 -> gọi adjust_morale)
+            c76_too_long,  # Bước 3 iter 2 (350s > 300s -> chờ)
+            c76_ready,     # Bước 3 iter 3 (300s <= 300s -> sẵn sàng)
         ],
-        "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_low,
-            {"ret": 0, "list": []}, c32_low,
-            {"ret": 0, "list": []}, c32_low,
-            {"ret": 0, "list": []}, c32_low,
-            {"ret": 0, "list": []}, c32_low,
-            {"ret": 0, "list": []}, c32_low,
-        ],
+        "Common.ashx?id=32": c32_low,
         "OPT.ashx?id=47": {"ret": 0},
         "OPT.ashx?id=62": {"ret": 0},
     }
@@ -553,26 +528,15 @@ def test_auto_runner_waits_when_morale_upgrade_does_not_reach_min():
     c32_m100 = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 100, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": [
-            c76_initial,     # Bước 1
-            c76_initial,     # Bước 2
-            c76_initial,     # Bước 3 iter 1: phát hiện 84 < 95 (up_t=0) -> kích hoạt nâng lần 1
+            c76_initial,     # Bước 1: phát hiện 84 < 95 (up_t=0) -> kích hoạt nâng lần 1
             c76_up1_active,  # Bước 3 iter 2: đang nâng lần 1 (100s, projected=94 < 95 -> chờ)
             c76_up1_done,    # Bước 3 iter 3: lần 1 xong (up_t=0, sĩ khí 94) -> kích hoạt nâng lần 2
             c76_up2_active,  # Bước 3 iter 4: đang nâng lần 2 (100s <= 300s, projected=100 >= 95 -> OK)
-            c76_up2_active,  # Kiểm tra lại (100s <= 300s, 94+10=100 >= 95 -> Sẵn sàng)
-            c76_done,        # Bước 5
         ],
         "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_m84,   # Bước 1
-            {"ret": 0, "list": []}, c32_m84,   # Bước 2
-            {"ret": 0, "list": []}, c32_m84,   # Bước 3 iter 1
-            {"ret": 0, "list": []}, c32_m84,   # Bước 3 iter 2
-            {"ret": 0, "list": []}, c32_m94,   # Bước 3 iter 3 (sĩ khí đã lên 94)
-            {"ret": 0, "list": []}, c32_m94,   # Bước 3 iter 4
-            {"ret": 0, "list": []}, c32_m94,   # Kiểm tra lại
-            {"ret": 0, "list": []}, c32_m100,  # Bước 5
+            c32_m84,   # Bước 1
+            c32_m100,  # Bước 5
         ],
         "OPT.ashx?id=47": {"ret": 0},
         "OPT.ashx?id=62": {"ret": 0},
@@ -645,23 +609,12 @@ def test_auto_runner_detects_diluted_morale_after_troop_recruitment():
     c32_stale_97 = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 97, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": [
             c76_before_recruit,  # Bước 1
-            c76_before_recruit,  # Bước 2
-            c76_after_recruit,   # Bước 3 iter 1: phát hiện sĩ khí thực tế trong id=76 đã giảm còn 85 < 95!
+            c76_after_recruit,   # Bước 3 iter 1 (do vừa bổ sung quân): phát hiện sỹ khí giảm còn 85 < 95
             c76_upgrading,       # Bước 3 iter 2: sau khi gọi nâng sĩ khí (5s <= 300s)
-            c76_upgrading,       # Kiểm tra lại (5s <= 300s -> Sẵn sàng)
-            c76_done,            # Bước 5
         ],
-        "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_stale_97,  # Bước 1
-            {"ret": 0, "list": []}, c32_stale_97,  # Bước 2
-            {"ret": 0, "list": []}, c32_stale_97,  # Bước 3 iter 1 (trong id=32 vẫn là 97 cũ)
-            {"ret": 0, "list": []}, c32_stale_97,  # Bước 3 iter 2
-            {"ret": 0, "list": []}, c32_stale_97,  # Kiểm tra lại
-            {"ret": 0, "list": []}, c32_stale_97,  # Bước 5
-        ],
+        "Common.ashx?id=32": c32_stale_97,
         "Common.ashx?id=27": {"ret": 0, "list": [[15230, "NB", 100]]},
         "OPT.ashx?id=6": {"ret": 0},
         "OPT.ashx?id=47": {"ret": 0},
@@ -722,13 +675,11 @@ def test_thao_phat_auto_runner_tracks_battle_logs():
     c32_busy = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 24, 4, 100, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": c76,
         "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_busy,
-            {"ret": 0, "list": []}, c32_idle,
+            c32_idle,  # Bước 1
+            c32_busy,  # Bước 5 iter 1
+            c32_idle,  # Bước 5 iter 2
         ],
         "Common.ashx?id=27": {"ret": 0, "list": [[15230, "Thành Chính", 500, 10, 20, 30]]},
         "OPT.ashx?id=62": {"ret": 0},
@@ -782,6 +733,7 @@ def test_thao_phat_auto_runner_tracks_battle_logs():
         log_fn=lambda m: logs.append(m),
         check_interval=0.01,
     )
+    runner.wait_cycle = lambda s, jitter=2.0: stop_event.wait(min(s, 0.01))
 
     def stopper():
         for _ in range(100):
@@ -826,13 +778,11 @@ def test_thao_phat_runner_skips_troop_refill_when_auto_recruit_false():
     c32_busy = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 24, 4, 100, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": c76,
         "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_busy,
-            {"ret": 0, "list": []}, c32_idle,
+            c32_idle,  # Bước 1
+            c32_busy,  # Bước 5 iter 1 (đang bận)
+            c32_idle,  # Bước 5 iter 2 (về thành)
         ],
         "OPT.ashx?id=6": {"ret": 0},
         "OPT.ashx?id=47": {"ret": 0},
@@ -856,6 +806,7 @@ def test_thao_phat_runner_skips_troop_refill_when_auto_recruit_false():
         log_callback=lambda m: logs.append(m),
         check_interval=0.01,
     )
+    runner.wait_cycle = lambda s, jitter=2.0: stop_event.wait(min(s, 0.01))
 
     def stopper():
         for _ in range(50):
@@ -882,12 +833,8 @@ def test_thao_phat_runner_skips_morale_upgrade_when_auto_morale_false():
     c32_idle = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 100, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": c76,
-        "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_idle,
-        ],
+        "Common.ashx?id=32": c32_idle,
     }
     server = FakeServer(responses)
     client = GatewayClient(57, server, sleep=lambda s: None)
@@ -950,13 +897,11 @@ def test_thao_phat_battle_track_real_interval_regression_time_import():
     c32_busy = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 24, 4, 100, 240, 240]]]]}
 
     responses = {
-        "Common.ashx?id=29": c29,
         "Common.ashx?id=76": c76,
         "Common.ashx?id=32": [
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_idle,
-            {"ret": 0, "list": []}, c32_busy,
-            {"ret": 0, "list": []}, c32_idle,
+            c32_idle,  # Bước 1
+            c32_busy,  # Bước 5 iter 1
+            c32_idle,  # Bước 5 iter 2
         ],
         "Common.ashx?id=27": {"ret": 0, "list": [[15230, "Thành Chính", 500, 10, 20, 30]]},
         "OPT.ashx?id=62": {"ret": 0},
@@ -1000,6 +945,62 @@ def test_thao_phat_battle_track_real_interval_regression_time_import():
     # Kiểm tra log xem có dòng ngoại lệ NameError: name 'time' is not defined không
     error_logs = [l for l in logs if "❌ Ngoại lệ trong vòng lặp Thảo Phạt" in l]
     assert not any("name 'time' is not defined" in l for l in error_logs)
+
+
+def test_thao_phat_reduced_server_requests():
+    """Đảm bảo 1 lượt Thảo Phạt đủ quân + đủ sĩ khí chỉ gửi tối thiểu request (không gọi id=29, id=7, id=32 type=1)."""
+    c76 = {"ret": 0, "list": [[15230, "NB", [[417506, "廉复卢", 0, "", 0, 100, 0, 100, 0, 100, 0, 501]]]]}
+    c32_idle = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 0, 4, 100, 240, 240]]]]}
+    c32_busy = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "廉复卢", "", 2, 0, 24, 4, 100, 240, 240]]]]}
+
+    responses = {
+        "Common.ashx?id=76": c76,
+        "Common.ashx?id=32": [c32_idle, c32_busy, c32_idle],
+        "OPT.ashx?id=62": {"ret": 0},
+    }
+    server = FakeServer(responses)
+    client = GatewayClient(57, server, sleep=lambda s: None)
+    stop_event = threading.Event()
+    runner = ThaoPhatAutoRunner(
+        gateway=client,
+        city_id=15230,
+        task_id=0,
+        general_ids=[417506],
+        target_army=TargetArmy(infantry=100, cavalry=0, archers=100),
+        min_morale=95,
+        stop_event=stop_event,
+        check_interval=0.01,
+    )
+    def _wait_cycle_or_stop(s, jitter=2.0):
+        if runner.completed_cycles >= 1:
+            stop_event.set()
+            return True
+        return stop_event.wait(0.01)
+
+    runner.wait_cycle = _wait_cycle_or_stop
+
+    def stopper():
+        for _ in range(100):
+            if runner.completed_cycles >= 1:
+                stop_event.set()
+                break
+            time.sleep(0.01)
+        stop_event.set()
+
+    t = threading.Thread(target=stopper)
+    t.start()
+    runner.run()
+    t.join()
+
+    assert runner.completed_cycles == 1
+    endpoints = [c[0] for c in server.calls]
+    assert "Common.ashx?id=29" not in endpoints
+    assert "City.ashx?id=7" not in endpoints
+    # Không gọi Common.ashx?id=32 type=1
+    c32_types = [d.get("type") for ep, d in server.calls if ep == "Common.ashx?id=32"]
+    assert "1" not in c32_types
+    # Chỉ gọi API 76 đúng 1 lần trong Bước 1 (Bước 2, 3, Kiểm tra lại, Bước 5 đều không gọi lại)
+    assert endpoints.count("Common.ashx?id=76") == 1
 
 
 

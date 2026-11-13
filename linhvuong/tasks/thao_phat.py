@@ -22,7 +22,7 @@ from ..battle import BattleController
 from ..gateway import GatewayClient
 from ..roster import Army, fetch_roster
 from ..troops import ArmyProvisioner, ERROR_MESSAGES, TargetArmy
-from .base import TaskContext, attack
+from .base import TaskContext, attack, inspect_general_statuses
 from .morale import MoraleTrainer
 
 # Bản đồ nhiệm vụ chuẩn từ ZMan.exe
@@ -282,9 +282,16 @@ class ThaoPhatAutoRunner:
                 all_ready = False
                 last_logged_busy = None
                 last_logged_upgrading = None
+                _only_bases = [self.city_id] if self.city_id else None
+                roster = None
+                city_gens = {}
                 while not self.stop_event.is_set() and not all_ready:
-                    _only_bases = [self.city_id] if self.city_id else None
-                    roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
+                    roster = fetch_roster(
+                        self.gateway,
+                        only_base_ids=_only_bases,
+                        include_civil=False,
+                        include_cities=False,
+                    )
                     city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
 
                     busy_list = []
@@ -337,15 +344,12 @@ class ThaoPhatAutoRunner:
 
                     all_ready = True
 
-                if self.stop_event.is_set():
+                if self.stop_event.is_set() or roster is None:
                     break
 
                 # -------------------------------------------------------------
-                # BƯỚC 2: Bổ sung quân số cho từng tướng (nếu thiếu)
+                # BƯỚC 2: Bổ sung quân số cho từng tướng (nếu thiếu), tái sử dụng roster từ Bước 1
                 # -------------------------------------------------------------
-                _only_bases = [self.city_id] if self.city_id else None
-                roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
-                city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
                 recruit_failed = False
                 troops_added = False
 
@@ -427,28 +431,42 @@ class ThaoPhatAutoRunner:
                 # -------------------------------------------------------------
                 first_morale_check = True
                 last_logged_morale_wait = None
+                morale_trainer = MoraleTrainer(self.gateway)
+                need_morale_refresh = troops_added
+                morale_state: dict[int, tuple[str, int, int]] = {}
                 while not self.stop_event.is_set():
-                    _only_bases = [self.city_id] if self.city_id else None
-                    fresh_roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
-                    city_gens = {g.id: g for g in fresh_roster.generals_of(self.city_id)}
+                    if need_morale_refresh:
+                        api76_info = morale_trainer.get_city_generals_morale_info(self.city_id) if self.city_id else {}
+                        for gid in self.general_ids:
+                            g = city_gens.get(gid)
+                            gname = g.name if g else str(gid)
+                            if gid in api76_info:
+                                cur_m, up_t = api76_info[gid]
+                            else:
+                                cur_m = g.morale if g else 0
+                                up_t = g.upgrading_time if g else 0
+                            morale_state[gid] = (gname, cur_m, up_t)
+                    else:
+                        for gid in self.general_ids:
+                            g = city_gens.get(gid)
+                            gname = g.name if g else str(gid)
+                            cur_m = g.morale if g else 0
+                            up_t = g.upgrading_time if g else 0
+                            morale_state[gid] = (gname, cur_m, up_t)
+                    need_morale_refresh = True
 
                     if first_morale_check:
                         first_morale_check = False
                         self.log(f"🔍 [Sĩ khí] Kiểm tra sỹ khí của các tướng (mục tiêu >= {self.min_morale}):")
                         for gid in self.general_ids:
-                            g = city_gens.get(gid)
-                            gname = g.name if g else str(gid)
-                            cur_m = g.morale if g else 0
+                            gname, cur_m, _ = morale_state[gid]
                             self.log(f"   👉 Tướng {gname}: Sĩ khí hiện tại là {cur_m}/{self.min_morale}")
 
                     all_morale_ready = True
                     wait_needed = []
 
                     for gid in self.general_ids:
-                        g = city_gens.get(gid)
-                        gname = g.name if g else str(gid)
-                        cur_morale = g.morale if g else 0
-                        up_t = g.upgrading_time if g else 0
+                        gname, cur_morale, up_t = morale_state[gid]
 
                         if cur_morale >= self.min_morale:
                             continue
@@ -510,19 +528,13 @@ class ThaoPhatAutoRunner:
                     break
 
                 # -------------------------------------------------------------
-                # KIỂM TRA LẠI: Xác nhận sĩ khí đạt chuẩn trước khi xuất quân
+                # KIỂM TRA LẠI: Xác nhận sĩ khí đạt chuẩn trước khi xuất quân (tái sử dụng morale_state)
                 # -------------------------------------------------------------
-                _only_bases = [self.city_id] if self.city_id else None
-                fresh_roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
-                city_gens = {g.id: g for g in fresh_roster.generals_of(self.city_id)}
                 morale_ready = True
 
                 self.log("🔍 [Kiểm tra lại] Đánh giá sỹ khí và thời gian hành quân trước khi xuất quân:")
                 for gid in self.general_ids:
-                    g = city_gens.get(gid)
-                    gname = g.name if g else str(gid)
-                    cur_morale = g.morale if g else 0
-                    up_t = g.upgrading_time if g else 0
+                    gname, cur_morale, up_t = morale_state.get(gid, (str(gid), 0, 0))
                     projected = min(100, cur_morale + 10)
 
                     if cur_morale >= self.min_morale:
@@ -635,15 +647,8 @@ class ThaoPhatAutoRunner:
                         break
 
                 while not self.stop_event.is_set():
-                    _only_bases = [self.city_id] if self.city_id else None
-                    roster = fetch_roster(self.gateway, only_base_ids=_only_bases)
-                    city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
-
-                    busy_count = 0
-                    for gid in self.general_ids:
-                        g = city_gens.get(gid)
-                        if g and g.status != 0:
-                            busy_count += 1
+                    statuses = inspect_general_statuses(self.gateway, self.general_ids)
+                    busy_count = sum(1 for gid in self.general_ids if statuses.get(gid, 0) != 0)
 
                     if busy_count == 0:
                         self.completed_cycles += 1

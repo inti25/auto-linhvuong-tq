@@ -13,7 +13,7 @@ Reverse engineered chính xác từ ZBuild.exe:
 
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from ..gateway import GatewayClient
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
@@ -208,6 +208,14 @@ class BuildingTask:
         self.on_sync_data = on_sync_data
         self.skipped_pids: set[int] = set()
         self.deferred_pids: set[int] = set()
+        self.comfort_interval: float = 300.0
+        self.resource_cooldown: float = 90.0
+        self._busy_until: float = 0.0
+        self._boost_until: float = 0.0
+        self._comfort_next_check: float = 0.0
+        self._resource_cooldown_until: float = 0.0
+        self._c77_cache_external: bool = False
+        self._c77_from_shared_cache: bool = False
 
     def reset_skipped(self):
         """Xóa danh sách các slot công trình tạm thời bị bỏ qua."""
@@ -231,14 +239,38 @@ class BuildingTask:
         if not force and cached is not None and (now - cached_time < 3.0):
             return cached
 
-        resp = self.gateway.call("Common.ashx", 77, {"cid": str(self.city_id), "_": ""}) or {}
+        resp = self.gateway.call("Common.ashx", 77, {"cid": str(self.city_id), "_": ""})
+        self._c77_from_shared_cache = False
+        if not isinstance(resp, dict) or not resp:
+            self._c77_cache = None
+            return {}
+
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
-        self._c77_cache = resp
-        self._c77_cache_time = now
+        if ret == RET_OK:
+            self._c77_cache = resp
+            self._c77_cache_time = now
+        else:
+            self._c77_cache = None
         return resp
+
+    def set_c77_cache(self, resp: dict, fetched_at: Optional[float] = None) -> None:
+        """Tiêm kết quả Common.ashx?id=77 dùng chung giữa các thành trong cùng chu kỳ."""
+        self._c77_cache = resp
+        self._c77_cache_time = fetched_at if fetched_at is not None else time.time()
+        self._c77_cache_external = True
+        self._c77_from_shared_cache = True
+
+    @staticmethod
+    def _extract_slot_remaining_seconds(item: Any) -> int:
+        if isinstance(item, (list, tuple)):
+            return parse_remaining_seconds(item[4]) if len(item) >= 5 else 0
+        if isinstance(item, dict):
+            raw_time = item.get("time_left") if item.get("time_left") is not None else item.get("time")
+            return parse_remaining_seconds(raw_time)
+        return 0
 
     def check_and_activate_boost(self) -> bool:
         """Kiểm tra thời gian DS kiến trúc (xây 3 nhà), kích hoạt nếu hết hạn."""
@@ -247,6 +279,9 @@ class BuildingTask:
 
         resp = self._fetch_c77()
         remaining = parse_boost_remaining_time(resp, self.city_id)
+        if remaining > 0:
+            self._boost_until = time.monotonic() + min(float(remaining), 1800.0)
+            return True
         if remaining <= 0:
             now_ts = time.time()
             if now_ts - BuildingTask._last_boost_act_time < 60:
@@ -266,6 +301,7 @@ class BuildingTask:
                 raise CaptchaRequired()
             if ret == RET_OK:
                 self._log("✅ Kích hoạt thành công DS kiến trúc (3 vị trí thi công)!")
+                self._boost_until = time.monotonic() + 1800.0
                 return True
             else:
                 self._log(f"⚠️ Kích hoạt DS kiến trúc thất bại (mã {ret}).")
@@ -291,6 +327,7 @@ class BuildingTask:
             morale = int(resp.get("morale", 100))
             anger = int(resp.get("anger", 0))
 
+        now_mono = time.monotonic()
         if morale < 90 or anger > 0:
             self._log(f"🕊️ Sĩ khí ({morale}%) thấp hoặc dân nộ ({anger}), tiến hành An Dân...")
             comfort_resp = self.gateway.call(
@@ -298,14 +335,20 @@ class BuildingTask:
                 4,
                 {"lType": "1", "tid": str(self.city_id), "_": ""},
             ) or {}
+            self._comfort_next_check = now_mono + 30.0
             return comfort_resp.get("ret", RET_OK) == RET_OK
+        self._comfort_next_check = now_mono + self.comfort_interval
         return True
 
-    def get_active_upgrade_slots(self) -> list:
-        """Lấy danh sách các slot đang nâng cấp dở trong thành."""
-        resp = self._fetch_c77()
+    def _parse_c77_slots(self, resp: dict) -> Optional[list]:
+        """Trích xuất danh sách slot nâng cấp cho city_id từ Common.ashx?id=77, trả về None nếu không tìm thấy/lỗi."""
+        if not isinstance(resp, dict) or not resp or resp.get("ret", -1) != RET_OK:
+            return None
 
-        city_list = resp.get("list", [])
+        city_list = resp.get("list")
+        if not isinstance(city_list, list):
+            return None
+
         for city_info in city_list:
             if isinstance(city_info, dict):
                 # Hỗ trợ cấu trúc mock trong test
@@ -315,10 +358,41 @@ class BuildingTask:
                     upgrades = city_info[4]
                     if isinstance(upgrades, list):
                         return upgrades
+        return None
+
+    def _fetch_active_upgrade_slots(self, force: bool = False) -> tuple[list, bool]:
+        """Đọc danh sách slot đang thi công kèm cờ thành công để tránh gửi trùng lệnh khi API lỗi."""
+        was_shared = bool(getattr(self, "_c77_from_shared_cache", False))
+        resp = self._fetch_c77(force=force)
+        slots = self._parse_c77_slots(resp)
+        if slots is not None:
+            return slots, True
+
+        # Nếu cache dùng chung từ thành khác không chứa thành này (hoặc lỗi), hỏi trực tiếp theo city_id
+        if was_shared and not force:
+            resp = self._fetch_c77(force=True)
+            slots = self._parse_c77_slots(resp)
+            if slots is not None:
+                return slots, True
 
         # Fallback qua Build.ashx?id=2
-        fb_resp = self.gateway.call("Build.ashx", 2, {"pid": "8", "gid": "1", "tab": "2", "tid": str(self.city_id), "_": ""}) or {}
-        return fb_resp.get("list", [])
+        fb_resp = self.gateway.call(
+            "Build.ashx", 2, {"pid": "8", "gid": "1", "tab": "2", "tid": str(self.city_id), "_": ""}
+        )
+        if not isinstance(fb_resp, dict) or not fb_resp:
+            return [], False
+        fb_ret = fb_resp.get("ret", -1)
+        if fb_ret == 110 or fb_ret == RET_CAPTCHA_REQUIRED:
+            raise CaptchaRequired()
+        if fb_ret != RET_OK:
+            return [], False
+        fb_list = fb_resp.get("list", [])
+        return (fb_list if isinstance(fb_list, list) else []), True
+
+    def get_active_upgrade_slots(self, force: bool = False) -> list:
+        """Lấy danh sách các slot đang nâng cấp dở trong thành."""
+        slots, _ = self._fetch_active_upgrade_slots(force=force)
+        return slots
 
     def get_real_buildings(self) -> dict[int, dict]:
         """Lấy danh sách công trình hiện có: {pid: {"gid": gid, "level": level, "name": name}}."""
@@ -515,14 +589,28 @@ class BuildingTask:
         return False
 
     def run_once(self) -> str:
-        self._c77_cache = None
+        now_mono = time.monotonic()
+        if self._c77_cache_external:
+            self._c77_cache_external = False
+        else:
+            self._c77_cache = None
+            self._c77_from_shared_cache = False
         self._storage_full = False
+
+        # Bỏ qua cục bộ thông minh khi tất cả slot đều đang thi công và chưa bật tăng tốc
+        if not self.auto_speedup and getattr(self, "_synced_once", False) and now_mono < self._busy_until:
+            if self.auto_comfort and now_mono >= self._comfort_next_check:
+                self.check_and_comfort_city()
+            if self.auto_boost and now_mono >= self._boost_until:
+                self.check_and_activate_boost()
+            return "slots_busy"
+
         # 1. Kích hoạt Boost nếu được cấu hình
-        if self.auto_boost:
+        if self.auto_boost and now_mono >= self._boost_until:
             self.check_and_activate_boost()
 
-        # 2. An dân nếu sĩ khí thấp
-        if self.auto_comfort:
+        # 2. An dân nếu sĩ khí thấp (giới hạn tần suất bằng comfort_interval)
+        if self.auto_comfort and now_mono >= self._comfort_next_check:
             self.check_and_comfort_city()
 
         # 3. Tự động tăng tốc các slot đang thi công theo cơ chế ZBuild
@@ -530,8 +618,12 @@ class BuildingTask:
             self.process_speedup()
 
         # 4. Kiểm tra các slot nâng cấp đang bận
-        active_slots = self.get_active_upgrade_slots()
+        active_slots, slots_ok = self._fetch_active_upgrade_slots()
+        if not slots_ok:
+            self._log("⚠️ Không đọc được danh sách công trình đang thi công từ máy chủ, bỏ qua lượt xây này.")
+            return "slots_read_failed"
         if len(active_slots) >= self.max_slots:
+            self._update_busy_until(active_slots)
             if not getattr(self, "_synced_once", False):
                 try:
                     rb = self.get_real_buildings()
@@ -542,6 +634,7 @@ class BuildingTask:
                     pass
             return "slots_busy"
 
+        self._busy_until = 0.0
         available_slots = self.max_slots - len(active_slots)
         if available_slots <= 0:
             if not getattr(self, "_synced_once", False):
@@ -553,6 +646,14 @@ class BuildingTask:
                 except Exception:
                     pass
             return "slots_busy"
+
+        # Nếu vừa thiếu tài nguyên toàn thành (không tự mở rương), nghỉ cooldown trước khi spam lại id=65
+        if (
+            not self.auto_open_box
+            and getattr(self, "_synced_once", False)
+            and now_mono < self._resource_cooldown_until
+        ):
+            return "insufficient_resources"
 
         # 4. Lấy danh sách công trình thực tế
         real_buildings = self.get_real_buildings()
@@ -611,7 +712,8 @@ class BuildingTask:
 
         ordered_plans = normal_plans + deferred_plans
 
-        while processed_count < available_slots:
+        abort_loop = False
+        while processed_count < available_slots and not abort_loop:
             starved_pids = set()
             built_any_in_pass = False
 
@@ -652,8 +754,8 @@ class BuildingTask:
                         "tid": str(self.city_id),
                         "_": "",
                     },
-                ) or {}
-                ret = resp.get("ret", RET_OK)
+                )
+                ret = resp.get("ret", RET_OK) if isinstance(resp, dict) and resp else -1
                 if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
                     raise CaptchaRequired()
 
@@ -702,9 +804,20 @@ class BuildingTask:
                     self.skipped_pids.add(plan.pid)
                     if not last_error:
                         last_error = f"{'upgrade' if action_type == 1 else 'downgrade'}_failed:{ret}"
+                    # Kiểm tra lại số slot đang thi công từ máy chủ: nếu hàng đợi thực tế đã đầy thì dừng ngay
+                    recheck_slots, recheck_ok = self._fetch_active_upgrade_slots(force=True)
+                    if not recheck_ok:
+                        abort_loop = True
+                        break
+                    if len(recheck_slots) >= self.max_slots:
+                        self._update_busy_until(recheck_slots)
+                        if processed_count > 0:
+                            abort_loop = True
+                            break
+                        return "slots_busy"
                     continue
 
-            if processed_count >= available_slots:
+            if abort_loop or processed_count >= available_slots:
                 break
 
             if built_any_in_pass:
@@ -730,10 +843,12 @@ class BuildingTask:
 
         # 6. Tổng kết kết quả sau vòng lặp
         if processed_count > 0:
+            self._resource_cooldown_until = 0.0
             self.skipped_pids.clear()
             return "upgrading"
 
         if not has_uncompleted:
+            self._resource_cooldown_until = 0.0
             return "all_buildings_completed"
 
         if not has_eligible_candidate and self.skipped_pids:
@@ -741,8 +856,20 @@ class BuildingTask:
             if not last_error:
                 last_error = "all_eligible_buildings_skipped"
 
+        if last_error == "insufficient_resources" and not self.auto_open_box:
+            self._resource_cooldown_until = time.monotonic() + self.resource_cooldown
+
         if last_error:
             return last_error
 
         return "slots_busy"
+
+    def _update_busy_until(self, active_slots: list) -> None:
+        if self.auto_speedup or not active_slots:
+            return
+        remaining_times = [
+            t for t in (self._extract_slot_remaining_seconds(s) for s in active_slots) if t > 0
+        ]
+        if remaining_times:
+            self._busy_until = time.monotonic() + min(float(min(remaining_times)), 1800.0)
 

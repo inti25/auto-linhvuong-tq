@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from .gateway import GatewayClient
+
 logger = logging.getLogger("linhvuong.battle")
 
 FORMATION_NAMES = {
@@ -411,9 +413,23 @@ class BattleEngine:
         self,
         endpoint: str,
         api_id: int,
-        payload: dict[str, Any],
+        payload: Any,
         referer_path: str = "/",
+        query_suffix: Optional[str] = None,
     ) -> Optional[dict]:
+        referer = f"{self.gateway.base_url}{referer_path}"
+        if isinstance(self.gateway, GatewayClient):
+            try:
+                return self.gateway.call(
+                    endpoint,
+                    api_id,
+                    payload,
+                    referer=referer,
+                    query_suffix=query_suffix,
+                )
+            except Exception:
+                return None
+
         gw_call = getattr(self.gateway, "call", None)
         sess = getattr(self.gateway, "session", None)
         if callable(gw_call) and (sess is None or not hasattr(sess, "post")):
@@ -423,11 +439,15 @@ class BattleEngine:
                 return None
 
         headers = self.gateway._headers()
-        headers["Referer"] = f"{self.gateway.base_url}{referer_path}"
+        headers["Referer"] = referer
         headers["Origin"] = self.gateway.base_url
         url = f"{self.gateway.base_url}/GateWay/{endpoint}?id={api_id}"
-        max_retries = getattr(self.gateway, "max_retries", 3)
-        timeout = getattr(self.gateway, "timeout", 15)
+        if query_suffix:
+            url = f"{url}&{query_suffix}"
+        mr = getattr(self.gateway, "max_retries", 3)
+        max_retries = mr if isinstance(mr, int) else 3
+        to = getattr(self.gateway, "timeout", 15)
+        timeout = to if isinstance(to, (int, float)) else 15
         for _ in range(max_retries):
             try:
                 resp = self.gateway.session.post(
@@ -454,86 +474,49 @@ class BattleEngine:
 
     def get_campaign_status(self) -> Optional[dict]:
         """Lấy thông tin chiến dịch / Thảo Phạt từ Common.ashx?id=3."""
-        r = random.random()
-        url = f"{self.gateway.base_url}/GateWay/Common.ashx?id=3&{r}"
-        headers = self.gateway._headers()
-        headers["Referer"] = f"{self.gateway.base_url}/report"
-        headers["Origin"] = self.gateway.base_url
-
-        max_retries = getattr(self.gateway, "max_retries", 3)
-        timeout = getattr(self.gateway, "timeout", 15)
-        for _ in range(max_retries):
-            try:
-                resp = self.gateway.session.post(url, data="", headers=headers, timeout=timeout)
-                if resp.status_code == 200:
-                    return resp.json()
-            except Exception:
-                pass
-        return None
+        return self._post_gateway(
+            "Common.ashx",
+            3,
+            "",
+            referer_path="/report",
+            query_suffix=str(random.random()),
+        )
 
     def get_battle_info(self, battle_id: int = 0) -> Optional[BattleState]:
         """Lấy thông tin chi tiết chiến trường từ OPT.ashx?id=24."""
-        headers = self.gateway._headers()
-        headers["Referer"] = f"{self.gateway.base_url}/battle/{battle_id}"
-        headers["Origin"] = self.gateway.base_url
-
-        url = f"{self.gateway.base_url}/GateWay/OPT.ashx?id=24"
-        mr = getattr(self.gateway, "max_retries", 3)
-        max_retries = mr if isinstance(mr, int) else 3
-        to = getattr(self.gateway, "timeout", 15)
-        timeout = to if isinstance(to, (int, float)) else 15
-        for _ in range(max_retries):
-            try:
-                resp = self.gateway.session.post(
-                    url, data={"battleid": str(battle_id), "_": ""}, headers=headers, timeout=timeout
-                )
-                if resp.status_code == 200:
-                    return BattleState.from_json(resp.json(), current_user_id=self.current_user_id)
-            except Exception:
-                pass
+        data = self._post_gateway(
+            "OPT.ashx",
+            24,
+            {"battleid": str(battle_id), "_": ""},
+            referer_path=f"/battle/{battle_id}",
+        )
+        if isinstance(data, dict):
+            return BattleState.from_json(data, current_user_id=self.current_user_id)
         return None
 
     def get_battle_tips(self, battle_id: int = 0, last_tips_id: int = 0) -> tuple[int, list[str]]:
         """Lấy nhật ký chiến sự từ OPT.ashx?id=26."""
-        headers = self.gateway._headers()
-        headers["Referer"] = f"{self.gateway.base_url}/battle/{battle_id}"
-        headers["Origin"] = self.gateway.base_url
-        url = f"{self.gateway.base_url}/GateWay/OPT.ashx?id=26"
-        mr = getattr(self.gateway, "max_retries", 3)
-        max_retries = mr if isinstance(mr, int) else 3
-        to = getattr(self.gateway, "timeout", 15)
-        timeout = to if isinstance(to, (int, float)) else 15
-        for _ in range(max_retries):
-            try:
-                resp = self.gateway.session.post(
-                    url,
-                    data={"battleid": str(battle_id), "lasttipsid": str(last_tips_id), "_": ""},
-                    headers=headers,
-                    timeout=timeout,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("ret") == 0:
-                        new_tips_id = data.get("last_tips_id", last_tips_id)
-                        lines = []
-                        for tip in data.get("tips", []):
-                            if len(tip) > 2 and tip[2]:
-                                text = str(tip[2]).strip()
-                                if text:
-                                    lines.append(text)
-                        return new_tips_id, lines
-            except Exception:
-                pass
+        data = self._post_gateway(
+            "OPT.ashx",
+            26,
+            {"battleid": str(battle_id), "lasttipsid": str(last_tips_id), "_": ""},
+            referer_path=f"/battle/{battle_id}",
+        )
+        if isinstance(data, dict) and data.get("ret") == 0:
+            new_tips_id = data.get("last_tips_id", last_tips_id)
+            lines = []
+            for tip in data.get("tips", []):
+                if len(tip) > 2 and tip[2]:
+                    text = str(tip[2]).strip()
+                    if text:
+                        lines.append(text)
+            return new_tips_id, lines
         return last_tips_id, []
 
     def change_target_attack(
         self, battle_id: int, pos_id: int, dest_pos_id: int, action: int = 0
     ) -> bool:
         """Ra lệnh tác chiến & đổi mục tiêu qua OPT.ashx?id=54."""
-        headers = self.gateway._headers()
-        headers["Referer"] = f"{self.gateway.base_url}/battle/{battle_id}"
-        headers["Origin"] = self.gateway.base_url
-        url = f"{self.gateway.base_url}/GateWay/OPT.ashx?id=54"
         payload = {
             "action": str(action),
             "battleid": str(battle_id),
@@ -541,41 +524,29 @@ class BattleEngine:
             "posid": str(pos_id),
             "_": "",
         }
-        max_retries = getattr(self.gateway, "max_retries", 3)
-        timeout = getattr(self.gateway, "timeout", 15)
-        for _ in range(max_retries):
-            try:
-                resp = self.gateway.session.post(url, data=payload, headers=headers, timeout=timeout)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("ret") == 0
-            except Exception:
-                pass
-        return False
+        data = self._post_gateway(
+            "OPT.ashx",
+            54,
+            payload,
+            referer_path=f"/battle/{battle_id}",
+        )
+        return bool(isinstance(data, dict) and data.get("ret") == 0)
 
     def cast_stratagem(self, battle_id: int, pos_id: int, stratagem_id: int) -> bool:
         """Thi triển mưu kế chiến trường qua OPT.ashx?id=70."""
-        headers = self.gateway._headers()
-        headers["Referer"] = f"{self.gateway.base_url}/battle/{battle_id}"
-        headers["Origin"] = self.gateway.base_url
-        url = f"{self.gateway.base_url}/GateWay/OPT.ashx?id=70"
         payload = {
             "lBattleID": str(battle_id),
             "lDestPosID": str(pos_id),
             "lPlusFunc": str(stratagem_id),
             "_": "",
         }
-        max_retries = getattr(self.gateway, "max_retries", 3)
-        timeout = getattr(self.gateway, "timeout", 15)
-        for _ in range(max_retries):
-            try:
-                resp = self.gateway.session.post(url, data=payload, headers=headers, timeout=timeout)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get("ret") == 0
-            except Exception:
-                pass
-        return False
+        data = self._post_gateway(
+            "OPT.ashx",
+            70,
+            payload,
+            referer_path=f"/battle/{battle_id}",
+        )
+        return bool(isinstance(data, dict) and data.get("ret") == 0)
 
     def can_capture_boss(self, battle_id: int, pos_id: int, dest_pos_id: int) -> dict:
         """Kiểm tra điều kiện bắt BOSS qua Common.ashx?id=71."""
@@ -952,10 +923,21 @@ class BattleEngine:
                         bases.append(base_id)
         return bases
 
+    def _resolve_tids_to_check(self, generals: list[int], origin_id: int = 0) -> list[int]:
+        tids_to_check: list[int] = [origin_id] if origin_id else []
+        if generals:
+            for b in self._find_bases_for_generals(generals):
+                if b not in tids_to_check:
+                    tids_to_check.append(b)
+        if 0 not in tids_to_check:
+            tids_to_check.append(0)
+        return tids_to_check
+
     def inspect_world_movements(
         self,
         generals: list[int],
         origin_id: int = 0,
+        cached_tids: Optional[list[int]] = None,
     ) -> tuple[Optional[int], Optional[BattleState], Optional[int]]:
         """Kiểm tra quân đội thế giới qua Common.ashx?id=40 và Common.ashx?id=4.
 
@@ -965,13 +947,11 @@ class BattleEngine:
         - outbound_march_left: Số giây còn lại của đạo quân đang hành quân tới mục tiêu (goto), hoặc None.
         """
         wanted = {int(g) for g in generals if g}
-        tids_to_check: list[int] = [origin_id] if origin_id else []
-        if generals:
-            for b in self._find_bases_for_generals(generals):
-                if b not in tids_to_check:
-                    tids_to_check.append(b)
-        if 0 not in tids_to_check:
-            tids_to_check.append(0)
+        tids_to_check = (
+            list(cached_tids)
+            if cached_tids is not None
+            else self._resolve_tids_to_check(generals, origin_id=origin_id)
+        )
 
         march_left: Optional[int] = None
 
@@ -1122,12 +1102,13 @@ class BattleEngine:
         polls = 0
         arrival_polls = 0
         was_marching = False
+        cached_tids = self._resolve_tids_to_check(generals, origin_id=origin_id)
         while polls < max_wait_polls:
             if stop_event and stop_event.is_set():
                 return None
 
             bid, prefetched_state, march_left = self.inspect_world_movements(
-                generals=generals, origin_id=origin_id
+                generals=generals, origin_id=origin_id, cached_tids=cached_tids
             )
             if bid is not None:
                 if on_battle_found:
@@ -1157,7 +1138,11 @@ class BattleEngine:
                         on_log(f"⚡ Quân ta sắp tới nơi (còn ~{march_left}s), chuẩn bị tiếp chiến...")
                     else:
                         on_log(f"⏳ Quân ta đang hành quân tới mục tiêu (còn ~{march_left}s)...")
-                sleep_fn(min(5.0, max(1.0, float(march_left))))
+                if march_left > 15:
+                    wait_sec = min(15.0, float(march_left - 5))
+                else:
+                    wait_sec = min(5.0, max(1.0, float(march_left)))
+                sleep_fn(wait_sec)
                 polls += 1
                 continue
 
@@ -1418,6 +1403,7 @@ class BattleEngine:
 
             # Vòng lặp đếm ngược và kiểm tra Cửa Sổ Đổi Trận Cuối Hiệp
             elapsed = 0.0
+            last_tips_poll = 0.0
             step = 3.0 if wait_time > 10 else 1.5
             while elapsed < wait_time:
                 if stop_event and stop_event.is_set():
@@ -1431,7 +1417,8 @@ class BattleEngine:
                 # Đổi trận hình ở cửa sổ cuối hiệp (bout_left <= formation_window_seconds)
                 _try_switch_formations(curr_left)
 
-                if elapsed < wait_time:
+                if elapsed < wait_time and (elapsed - last_tips_poll >= 10.0 or wait_time <= 10):
+                    last_tips_poll = elapsed
                     last_tips_id, new_tips = self.get_battle_tips(battle_id, last_tips_id)
                     for tip_text in new_tips:
                         _log(f"      📜 {tip_text}")
