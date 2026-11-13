@@ -1287,3 +1287,45 @@ def test_building_task_caches_c77_within_cycle():
     c77_calls = [c for c in server.calls if c[0] == "Common.ashx?id=77"]
     # Cả check_and_activate_boost và get_active_upgrade_slots cùng chia sẻ 1 lần gọi
     assert len(c77_calls) == 1
+
+
+def test_process_speedup_handles_hhmmss_string_and_str_city_id():
+    # Máy chủ trả về city_id dạng chuỗi và thời gian còn lại dạng "HH:MM:SS" (> 24h)
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [["101", "NB", 0, 0, [[5, 3, 25, 1, "30:00:00"]], []]],
+            },
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=101, plans=[], auto_speedup=True, speedup_hours=24.0, paytype=2)
+    speedup_count = task.process_speedup()
+    # 30h > 24h -> giảm 1 lần còn 15h <= 24h
+    assert speedup_count == 1
+    calls = [d for k, d in server.calls if k == "OPT.ashx?id=69" and d.get("type") == "1"]
+    assert len(calls) == 1
+    assert calls[0]["param1"] == "5"
+    assert calls[0]["param2"] == "101"
+
+
+def test_process_speedup_handles_unix_timestamp():
+    import time
+
+    future_ts = int(time.time()) + 30 * 3600  # còn 30 giờ (> 24h)
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {
+                "ret": 0,
+                "list": [[101, "NB", 0, 0, [[7, 6, 30, 1, future_ts]], []]],
+            },
+            "OPT.ashx?id=69": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=101, plans=[], auto_speedup=True, speedup_hours=24.0, paytype=2)
+    speedup_count = task.process_speedup()
+    assert speedup_count == 1
+

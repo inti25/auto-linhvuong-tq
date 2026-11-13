@@ -4285,6 +4285,10 @@ class Dashboard(tk.Frame):
         ttk.Entry(r_spd, textvariable=self.bld_speedup_hours_var, width=3).pack(side="left", padx=2)
         tk.Label(r_spd, text="giờ", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
 
+        self.bld_speedup_var.trace_add("write", self._sync_running_bld_speedup)
+        self.bld_speedup_hours_var.trace_add("write", self._sync_running_bld_speedup)
+        self.bld_speedup_item_combo.bind("<<ComboboxSelected>>", self._sync_running_bld_speedup)
+
         # 4. Khung Dịch Trại
         f_dt = ttk.LabelFrame(col1, text="🏕️ Dịch Trại", style="Card.TLabelframe")
         f_dt.pack(fill="x", padx=2, pady=(4, 0))
@@ -5786,6 +5790,35 @@ class Dashboard(tk.Frame):
         self._append_bld_log(f"💾 Đã lưu cấu hình {len(plans)} công trình ra build_plans.json")
         messagebox.showinfo("Thành công", "Đã lưu cấu hình ra build_plans.json!")
 
+    def _parse_bld_speedup_hours(self) -> float:
+        """Phân tích ngưỡng giờ tăng tốc xây dựng (hỗ trợ '24', '24h', '24,5')."""
+        raw = self.bld_speedup_hours_var.get().strip() if hasattr(self, "bld_speedup_hours_var") else "1"
+        if not raw:
+            return 1.0
+        cleaned = raw.lower().replace(",", ".").replace("giờ", "").replace("gio", "").replace("h", "").strip()
+        try:
+            return max(0.0, float(cleaned or "1"))
+        except ValueError:
+            return 1.0
+
+    def _get_bld_speedup_paytype(self) -> int:
+        if hasattr(self, "bld_speedup_item_combo") and self.bld_speedup_item_combo.get() == "Coin":
+            return 1
+        return 2
+
+    def _sync_running_bld_speedup(self, *_args):
+        """Đồng bộ tức thì thiết lập tăng tốc xây dựng vào các BuildingTask đang chạy."""
+        runner = getattr(self, "_bld_runner", None)
+        if not runner or not getattr(runner, "tasks", None):
+            return
+        auto_speedup = bool(self.bld_speedup_var.get()) if hasattr(self, "bld_speedup_var") else False
+        spd_hours = self._parse_bld_speedup_hours()
+        spd_paytype = self._get_bld_speedup_paytype()
+        for task in runner.tasks:
+            task.auto_speedup = auto_speedup
+            task.speedup_hours = spd_hours
+            task.paytype = spd_paytype
+
     def _toggle_building(self):
         if not self._bld_runner or not self._bld_runner.is_alive():
             self._save_current_bld_tree_to_cache()
@@ -5854,12 +5887,8 @@ class Dashboard(tk.Frame):
                 auto_fallback_box = bool(self.bld_box_fallback_var.get()) if hasattr(self, "bld_box_fallback_var") else True
                 city_auto_open_box = auto_open_box and (cid in self._selected_resource_cities)
 
-                try:
-                    spd_hours = float(self.bld_speedup_hours_var.get().strip() or "1")
-                except (ValueError, AttributeError):
-                    spd_hours = 1.0
-
-                spd_paytype = 1 if hasattr(self, "bld_speedup_item_combo") and self.bld_speedup_item_combo.get() == "Coin" else 2
+                spd_hours = self._parse_bld_speedup_hours()
+                spd_paytype = self._get_bld_speedup_paytype()
 
                 task = BuildingTask(
                     gateway=self.gateway,

@@ -70,6 +70,35 @@ RESOURCE_BOX_NAMES = {
 DEFAULT_FALLBACK_BOX_ORDER = [24, 16, 11, 1]
 
 
+def parse_remaining_seconds(raw_val) -> int:
+    """Chuyển đổi giá trị thời gian còn lại (giây, HH:MM:SS, MM:SS, hoặc Unix timestamp) sang số giây."""
+    if raw_val in (None, "", 0, "0"):
+        return 0
+
+    if isinstance(raw_val, str) and ":" in raw_val:
+        parts = [p.strip() for p in raw_val.split(":")]
+        if len(parts) == 3:
+            try:
+                return max(0, int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
+            except ValueError:
+                return 0
+        if len(parts) == 2:
+            try:
+                return max(0, int(parts[0]) * 60 + int(parts[1]))
+            except ValueError:
+                return 0
+        return 0
+
+    try:
+        val = int(float(raw_val))
+    except (ValueError, TypeError):
+        return 0
+
+    if val > 1_000_000_000:
+        return max(0, int(val - time.time()))
+    return max(0, val)
+
+
 def parse_boost_remaining_time(resp: dict, city_id: int = 0) -> int:
     """Trích xuất thời gian còn lại (giây) của DS kiến trúc từ response Common.ashx?id=77."""
     if not isinstance(resp, dict):
@@ -118,32 +147,7 @@ def parse_boost_remaining_time(resp: dict, city_id: int = 0) -> int:
             else:
                 plus_finish = 0
 
-    if plus_finish is None:
-        return 0
-
-    # 3. Chuyển đổi định dạng plus_finish sang số giây còn lại
-    if isinstance(plus_finish, str) and ":" in plus_finish:
-        parts = [p.strip() for p in plus_finish.split(":")]
-        if len(parts) == 3:
-            try:
-                return max(0, int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
-            except ValueError:
-                return 0
-        elif len(parts) == 2:
-            try:
-                return max(0, int(parts[0]) * 60 + int(parts[1]))
-            except ValueError:
-                return 0
-        return 0
-
-    try:
-        val = int(plus_finish)
-    except (ValueError, TypeError):
-        return 0
-
-    if val > 1_000_000_000:
-        return max(0, int(val - time.time()))
-    return max(0, val)
+    return parse_remaining_seconds(plus_finish)
 
 
 @dataclass
@@ -307,7 +311,7 @@ class BuildingTask:
                 # Hỗ trợ cấu trúc mock trong test
                 return city_list
             if isinstance(city_info, (list, tuple)) and len(city_info) >= 5:
-                if city_info[0] == self.city_id:
+                if str(city_info[0]) == str(self.city_id):
                     upgrades = city_info[4]
                     if isinstance(upgrades, list):
                         return upgrades
@@ -391,11 +395,18 @@ class BuildingTask:
             if isinstance(item, (list, tuple)):
                 if len(item) < 1:
                     continue
-                slot = int(item[0])
-                time_left = int(item[4]) if len(item) >= 5 else 0
+                try:
+                    slot = int(item[0])
+                except (ValueError, TypeError):
+                    continue
+                time_left = parse_remaining_seconds(item[4]) if len(item) >= 5 else 0
             elif isinstance(item, dict):
-                slot = int(item.get("slot") or item.get("pid") or 1)
-                time_left = int(item.get("time_left") or item.get("time") or 0)
+                try:
+                    slot = int(item.get("slot") or item.get("pid") or 1)
+                except (ValueError, TypeError):
+                    continue
+                raw_time = item.get("time_left") if item.get("time_left") is not None else item.get("time")
+                time_left = parse_remaining_seconds(raw_time)
             else:
                 continue
 

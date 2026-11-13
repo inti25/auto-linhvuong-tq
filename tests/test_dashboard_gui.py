@@ -2747,6 +2747,61 @@ def test_notification_and_boss_capture_gui():
         dash.destroy()
 
 
+def test_dashboard_building_speedup_checkbox_updates_running_task_live():
+    dash = safe_dashboard()
+    try:
+        calls = []
+
+        def fake_call(ep, aid, data=None, **kw):
+            calls.append((ep, aid, dict(data or {})))
+            if ep == "Common.ashx" and aid == 77:
+                return {"ret": 0, "list": [[15230, "NB", 0, "10:00:00", [[5, 3, 20, 1, "30:00:00"]], []]]}
+            if ep == "City.ashx" and aid == 5:
+                return {"ret": 0, "infos": [[5, 3, "Nhà Dân", 20, 0, 0]]}
+            return {"ret": 0}
+
+        dash.gateway.call = fake_call
+        dash.after = lambda ms, fn=None, *a: fn(*a) if fn else None
+        with patch.object(dash, "_schedule_periodic_boost_check"), patch.object(dash, "_check_and_update_boost_status"):
+            dash._loaded(dummy_roster())
+
+        dash.bld_speedup_var.set(False)
+        dash.bld_speedup_hours_var.set("1")
+        dash._selected_building_cities = {15230}
+        dash._city_building_plans[15230] = [
+            {"pid": 5, "gid": 3, "target_level": 25, "name": "Nhà Dân", "enabled": True}
+        ]
+
+        with patch("linhvuong.dashboard.BuildingAutoRunner.start"), patch.object(
+            dash, "_save_current_bld_tree_to_cache"
+        ):
+            dash._toggle_building()
+
+        assert dash._bld_runner is not None
+        task = dash._bld_runner.tasks[0]
+        assert task.auto_speedup is False
+
+        # Bật checkbox và chỉnh ngưỡng dưới 24h trong khi Xây đang chạy
+        dash.bld_speedup_var.set(True)
+        dash.bld_speedup_hours_var.set("24")
+        dash.bld_speedup_item_combo.set("Coin")
+        dash.bld_speedup_item_combo.event_generate("<<ComboboxSelected>>")
+
+        assert task.auto_speedup is True
+        assert task.speedup_hours == 24.0
+        assert task.paytype == 1
+
+        task.run_once()
+        spd_calls = [d for ep, aid, d in calls if ep == "OPT.ashx" and aid == 69 and d.get("type") == "1"]
+        assert len(spd_calls) == 1
+        assert spd_calls[0]["param1"] == "5"
+        assert spd_calls[0]["param2"] == "15230"
+        assert spd_calls[0]["paytype"] == "1"
+    finally:
+        dash.destroy()
+
+
+
 
 
 
