@@ -2914,11 +2914,12 @@ def test_dashboard_nien_thu_toggle_starts_and_stops_engine_task():
 
 
 def test_overview_tab_displays_loyalty_tactician_and_action_buttons():
-    """Tab Tổng quan hiển thị cột TT, Mưu sĩ và 2 nút Ban Thưởng Toàn Bộ / Thiết Lập Mưu Sĩ."""
+    """Tab Tổng quan hiển thị cột TT, Mưu sĩ và các nút Ban Thưởng / Mưu Sĩ / Trang Bị."""
     dash = safe_dashboard()
     try:
         assert hasattr(dash, "reward_all_btn")
         assert hasattr(dash, "tactician_btn")
+        assert hasattr(dash, "equip_btn")
 
         c1 = City(id=15230, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
         g1 = General(
@@ -3292,6 +3293,184 @@ def test_dashboard_explore_profile_save_load_and_model():
         assert lp.explore_use_whip is True
         assert lp.explore_use_coin is False
         assert lp.explore_turns == "5"
+    finally:
+        dash.destroy()
+
+
+def test_equip_dialog_filters_sorting_and_quick_select():
+    """Hộp thoại Trang bị tướng mở từ Tab Tổng quan, xếp Cao->Thấp, lọc phân hệ và chọn nhanh."""
+    import time
+
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=100, name="ThanhA", type="Thành", pos_x=10, pos_y=20, level=15)
+        c2 = City(id=200, name="ThanhB", type="Thành", pos_x=30, pos_y=40, level=12)
+        vo_high = General(id=1, name="VoHigh", role="vo", level=60, morale=100, stamina=100, stamina_max=100)
+        vo_low = General(id=2, name="VoLow", role="vo", level=20, morale=100, stamina=100, stamina_max=100)
+        van_full = General(id=3, name="VanFull", role="van", level=50, morale=100, stamina=100, stamina_max=100)
+        van_b = General(id=4, name="VanB", role="van", level=35, morale=100, stamina=100, stamina_max=100)
+        roster = Roster(cities=[c1, c2], camps=[], _generals={100: [vo_low, van_full, vo_high], 200: [van_b]})
+        dash._loaded(roster)
+
+        def fake_gw_call(ep, oid, payload=None, **_kw):
+            p = payload or {}
+            if ep == "Common.ashx" and oid == 24:
+                lt = str(p.get("lType"))
+                if lt == "1":
+                    return {
+                        "ret": 0,
+                        "list": [
+                            [11, 1, 1135, 0, 0, 0, 0, 9, 0, ""],        # Mũ võ rảnh Lv.9
+                            [12, 1, 1220, 0, 0, 0, 0, 8, 3, "VanFull"],  # VanFull mặc đủ 4 món
+                        ],
+                    }
+                if lt == "2":
+                    return {"ret": 0, "list": [[22, 1, 2217, 0, 0, 0, 0, 8, 3, "VanFull"]]}
+                if lt == "3":
+                    return {"ret": 0, "list": [[32, 1, 3220, 0, 0, 0, 0, 8, 3, "VanFull"]]}
+                if lt == "4":
+                    return {"ret": 0, "list": [[42, 1, 4212, 0, 0, 0, 0, 8, 3, "VanFull"]]}
+            return {"ret": 0}
+
+        dash.gateway.call = fake_gw_call
+        dash._open_equip_dialog()
+
+        deadline = time.time() + 2.0
+        while dash._equip_running and time.time() < deadline:
+            dash.update()
+            time.sleep(0.02)
+
+        assert dash._equip_dialog.winfo_exists()
+        assert dash.equip_city_combo.get() == c1.display_name
+        # Thành A xếp từ cấp cao -> thấp: VoHigh(60), VanFull(50), VoLow(20)
+        assert list(dash.equip_tree.get_children()) == ["1", "3", "2"]
+        assert "Kho Võ (Mũ/VK/Giáp/Ngựa): 1/0/0/0" in dash.equip_summary_var.get()
+
+        # Lọc Chỉ Văn quan trên Tất cả các thành -> VanFull(50), VanB(35)
+        dash.equip_city_combo.set("🌟 Tất cả các thành")
+        dash.equip_role_combo.set(dash._EQUIP_ROLE_VAN)
+        dash._refresh_equip_tree()
+        assert list(dash.equip_tree.get_children()) == ["3", "4"]
+
+        # Quay lại Tất cả phân hệ & kiểm tra chọn nhanh
+        dash.equip_role_combo.set(dash._EQUIP_ROLE_ALL)
+        dash._refresh_equip_tree()
+        assert list(dash.equip_tree.get_children()) == ["1", "3", "4", "2"]
+
+        dash._equip_select_vo()
+        assert dash._equip_selected_ids == {1, 2}
+
+        dash._equip_select_van()
+        assert dash._equip_selected_ids == {3, 4}
+
+        # ✨ Thiếu đồ -> loại VanFull(3) đã mặc đủ 4 ô
+        dash._equip_select_incomplete()
+        assert dash._equip_selected_ids == {1, 4, 2}
+    finally:
+        dash.destroy()
+
+
+def test_equip_dialog_execution_assign_and_unequip():
+    """Chạy Tự động trang bị (có Đổi trang bị) và Tháo trang bị qua luồng nền trên Dashboard."""
+    import time
+    from linhvuong.generals import EQUIP_MODE_ASSIGN, EQUIP_MODE_UNEQUIP
+
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=100, name="ThanhA", type="Thành", pos_x=10, pos_y=20, level=15)
+        vo_high = General(id=1, name="VoHigh", role="vo", level=70, morale=100, stamina=100, stamina_max=100)
+        vo_low = General(id=2, name="VoLow", role="vo", level=20, morale=100, stamina=100, stamina_max=100)
+        van_high = General(id=3, name="VanHigh", role="van", level=45, morale=100, stamina=100, stamina_max=100)
+        roster = Roster(cities=[c1], camps=[], _generals={100: [vo_low, van_high, vo_high]})
+        dash._loaded(roster)
+
+        opt_calls = []
+
+        def fake_gw_call(ep, oid, payload=None, **_kw):
+            p = dict(payload or {})
+            if ep == "Common.ashx" and oid == 24:
+                lt = str(p.get("lType"))
+                if lt == "1":
+                    return {
+                        "ret": 0,
+                        "list": [
+                            [501, 1, 1135, 0, 0, 0, 0, 12, 2, "VoLow"],  # VoLow đang giữ mũ xịn Lv.12
+                            [502, 1, 1104, 0, 0, 0, 0, 1, 0, ""],        # Mũ võ Lv.1 rảnh
+                            [503, 1, 1220, 0, 0, 0, 0, 6, 0, ""],        # Mũ văn Lv.6 rảnh
+                        ],
+                    }
+                return {"ret": 0, "list": []}
+            if ep == "OPT.ashx" and oid == 58:
+                opt_calls.append((int(p["lGeneralID"]), int(p["lEquipType"]), int(p["lEquipID"])))
+                return {"ret": 0}
+            return {"ret": 0}
+
+        dash.gateway.call = fake_gw_call
+        dash._open_equip_dialog()
+        deadline = time.time() + 2.0
+        while dash._equip_running and time.time() < deadline:
+            dash.update()
+            time.sleep(0.02)
+
+        dash._equip_select_all()
+        dash.equip_reassign_var.set(True)
+
+        with patch("linhvuong.dashboard.fetch_roster", return_value=roster), patch(
+            "linhvuong.dashboard.messagebox.showinfo"
+        ) as mock_info:
+            dash._start_equip_action(EQUIP_MODE_ASSIGN)
+            deadline = time.time() + 2.0
+            while not mock_info.called and time.time() < deadline:
+                dash.update()
+                time.sleep(0.02)
+
+            # Tháo mũ 501 từ VoLow(2) trước, rồi chia lại: VoHigh(1) mặc 501, VoLow(2) mặc 502, VanHigh(3) mặc 503
+            assert opt_calls == [
+                (2, 1, 0),
+                (1, 1, 501),
+                (2, 1, 502),
+                (3, 1, 503),
+            ]
+            assert mock_info.called
+            assert "赤金吞天盔 (Lv.12)" in dash.equip_tree.item("1", "values")[4]
+            assert "精铁头盔 (Lv.1)" in dash.equip_tree.item("2", "values")[4]
+            assert "武侯纶巾 (Lv.6)" in dash.equip_tree.item("3", "values")[4]
+
+        # Thử luôn nút Tháo Trang Bị qua GUI
+        opt_calls.clear()
+        with patch("linhvuong.dashboard.fetch_roster", return_value=roster), patch(
+            "linhvuong.dashboard.messagebox.showinfo"
+        ) as mock_unequip_info:
+            # Lần gọi fetch_equipment_inventory mới nhất sẽ thấy đang mặc 501, 502, 503
+            def fake_gw_worn(ep, oid, payload=None, **_kw):
+                p = dict(payload or {})
+                if ep == "Common.ashx" and oid == 24:
+                    if str(p.get("lType")) == "1":
+                        return {
+                            "ret": 0,
+                            "list": [
+                                [501, 1, 1135, 0, 0, 0, 0, 12, 1, "VoHigh"],
+                                [502, 1, 1104, 0, 0, 0, 0, 1, 2, "VoLow"],
+                                [503, 1, 1220, 0, 0, 0, 0, 6, 3, "VanHigh"],
+                            ],
+                        }
+                    return {"ret": 0, "list": []}
+                if ep == "OPT.ashx" and oid == 58:
+                    opt_calls.append((int(p["lGeneralID"]), int(p["lEquipType"]), int(p["lEquipID"])))
+                    return {"ret": 0}
+                return {"ret": 0}
+
+            dash.gateway.call = fake_gw_worn
+            dash._start_equip_action(EQUIP_MODE_UNEQUIP)
+            deadline = time.time() + 2.0
+            while not mock_unequip_info.called and time.time() < deadline:
+                dash.update()
+                time.sleep(0.02)
+
+            assert opt_calls == [(1, 1, 0), (3, 1, 0), (2, 1, 0)]
+            assert dash.equip_tree.item("1", "values")[4] == "-"
+            assert dash.equip_tree.item("2", "values")[4] == "-"
+            assert dash.equip_tree.item("3", "values")[4] == "-"
     finally:
         dash.destroy()
 

@@ -395,6 +395,10 @@ _Avoid_: FreeProxyList, ProxyScrapeFeed, danh sách proxy chùa
 Hoạt động tầm phỏng và khám phá báu vật, danh tướng định kỳ cấp tài khoản (`Common.ashx?id=140`), vận hành theo hai chế độ: chờ hết thời gian đếm ngược tự nhiên (`lAction=0`, `lAction=1`) hoặc xóa thời gian chờ cưỡng bức bằng đạo cụ Roi (`lAction=2, lParam=1`) / Coin (`lAction=2, lParam=2`) theo số lượt chỉ định.
 _Avoid_: Đào bảo, quay thưởng, explore
 
+**Tự Động Trang Bị** (`Auto-Equip Generals`):
+Cơ chế truy vấn kho đồ đạc và trang bị đang mặc của toàn bộ tướng qua `Common.ashx?id=24` (`lType` ∈ {`1: Mũ`, `2: Vũ khí`, `3: Giáp`, `4: Thú cưỡi`}) và tự động phân bổ hoặc tháo trang bị qua `OPT.ashx?id=58` (`lCityTentID`, `lGeneralID`, `lEquipType`, `lEquipID`; với `lEquipID=0` là tháo đồ). Mã loại `item_type_id = XYZZ` (`item[2]`) quy định ô trang bị ở `X` (`1..4`) và phân hệ ở `Y` (`Y=1` cho **Võ tướng**, `Y=2` cho **Văn quan**). Hệ thống chỉ thao tác trên tướng rảnh (`status == 0`), tách riêng từng hệ, sắp xếp tướng theo cấp độ giảm dần (`(-level, id)`) và ghép trang bị theo cấp cường hóa giảm dần rồi mã phẩm chất giảm dần (`(-level, -item_type_id, item_id)`), hỗ trợ tùy chọn **Đổi trang bị** (tháo về kho chia lại từ đầu) và **Tháo trang bị**.
+_Avoid_: Mặc đồ ngẫu nhiên, auto-gear chung hệ, đồng bộ đồ mù quáng
+
 
 ## Danh Mục Công Trình (Nhà)
 

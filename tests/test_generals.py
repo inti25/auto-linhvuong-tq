@@ -6,12 +6,19 @@ from unittest.mock import MagicMock
 import pytest
 
 from linhvuong.generals import (
+    EQUIP_MODE_ASSIGN,
+    EQUIP_MODE_UNEQUIP,
     MODE_BY_LEVEL,
     MODE_BY_NAME,
     MODE_REMOVE,
     MODE_SEQUENTIAL,
+    classify_item_role,
     collect_reward_targets,
+    configure_equipment,
     configure_tacticians,
+    equip_general_item,
+    fetch_equipment_inventory,
+    get_item_display_name,
     reward_all_generals,
     reward_general,
     reward_money_needed,
@@ -371,4 +378,258 @@ def test_configure_tacticians_remove_sequential_and_camp_warning():
     assert sum_rem.no_tactician_to_remove == 1
     assert gw_rem.calls == [
         ("OPT.ashx", 5, {"lGeneralID": "10", "lType": "0", "lFollowGeneralID": "0", "lCityID": "-10", "_": ""})
+    ]
+
+
+def test_classify_item_role_and_fetch_equipment_inventory():
+    """Phân hệ đúng đồ Võ (x1xx) / đồ Văn (x2xx), tách stack và sắp xếp Cao -> Thấp."""
+    assert classify_item_role(1135) == "vo"
+    assert classify_item_role(4112) == "vo"
+    assert classify_item_role(1220) == "van"
+    assert classify_item_role(2217) == "van"
+    assert classify_item_role(4216) == "van"
+    assert classify_item_role(999) is None
+
+    def _handler(_ep, _oid, body):
+        lt = body.get("lType")
+        if lt == "1":  # Mũ
+            return {
+                "ret": 0,
+                "list": [
+                    # [0]=id, [1]=qty, [2]=type_id, ..., [7]=level, [8]=gen_id, [9]=gen_name
+                    [101, 2, 1104, 0, 0, 0, 0, 1, 0, ""],       # 2x Mũ võ Lv.1 trong kho
+                    [102, 1, 1135, 0, 0, 0, 0, 10, 0, ""],      # Mũ võ Lv.10 trong kho
+                    [103, 1, 1120, 0, 0, 0, 0, 10, 0, ""],      # Mũ võ Lv.10 type thấp hơn 1135
+                    [104, 1, 1220, 0, 0, 0, 0, 8, 10, "VanA"],   # Mũ văn Lv.8 đang mặc bởi ID 10
+                ],
+            }
+        if lt == "2":  # Vũ khí
+            return {
+                "ret": 0,
+                "list": [
+                    [201, 1, 2217, 0, 0, 0, 0, 12, 0, ""],      # Quạt văn Lv.12
+                    [202, 1, 2142, 0, 0, 0, 0, 9, 0, ""],       # Phương thiên kích Lv.9
+                ],
+            }
+        return {"ret": 0, "list": []}
+
+    gw = FakeGateway(_handler)
+    inv = fetch_equipment_inventory(gw)
+
+    vo_helms = inv.free_items[("vo", 1)]
+    assert [it.item_id for it in vo_helms] == [102, 103, 101, 101]
+    assert [it.item_type_id for it in vo_helms] == [1135, 1120, 1104, 1104]
+    assert inv.count_free("vo", 2) == 1
+    assert inv.count_free("van", 2) == 1
+    assert inv.equipped_by_general[10][1].item_id == 104
+    assert inv.equipped_by_general[10][1].short_label == "武侯纶巾 (Lv.8)"
+
+
+def test_configure_equipment_priority_role_separation_and_upgrade():
+    """Võ/Văn tách hệ riêng, ưu tiên cấp tướng Cao -> Thấp, nâng cấp và hoàn trả đồ cũ về pool."""
+    c1 = _make_city(100, "ThanhA")
+    vo_high = _make_gen(1, "VoHigh", "vo", city_id=100, level=60)
+    vo_low = _make_gen(2, "VoLow", "vo", city_id=100, level=25)
+    vo_busy = _make_gen(3, "VoBusy", "vo", city_id=100, level=95, status=1)
+    van_high = _make_gen(4, "VanHigh", "van", city_id=100, level=50)
+    van_low = _make_gen(5, "VanLow", "van", city_id=100, level=15)
+
+    roster = Roster(cities=[c1], camps=[], _generals={100: [vo_low, vo_high, vo_busy, van_low, van_high]})
+
+    def _handler(ep, oid, body):
+        if ep == "Common.ashx" and oid == 24:
+            lt = body["lType"]
+            if lt == "1":  # Mũ: VoHigh đang mặc 1104 Lv.1; kho có 1135 Lv.10 + Mũ văn 1220 Lv.7 & 1205 Lv.2
+                return {
+                    "ret": 0,
+                    "list": [
+                        [1001, 1, 1104, 0, 0, 0, 0, 1, 1, "VoHigh"],
+                        [1002, 1, 1135, 0, 0, 0, 0, 10, 0, ""],
+                        [1003, 1, 1220, 0, 0, 0, 0, 7, 0, ""],
+                        [1004, 1, 1205, 0, 0, 0, 0, 2, 0, ""],
+                    ],
+                }
+            if lt == "2":  # Vũ khí: 1 stack x2 món 2109 Lv.1 + 1 kích 2142 Lv.5
+                return {
+                    "ret": 0,
+                    "list": [
+                        [2001, 2, 2109, 0, 0, 0, 0, 1, 0, ""],
+                        [2002, 1, 2142, 0, 0, 0, 0, 5, 0, ""],
+                    ],
+                }
+            return {"ret": 0, "list": []}
+        return {"ret": 0}
+
+    gw = FakeGateway(_handler)
+    summary = configure_equipment(
+        gw,
+        roster,
+        selected_general_ids=[1, 2, 3, 4, 5],
+        mode=EQUIP_MODE_ASSIGN,
+        reassign_existing=False,
+    )
+
+    assert summary.skipped_busy == 1
+    assert summary.failed == 0
+
+    opt_calls = [
+        (int(body["lGeneralID"]), int(body["lEquipType"]), int(body["lEquipID"]))
+        for ep, oid, body in gw.calls
+        if ep == "OPT.ashx" and oid == 58
+    ]
+    # Kiểm tra thứ tự ưu tiên theo từng nhóm: VoHigh(1) mặc trước VoLow(2), VanHigh(4) mặc trước VanLow(5)
+    assert opt_calls == [
+        (1, 1, 1002),  # VoHigh nâng cấp Mũ 1135 (Lv.10), hoàn 1001 về pool
+        (1, 2, 2002),  # VoHigh lấy Vũ khí 2142 (Lv.5)
+        (2, 1, 1001),  # VoLow được hưởng Mũ 1104 (Lv.1) vừa hoàn lại từ VoHigh!
+        (2, 2, 2001),  # VoLow lấy Vũ khí 2109 (Lv.1)
+        (4, 1, 1003),  # VanHigh lấy Mũ Văn 1220 (Lv.7)
+        (5, 1, 1004),  # VanLow lấy Mũ Văn 1205 (Lv.2)
+    ]
+
+
+def test_configure_equipment_reassign_existing_and_unequip_mode():
+    """Checkbox Đổi trang bị thu hồi đồ về kho chia lại Cao->Thấp; Tháo trang bị gọi lEquipID=0."""
+    c1 = _make_city(100, "ThanhA")
+    vo_high = _make_gen(1, "VoHigh", "vo", city_id=100, level=80)
+    vo_low = _make_gen(2, "VoLow", "vo", city_id=100, level=20)
+    van_busy = _make_gen(3, "VanBusy", "van", city_id=100, level=60, status=2)
+    roster = Roster(cities=[c1], camps=[], _generals={100: [vo_low, vo_high, van_busy]})
+
+    def _mock_calls(_ep, oid, body):
+        if _ep == "Common.ashx" and oid == 24:
+            if body["lType"] == "2":
+                return {
+                    "ret": 0,
+                    "list": [
+                        [301, 1, 2109, 0, 0, 0, 0, 1, 1, "VoHigh"],   # Tướng cao đang mặc cùi
+                        [302, 1, 2142, 0, 0, 0, 0, 12, 2, "VoLow"],   # Tướng thấp đang mặc xịn
+                        [303, 1, 2217, 0, 0, 0, 0, 9, 3, "VanBusy"],  # Tướng bận không được đụng
+                    ],
+                }
+            return {"ret": 0, "list": []}
+        return {"ret": 0}
+
+    # 1. Không bật Đổi trang bị -> không tháo, kho không có đồ -> 0 thay đổi
+    gw_keep = FakeGateway(_mock_calls)
+    sum_keep = configure_equipment(gw_keep, roster, [1, 2, 3], mode=EQUIP_MODE_ASSIGN, reassign_existing=False)
+    assert sum_keep.skipped_busy == 1
+    assert sum_keep.equipped == 0
+    assert sum_keep.unequipped == 0
+
+    # 2. Bật Đổi trang bị -> tháo 301 (của VoHigh) & 302 (của VoLow), chia lại 302 cho VoHigh, 301 cho VoLow
+    gw_swap = FakeGateway(_mock_calls)
+    sum_swap = configure_equipment(gw_swap, roster, [1, 2, 3], mode=EQUIP_MODE_ASSIGN, reassign_existing=True)
+    assert sum_swap.skipped_busy == 1
+    assert sum_swap.unequipped == 2
+    assert sum_swap.equipped == 2
+    swap_ops = [
+        (int(body["lGeneralID"]), int(body["lEquipType"]), int(body["lEquipID"]))
+        for ep, oid, body in gw_swap.calls
+        if ep == "OPT.ashx" and oid == 58
+    ]
+    assert swap_ops == [
+        (1, 2, 0),    # Tháo của VoHigh
+        (2, 2, 0),    # Tháo của VoLow
+        (1, 2, 302),  # VoHigh nhận 2142 (Lv.12)
+        (2, 2, 301),  # VoLow nhận 2109 (Lv.1)
+    ]
+
+    # 3. Chế độ Tháo trang bị -> chỉ tháo tướng rảnh được chọn
+    gw_unequip = FakeGateway(_mock_calls)
+    sum_un = configure_equipment(gw_unequip, roster, [1, 2, 3], mode=EQUIP_MODE_UNEQUIP)
+    assert sum_un.skipped_busy == 1
+    assert sum_un.unequipped == 2
+    assert [
+        (int(body["lGeneralID"]), int(body["lEquipID"]))
+        for ep, oid, body in gw_unequip.calls
+        if ep == "OPT.ashx" and oid == 58
+    ] == [(1, 0), (2, 0)]
+
+
+def test_configure_equipment_stacked_item_split_and_failed_item_eviction():
+    """Làm mới item_id mới khi mặc stack > 1 và loại bỏ món lỗi khỏi pool để không lặp lỗi."""
+    # Kiểm tra các mã đã bổ sung từ Dipan.SanGuo.Config.js (Arm)
+    assert get_item_display_name(1103) == "光荣头盔"
+    assert get_item_display_name(2101) == "梅花亮银枪"
+    assert get_item_display_name(2205) == "精钢扇"
+    assert get_item_display_name(3208) == "锦绣珠袍"
+    assert get_item_display_name(4120) == "祥瑞金牛"
+    assert get_item_display_name(4213) == "白石"
+
+    # 1. Server tách item_id mới cho phần dư khi mặc trang bị stack > 1
+    c1 = _make_city(100, "ThanhA")
+    vo1 = _make_gen(1, "Vo1", "vo", city_id=100, level=90)
+    vo2 = _make_gen(2, "Vo2", "vo", city_id=100, level=80)
+    vo3 = _make_gen(3, "Vo3", "vo", city_id=100, level=70)
+    roster = Roster(cities=[c1], camps=[], _generals={100: [vo3, vo1, vo2]})
+
+    helm_rows = [[16950692, 3, 1113, 30, 0, 0, 15, 0, 0, ""]]
+
+    def _stacked_handler(ep, oid, body):
+        if ep == "Common.ashx" and oid == 24:
+            if body["lType"] == "1":
+                return {"ret": 0, "list": [list(r) for r in helm_rows]}
+            return {"ret": 0, "list": []}
+        if ep == "OPT.ashx" and oid == 58:
+            gid = int(body["lGeneralID"])
+            eid = int(body["lEquipID"])
+            for idx, r in enumerate(list(helm_rows)):
+                if r[0] == eid and r[8] == 0:
+                    qty = r[1]
+                    helm_rows[idx] = [eid, 1, 1113, 30, 0, 0, 15, 0, gid, f"Vo{gid}"]
+                    if qty > 1:
+                        next_id = 16939353 if eid == 16950692 else 16900001
+                        helm_rows.append([next_id, qty - 1, 1113, 30, 0, 0, 15, 0, 0, ""])
+                    return {"ret": 0}
+            return {"ret": 1}
+        return {"ret": 0}
+
+    gw = FakeGateway(_stacked_handler)
+    summary = configure_equipment(gw, roster, [1, 2, 3], mode=EQUIP_MODE_ASSIGN, reassign_existing=False)
+    assert summary.equipped == 3
+    assert summary.failed == 0
+    assert [
+        (int(body["lGeneralID"]), int(body["lEquipType"]), int(body["lEquipID"]))
+        for ep, oid, body in gw.calls
+        if ep == "OPT.ashx" and oid == 58
+    ] == [
+        (1, 1, 16950692),
+        (2, 1, 16939353),
+        (3, 1, 16900001),
+    ]
+
+    # 2. Ứng viên ở đầu pool lỗi (ret=1) phải bị loại sạch để tướng sau lấy món hợp lệ đứng sau
+    vo_a = _make_gen(11, "VoA", "vo", city_id=100, level=60)
+    vo_b = _make_gen(12, "VoB", "vo", city_id=100, level=50)
+    roster_err = Roster(cities=[c1], camps=[], _generals={100: [vo_b, vo_a]})
+
+    def _error_eviction_handler(ep, oid, body):
+        if ep == "Common.ashx" and oid == 24:
+            if body["lType"] == "2":
+                return {
+                    "ret": 0,
+                    "list": [
+                        [9001, 2, 2115, 0, 19, 7, 0, 0, 0, ""],
+                        [9002, 1, 2101, 0, 2, 0, 0, 0, 0, ""],
+                    ],
+                }
+            return {"ret": 0, "list": []}
+        if ep == "OPT.ashx" and oid == 58:
+            if int(body["lEquipID"]) == 9001:
+                return {"ret": 1}
+            return {"ret": 0}
+        return {"ret": 0}
+
+    gw_err = FakeGateway(_error_eviction_handler)
+    sum_err = configure_equipment(gw_err, roster_err, [11, 12], mode=EQUIP_MODE_ASSIGN)
+    assert sum_err.failed == 1
+    assert sum_err.equipped == 1
+    assert [
+        (int(body["lGeneralID"]), int(body["lEquipType"]), int(body["lEquipID"]))
+        for ep, oid, body in gw_err.calls
+        if ep == "OPT.ashx" and oid == 58
+    ] == [
+        (11, 2, 9001),
+        (12, 2, 9002),
     ]
