@@ -306,6 +306,58 @@ def test_notification_and_combat_profile_roundtrip():
     assert loaded.notifications.telegram_chat_id == "-100123456"
 
 
+def test_nien_thu_profile_defaults_and_roundtrip(tmp_path):
+    from linhvuong.profile import NienThuProfile, ProfileStore
+
+    legacy = Profile.from_dict({"version": 1})
+    assert isinstance(legacy.nien_thu, NienThuProfile)
+    assert legacy.nien_thu.city_id == 0
+    assert legacy.nien_thu.generals == []
+    assert legacy.nien_thu.min_morale == "95"
+    assert legacy.nien_thu.use_world_chat is True
+    assert legacy.nien_thu.run_immediately is True
+    assert legacy.nien_thu.enabled is False
+
+    prof = Profile()
+    prof.nien_thu = NienThuProfile(
+        city_id=21936,
+        generals=[103242, 103243],
+        target_infantry="1000",
+        target_cavalry="500",
+        target_archers="2000",
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale="90",
+        speed_up_march=True,
+        speed_up_return=True,
+        stop_on_jade=True,
+        use_world_chat=False,
+        run_immediately=False,
+        enabled=True,
+    )
+
+    path = tmp_path / "profile.json"
+    ProfileStore.save(prof, path)
+    loaded = ProfileStore.load(path)
+
+    nt = loaded.nien_thu
+    assert nt.city_id == 21936
+    assert nt.generals == [103242, 103243]
+    assert nt.target_infantry == "1000"
+    assert nt.target_cavalry == "500"
+    assert nt.target_archers == "2000"
+    assert nt.auto_recruit is True
+    assert nt.auto_morale is True
+    assert nt.min_morale == "90"
+    assert nt.speed_up_march is True
+    assert nt.speed_up_return is True
+    assert nt.stop_on_jade is True
+    assert nt.use_world_chat is False
+    assert nt.run_immediately is False
+    assert nt.enabled is True
+
+
+
 
 
 

@@ -617,6 +617,57 @@ class CraftProfile:
 
 
 @dataclass
+class NienThuProfile:
+    city_id: int = 0
+    generals: list[int] = field(default_factory=list)
+    target_infantry: str = "0"
+    target_cavalry: str = "0"
+    target_archers: str = "0"
+    auto_recruit: bool = False
+    auto_morale: bool = False
+    min_morale: str = "95"
+    speed_up_march: bool = False
+    speed_up_return: bool = False
+    stop_on_jade: bool = False
+    use_world_chat: bool = True
+    run_immediately: bool = True
+    enabled: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "NienThuProfile":
+        if not isinstance(data, dict):
+            return cls()
+        raw_gens = data.get("generals", [])
+        gens: list[int] = []
+        if isinstance(raw_gens, list):
+            for g in raw_gens:
+                try:
+                    gens.append(int(g))
+                except (TypeError, ValueError):
+                    pass
+        try:
+            cid = int(data.get("city_id", 0) or 0)
+        except (TypeError, ValueError):
+            cid = 0
+        return cls(
+            city_id=cid,
+            generals=gens,
+            target_infantry=str(data.get("target_infantry", "0")),
+            target_cavalry=str(data.get("target_cavalry", "0")),
+            target_archers=str(data.get("target_archers", "0")),
+            auto_recruit=bool(data.get("auto_recruit", False)),
+            auto_morale=bool(data.get("auto_morale", False)),
+            min_morale=str(data.get("min_morale", "95")),
+            speed_up_march=bool(data.get("speed_up_march", False)),
+            speed_up_return=bool(data.get("speed_up_return", False)),
+            stop_on_jade=bool(data.get("stop_on_jade", False)),
+            use_world_chat=bool(data.get("use_world_chat", True)),
+            run_immediately=bool(data.get("run_immediately", True)),
+            enabled=bool(data.get("enabled", False)),
+        )
+
+
+@dataclass
 class Profile:
     version: int = 1
     building: BuildingProfile = field(default_factory=BuildingProfile)
@@ -630,6 +681,7 @@ class Profile:
     combat: CombatProfile = field(default_factory=CombatProfile)
     crafting: CraftProfile = field(default_factory=CraftProfile)
     notifications: NotificationProfile = field(default_factory=NotificationProfile)
+    nien_thu: NienThuProfile = field(default_factory=NienThuProfile)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -686,6 +738,7 @@ class Profile:
             combat=CombatProfile.from_dict(data.get("combat", {})),
             crafting=CraftProfile.from_dict(craft_raw),
             notifications=NotificationProfile.from_dict(data.get("notifications", {})),
+            nien_thu=NienThuProfile.from_dict(data.get("nien_thu", {})),
         )
 
 

@@ -5,6 +5,7 @@ from .building import BuildingPlan, BuildingTask
 from .di_trai import DiTrai
 from .goi_dan import GoiDan, GoiMan
 from .logistics import ArmyTransferOrder, LogisticsTask
+from .nien_thu import NienThuTask
 from .research import ResearchTask, TechPlan
 from .thao_phat import ThaoPhat
 

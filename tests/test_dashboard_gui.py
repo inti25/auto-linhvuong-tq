@@ -48,7 +48,7 @@ def test_dashboard_initializes_six_tabs():
     dash = safe_dashboard()
     try:
         tabs = dash.notebook.tabs()
-        assert len(tabs) == 6
+        assert len(tabs) == 7
         tab_texts = [dash.notebook.tab(t, "text") for t in tabs]
         assert "🏛️ Nội Chính & Nghiên Cứu" in tab_texts[0]
         assert "⚔️ Thảo Phạt" in tab_texts[1]
@@ -56,6 +56,7 @@ def test_dashboard_initializes_six_tabs():
         assert "🧛 Vong Linh" in tab_texts[3]
         assert "🏰 Tổng quan" in tab_texts[4]
         assert "⚔️ Chiến Trường" in tab_texts[5]
+        assert "🧧 Niên Thú" in tab_texts[6]
     finally:
         dash.destroy()
 
@@ -2797,6 +2798,101 @@ def test_dashboard_building_speedup_checkbox_updates_running_task_live():
         assert spd_calls[0]["param1"] == "5"
         assert spd_calls[0]["param2"] == "15230"
         assert spd_calls[0]["paytype"] == "1"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_nien_thu_loaded_and_profile_roundtrip(tmp_path):
+    dash = safe_dashboard()
+    try:
+        dash.gateway.call = lambda *a, **kw: {"ret": 0}
+        dash.after = lambda ms, fn=None, *a: None
+        with patch.object(dash, "_schedule_periodic_boost_check"), patch.object(dash, "_check_and_update_boost_status"):
+            dash._loaded(dummy_roster())
+
+        assert len(dash.nt_city_combo["values"]) == 3
+        assert len(dash.nt_gen_tree.get_children()) == 1
+        gid = int(dash.nt_gen_tree.get_children()[0])
+
+        # Chọn tướng và thiết lập thông số Niên Thú
+        vals = list(dash.nt_gen_tree.item(str(gid), "values"))
+        vals[0] = "☑"
+        dash.nt_gen_tree.item(str(gid), values=vals)
+
+        dash.nt_target_inf_var.set("1200")
+        dash.nt_target_cav_var.set("300")
+        dash.nt_target_arc_var.set("400")
+        dash.nt_auto_recruit_var.set(True)
+        dash.nt_auto_morale_var.set(True)
+        dash.nt_min_morale_var.set("92")
+        dash.nt_speedup_march_var.set(True)
+        dash.nt_speedup_return_var.set(True)
+        dash.nt_stop_jade_var.set(True)
+        dash.nt_use_world_chat_var.set(False)
+        dash.nt_run_immediately_var.set(False)
+
+        prof_file = tmp_path / "nien_thu_profile.json"
+        dash._save_unified_profile(prof_file)
+
+        # Reset UI rồi nạp lại
+        dash.nt_target_inf_var.set("0")
+        dash.nt_speedup_march_var.set(False)
+        dash.nt_stop_jade_var.set(False)
+        dash.nt_use_world_chat_var.set(True)
+        dash.nt_run_immediately_var.set(True)
+        vals[0] = "☐"
+        dash.nt_gen_tree.item(str(gid), values=vals)
+
+        ok, msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+        assert "Niên Thú" in msg
+        assert dash.nt_target_inf_var.get() == "1200"
+        assert dash.nt_target_cav_var.get() == "300"
+        assert dash.nt_target_arc_var.get() == "400"
+        assert dash.nt_auto_recruit_var.get() is True
+        assert dash.nt_auto_morale_var.get() is True
+        assert dash.nt_min_morale_var.get() == "92"
+        assert dash.nt_speedup_march_var.get() is True
+        assert dash.nt_speedup_return_var.get() is True
+        assert dash.nt_stop_jade_var.get() is True
+        assert dash.nt_use_world_chat_var.get() is False
+        assert dash.nt_run_immediately_var.get() is False
+        assert dash.nt_gen_tree.item(str(gid), "values")[0] == "☑"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_nien_thu_toggle_starts_and_stops_engine_task():
+    dash = safe_dashboard()
+    try:
+        dash.gateway.call = lambda *a, **kw: {"ret": 0}
+        dash.after = lambda ms, fn=None, *a: None
+        with patch.object(dash, "_schedule_periodic_boost_check"), patch.object(dash, "_check_and_update_boost_status"):
+            dash._loaded(dummy_roster())
+
+        gid = dash.nt_gen_tree.get_children()[0]
+        vals = list(dash.nt_gen_tree.item(gid, "values"))
+        vals[0] = "☑"
+        dash.nt_gen_tree.item(gid, values=vals)
+
+        dash.nt_speedup_march_var.set(True)
+        dash.nt_stop_jade_var.set(True)
+
+        with patch.object(dash.engine, "start") as mock_start, patch.object(
+            dash.engine, "stop"
+        ) as mock_stop, patch.object(dash.engine, "is_running", side_effect=[False, True]):
+            dash._toggle_nien_thu()
+            mock_start.assert_called_once()
+            task_id, task_obj = mock_start.call_args[0][0], mock_start.call_args[0][1]
+            assert task_id == "nien_thu"
+            assert task_obj.general_ids == [int(gid)]
+            assert task_obj.speed_up_march is True
+            assert task_obj.stop_on_jade is True
+            assert "Dừng" in str(dash.nt_start_btn.cget("text"))
+
+            dash._toggle_nien_thu()
+            mock_stop.assert_called_once_with("nien_thu")
+            assert "Bắt đầu" in str(dash.nt_start_btn.cget("text"))
     finally:
         dash.destroy()
 

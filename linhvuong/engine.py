@@ -154,8 +154,12 @@ class TaskRunnerThread(threading.Thread):
                 else:
                     res = "ok"
 
-                if res == "all_buildings_completed":
-                    self._log("🎉 Toàn bộ công trình quy hoạch đã hoàn tất!")
+                if res in ("all_buildings_completed", "nien_thu_jade_obtained", "completed"):
+                    self._log(
+                        "🎉 Đã nhận 玉兔呈祥 — Hoàn tất Auto Niên Thú!"
+                        if res == "nien_thu_jade_obtained"
+                        else "🎉 Toàn bộ công trình quy hoạch đã hoàn tất!"
+                    )
                     self._set_status(TaskStatus.COMPLETED)
                     break
 
