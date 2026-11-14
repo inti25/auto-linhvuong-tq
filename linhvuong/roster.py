@@ -68,10 +68,29 @@ class General:
     stamina_max: int
     status: int = 0  # 0: rảnh rỗi, != 0: bận
     upgrading_time: int = 0  # thời gian nâng sĩ khí còn lại (giây)
+    loyalty: int = 100  # Lòng trung thành (0-100)
+    special_status: int = 0  # 0: bình thường, 1: Thái thú, 2: Mưu sĩ
+    tactician_id: int = 0  # ID Mưu sĩ đang theo (chỉ áp dụng cho Võ tướng)
+    tactician_name: str = ""  # Tên Mưu sĩ đang theo
 
     @property
     def is_idle(self) -> bool:
         return self.status == 0 and self.upgrading_time <= 0
+
+    @property
+    def is_mayor(self) -> bool:
+        """Văn quan đang giữ chức Thái thú."""
+        return self.special_status == 1
+
+    @property
+    def is_tactician(self) -> bool:
+        """Văn quan đang được biên chế làm Mưu sĩ cho Võ tướng."""
+        return self.special_status == 2
+
+    @property
+    def is_available_tactician(self) -> bool:
+        """Văn quan nhàn rỗi có thể gán làm Mưu sĩ (không bận, không giữ chức Thái thú/Mưu sĩ)."""
+        return self.role == "van" and self.status == 0 and self.special_status == 0
 
     @property
     def status_text(self) -> str:
@@ -79,6 +98,10 @@ class General:
             return GENERAL_STATUS_NAMES.get(self.status, f"Bận ({self.status})")
         if self.upgrading_time > 0:
             return f"Nâng SK ({self.upgrading_time}s)"
+        if self.special_status == 1:
+            return "Thái thú"
+        if self.special_status == 2:
+            return "Mưu sĩ"
         return "Rảnh rỗi"
 
     @property
@@ -222,6 +245,7 @@ def fetch_roster(
     # Bao gồm cả Thành và Doanh trại (đặc biệt là các căn cứ có võ tướng)
     morale_map = {}
     upgrading_map = {}
+    tactician_map: dict[int, tuple[int, str]] = {}
     all_bases = list(cities_map.values()) + list(camps_map.values())
     if only_base_ids is not None:
         target_ids = {int(x) for x in only_base_ids}
@@ -236,6 +260,9 @@ def fetch_roster(
                 for g in entry[2]:
                     gid = int(g[0])
                     roster._armies[gid] = Army(int(g[5]), int(g[6]), int(g[7]))
+                    tid = int(g[2]) if len(g) > 2 and g[2] not in (None, "", 0, "0") else 0
+                    tname = str(g[3]) if len(g) > 3 and g[3] else ""
+                    tactician_map[gid] = (tid, tname)
                     if len(g) > 9:
                         morale_map[gid] = int(g[9])
                     if len(g) > 10:
@@ -247,10 +274,12 @@ def fetch_roster(
     for cid, glist in raw_generals_by_cid.items():
         for type_, g in glist:
             gid = int(g[0])
-            morale_val = morale_map.get(gid, int(g[7]))
+            loyalty_val = int(g[7]) if len(g) > 7 else 100
+            morale_val = morale_map.get(gid, loyalty_val)
             # Nếu là võ tướng mà chưa có trong API 76, khởi tạo Army(0, 0, 0)
             if type_ == 2 and gid not in roster._armies:
                 roster._armies[gid] = Army(0, 0, 0)
+            tac_id, tac_name = tactician_map.get(gid, (0, ""))
 
             roster._generals.setdefault(cid, []).append(
                 General(
@@ -263,6 +292,10 @@ def fetch_roster(
                     stamina_max=int(g[9]),
                     status=int(g[5]) if len(g) > 5 else 0,
                     upgrading_time=upgrading_map.get(gid, 0),
+                    loyalty=loyalty_val,
+                    special_status=int(g[4]) if len(g) > 4 else 0,
+                    tactician_id=tac_id,
+                    tactician_name=tac_name,
                 )
             )
 

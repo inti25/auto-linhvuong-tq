@@ -6,7 +6,7 @@ import pytest
 
 from linhvuong.dashboard import Dashboard
 from linhvuong.gateway import GatewayClient
-from linhvuong.profile import CityCraftConfig
+from linhvuong.profile import CityCraftConfig, LogisticsProfile
 from linhvuong.roster import Army, City, General, Roster
 
 try:
@@ -2895,6 +2895,391 @@ def test_dashboard_nien_thu_toggle_starts_and_stops_engine_task():
             assert "Bắt đầu" in str(dash.nt_start_btn.cget("text"))
     finally:
         dash.destroy()
+
+
+def test_overview_tab_displays_loyalty_tactician_and_action_buttons():
+    """Tab Tổng quan hiển thị cột TT, Mưu sĩ và 2 nút Ban Thưởng Toàn Bộ / Thiết Lập Mưu Sĩ."""
+    dash = safe_dashboard()
+    try:
+        assert hasattr(dash, "reward_all_btn")
+        assert hasattr(dash, "tactician_btn")
+
+        c1 = City(id=15230, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
+        g1 = General(
+            id=417506,
+            name="TrieuVan",
+            role="vo",
+            level=30,
+            morale=100,
+            stamina=95,
+            stamina_max=100,
+            loyalty=85,
+            tactician_id=417513,
+            tactician_name="GiaCatLuong",
+        )
+        g2 = General(
+            id=417513,
+            name="GiaCatLuong",
+            role="van",
+            level=25,
+            morale=100,
+            stamina=100,
+            stamina_max=100,
+            loyalty=100,
+            status=0,
+            special_status=2,
+        )
+        roster = Roster(cities=[c1], camps=[], _generals={15230: [g1, g2]})
+        dash._loaded(roster)
+
+        gen_vals = dash.gen_tree.item("417506", "values")
+        assert str(gen_vals[3]) == "85"
+        assert gen_vals[4] == "GiaCatLuong"
+        assert gen_vals[5] == "Rảnh rỗi"
+
+        civ_vals = dash.gen_tree.item("417513", "values")
+        assert civ_vals[5] == "Mưu sĩ"
+
+        dash._show_general(g1)
+        info_txt = dash.info_var.get()
+        assert "TT 85" in info_txt
+        assert "Mưu sĩ: GiaCatLuong" in info_txt
+    finally:
+        dash.destroy()
+
+
+def test_overview_reward_all_confirm_and_cancel():
+    """Ban thưởng toàn bộ hiển thị ước tính Vàng, gọi OPT.ashx?id=46 khi xác nhận và reload."""
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=100, name="ThanhA", type="Thành", pos_x=10, pos_y=20, level=10)
+        g1 = General(id=1, name="VanA", role="van", level=10, morale=100, stamina=100, stamina_max=100, loyalty=80)
+        g2 = General(id=2, name="VoB", role="vo", level=20, morale=100, stamina=100, stamina_max=100, loyalty=100)
+        fresh = Roster(cities=[c1], camps=[], _generals={100: [g1, g2]})
+
+        calls = []
+        dash.gateway.call = lambda ep, oid, payload=None, **_kw: calls.append((ep, oid, payload)) or {"ret": 0, "loyalty": 100}
+
+        # Trường hợp hủy xác nhận
+        with patch("linhvuong.dashboard.messagebox.askyesno", return_value=False) as mock_ask:
+            dash._confirm_and_run_reward(fresh)
+            assert mock_ask.called
+            assert "2,000" in mock_ask.call_args[0][1]
+            assert calls == []
+
+        # Trường hợp đồng ý
+        import time
+
+        with patch("linhvuong.dashboard.messagebox.askyesno", return_value=True), patch(
+            "linhvuong.dashboard.messagebox.showinfo"
+        ) as mock_info, patch.object(dash, "reload") as mock_reload:
+            dash._confirm_and_run_reward(fresh)
+            deadline = time.time() + 2.0
+            while not mock_info.called and time.time() < deadline:
+                dash.update()
+                time.sleep(0.02)
+
+            assert calls == [
+                ("OPT.ashx", 46, {"lCityID": "100", "lGeneralID": "1", "lMoney": "2000", "_": ""})
+            ]
+            assert mock_info.called
+            assert mock_reload.called
+    finally:
+        dash.destroy()
+
+
+def test_tactician_dialog_selection_and_by_level_execution():
+    """Hộp thoại Thiết lập Mưu sĩ lọc theo thành, chọn tướng, và chạy chế độ Theo cấp + Đổi mưu sĩ."""
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=100, name="ThanhA", type="Thành", pos_x=10, pos_y=20, level=15)
+        vo1 = General(
+            id=1, name="Vo1", role="vo", level=50, morale=100, stamina=100, stamina_max=100,
+            tactician_id=11, tactician_name="VanOld",
+        )
+        vo2 = General(id=2, name="Vo2", role="vo", level=30, morale=100, stamina=100, stamina_max=100)
+        van_old = General(id=11, name="VanOld", role="van", level=20, morale=100, stamina=100, stamina_max=100, special_status=2)
+        van_mayor = General(id=12, name="ThaiThu", role="van", level=99, morale=100, stamina=100, stamina_max=100, special_status=1)
+        van_new = General(id=13, name="VanNew", role="van", level=40, morale=100, stamina=100, stamina_max=100, special_status=0)
+        roster = Roster(cities=[c1], camps=[], _generals={100: [vo1, vo2, van_old, van_mayor, van_new]})
+        dash._loaded(roster)
+
+        dash._open_tactician_dialog()
+        assert dash._tac_dialog.winfo_exists()
+        assert dash.tac_city_combo.get() == c1.display_name
+        assert dash.tac_reassign_var.get() is False
+        assert set(dash.tac_tree.get_children()) == {"1", "2"}
+
+        # Chọn nhanh chỉ chưa có MS
+        dash._tac_select_unassigned()
+        assert dash._tac_selected_ids == {2}
+        # Chọn tất cả
+        dash._tac_select_all()
+        assert dash._tac_selected_ids == {1, 2}
+
+        # Bật Đổi mưu sĩ và chạy theo cấp
+        dash.tac_reassign_var.set(True)
+        opt_calls = []
+        dash.gateway.call = lambda ep, oid, payload=None, **_kw: opt_calls.append((ep, oid, dict(payload or {}))) or {"ret": 0}
+
+        import time
+        from linhvuong.generals import MODE_BY_LEVEL
+
+        with patch("linhvuong.dashboard.fetch_roster", return_value=roster), patch(
+            "linhvuong.dashboard.messagebox.showinfo"
+        ) as mock_info, patch.object(dash, "reload") as mock_reload:
+            dash._start_tactician_action(MODE_BY_LEVEL)
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                dash.update()
+                if mock_info.called:
+                    break
+                time.sleep(0.02)
+
+            assert [(c[2]["lType"], c[2]["lGeneralID"], c[2]["lFollowGeneralID"]) for c in opt_calls] == [
+                ("0", "11", "0"),   # Tháo VanOld khỏi Vo1
+                ("3", "13", "1"),   # Ghép Vo1 (50) <-> VanNew (40), bỏ qua Thái thú (12)
+                ("3", "11", "2"),   # Ghép Vo2 (30) <-> VanOld (20)
+            ]
+            assert mock_info.called
+            assert mock_reload.called
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_explore_widgets_and_mutual_exclusion():
+    dash = safe_dashboard()
+    try:
+        # 1. Kiểm tra các biến & widget Thám bảo tồn tại với mặc định hợp lệ
+        assert hasattr(dash, "aux_explore_var")
+        assert hasattr(dash, "aux_explore_whip_var")
+        assert hasattr(dash, "aux_explore_coin_var")
+        assert hasattr(dash, "aux_explore_turns_var")
+        assert hasattr(dash, "aux_explore_time_lbl")
+        assert hasattr(dash, "aux_explore_turns_frame")
+
+        assert dash.aux_explore_var.get() is False
+        assert dash.aux_explore_whip_var.get() is False
+        assert dash.aux_explore_coin_var.get() is False
+        assert dash.aux_explore_turns_var.get() == "1"
+        assert dash.aux_explore_time_lbl.cget("text") == "(Còn: --)"
+        assert dash.aux_explore_turns_frame.winfo_manager() == ""
+
+        # 2. Tích Dùng Roi -> hiện ô Số lượt
+        dash.aux_explore_whip_var.set(True)
+        dash._on_explore_clear_mode_changed("whip")
+        assert dash.aux_explore_whip_var.get() is True
+        assert dash.aux_explore_coin_var.get() is False
+        assert dash.aux_explore_turns_frame.winfo_manager() == "pack"
+
+        # 3. Tích Dùng Coin -> tự bỏ tích Dùng Roi, vẫn hiện ô Số lượt
+        dash.aux_explore_coin_var.set(True)
+        dash._on_explore_clear_mode_changed("coin")
+        assert dash.aux_explore_coin_var.get() is True
+        assert dash.aux_explore_whip_var.get() is False
+        assert dash.aux_explore_turns_frame.winfo_manager() == "pack"
+
+        # 4. Bỏ tích Dùng Coin -> ẩn ô Số lượt
+        dash.aux_explore_coin_var.set(False)
+        dash._on_explore_clear_mode_changed("coin")
+        assert dash.aux_explore_whip_var.get() is False
+        assert dash.aux_explore_coin_var.get() is False
+        assert dash.aux_explore_turns_frame.winfo_manager() == ""
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_explore_natural_countdown_and_auto_run():
+    dash = safe_dashboard()
+    try:
+        calls = []
+        status_responses = [
+            {"ret": 0, "left": 3661},  # Lần 1: còn 1h 1m 1s -> chỉ cập nhật countdown
+            {"ret": 0, "left": 0},     # Lần 2: sẵn sàng -> tự động thám bảo
+            {"ret": 0, "left": 900},   # Lần 3: sau khi thám bảo có cooldown mới 15m
+        ]
+
+        def fake_call(endpoint, api_id, payload):
+            calls.append((endpoint, api_id, dict(payload)))
+            if endpoint == "Common.ashx" and api_id == 140:
+                action = str(payload.get("lAction"))
+                if action == "0":
+                    return status_responses.pop(0)
+                if action == "1":
+                    return {"ret": 0, "bonus": "获得：名将×1"}
+            return {"ret": 0}
+
+        dash.gateway.call = fake_call
+
+        # 1. Khi còn cooldown (left > 0) và chưa bật Thám bảo -> chỉ cập nhật nhãn đếm ngược
+        dash.aux_explore_var.set(False)
+        dash._check_and_run_explore(async_check=False)
+        assert dash.aux_explore_time_lbl.cget("text") == "(Còn: 1:01:01)"
+        assert dash._explore_left_seconds == 3661
+        assert [c[2]["lAction"] for c in calls] == ["0"]
+
+        # 2. Khi bật Thám bảo và countdown về 0 -> gọi lAction=1 và ghi log vật phẩm, lấy countdown mới
+        calls.clear()
+        dash.aux_explore_var.set(True)
+        dash._check_and_run_explore(async_check=False)
+
+        assert [c[2]["lAction"] for c in calls] == ["0", "1", "0"]
+        assert dash.aux_explore_time_lbl.cget("text") == "(Còn: 0:15:00)"
+        assert dash._explore_left_seconds == 900
+        log_content = dash.bld_log_text.get("1.0", "end")
+        assert "名将" in log_content
+
+        # 3. Kiểm tra _tick_explore_countdown đếm ngược về 0 sẽ kích hoạt _check_and_run_explore
+        dash._explore_left_seconds = 1
+        with patch.object(dash, "_check_and_run_explore") as mock_run:
+            dash._tick_explore_countdown()
+            assert dash._explore_left_seconds == 0
+            assert dash.aux_explore_time_lbl.cget("text") == "(Sẵn sàng)"
+            mock_run.assert_called_once_with(async_check=True)
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_explore_whip_and_coin_turns_and_fallback():
+    dash = safe_dashboard()
+    try:
+        calls = []
+        state = {"left": 600}
+
+        def fake_call(endpoint, api_id, payload):
+            calls.append((endpoint, api_id, dict(payload)))
+            if endpoint == "Common.ashx" and api_id == 140:
+                action = str(payload.get("lAction"))
+                if action == "0":
+                    return {"ret": 0, "left": state["left"]}
+                if action == "2":
+                    state["left"] = 0
+                    return {"ret": 0}
+                if action == "1":
+                    state["left"] = 600
+                    return {"ret": 0, "bonus": "获得：龙跃凤鸣礼包×1"}
+            return {"ret": 0}
+
+        dash.gateway.call = fake_call
+
+        # 1. Chạy 2 lượt bằng Roi (lParam=1)
+        dash.aux_explore_var.set(True)
+        dash.aux_explore_whip_var.set(True)
+        dash._update_explore_turns_visibility()
+        dash.aux_explore_turns_var.set("2")
+
+        dash._check_and_run_explore(async_check=False)
+
+        # Kiểm tra trình tự API: check(600) -> clear(1) -> check(0) -> perform -> check(600) -> clear(1) -> check(0) -> perform -> check(600)
+        assert [(c[2]["lAction"], c[2]["lParam"]) for c in calls] == [
+            ("0", "0"),
+            ("2", "1"),
+            ("0", "0"),
+            ("1", "0"),
+            ("0", "0"),
+            ("2", "1"),
+            ("0", "0"),
+            ("1", "0"),
+            ("0", "0"),
+        ]
+        # Sau khi hoàn thành 2 lượt, tự bỏ tích Dùng Roi, ẩn ô Số lượt, giữ Thám bảo bật và đếm ngược 0:10:00
+        assert dash.aux_explore_var.get() is True
+        assert dash.aux_explore_whip_var.get() is False
+        assert dash.aux_explore_coin_var.get() is False
+        assert dash.aux_explore_turns_frame.winfo_manager() == ""
+        assert dash.aux_explore_time_lbl.cget("text") == "(Còn: 0:10:00)"
+
+        # 2. Chạy 2 lượt bằng Coin (lParam=2) nhưng hết Coin ở lượt 2 -> dừng và chuyển về chờ countdown
+        calls.clear()
+        state["left"] = 300
+        clear_attempts = {"count": 0}
+
+        def fake_call_coin_limit(endpoint, api_id, payload):
+            calls.append((endpoint, api_id, dict(payload)))
+            if endpoint == "Common.ashx" and api_id == 140:
+                action = str(payload.get("lAction"))
+                if action == "0":
+                    return {"ret": 0, "left": state["left"]}
+                if action == "2":
+                    clear_attempts["count"] += 1
+                    if clear_attempts["count"] == 1:
+                        state["left"] = 0
+                        return {"ret": 0}
+                    return {"ret": 50}  # Hết coin
+                if action == "1":
+                    state["left"] = 300
+                    return {"ret": 0, "bonus": "获得：隐贤录残页×1"}
+            return {"ret": 0}
+
+        dash.gateway.call = fake_call_coin_limit
+        dash.aux_explore_coin_var.set(True)
+        dash._update_explore_turns_visibility()
+        dash.aux_explore_turns_var.set("2")
+
+        dash._check_and_run_explore(async_check=False)
+
+        assert [(c[2]["lAction"], c[2]["lParam"]) for c in calls] == [
+            ("0", "0"),
+            ("2", "2"),
+            ("0", "0"),
+            ("1", "0"),
+            ("0", "0"),
+            ("2", "2"),
+            ("0", "0"),
+        ]
+        assert dash.aux_explore_var.get() is True
+        assert dash.aux_explore_coin_var.get() is False
+        assert dash.aux_explore_turns_frame.winfo_manager() == ""
+        assert dash.aux_explore_time_lbl.cget("text") == "(Còn: 0:05:00)"
+        assert "Không thể xóa thời gian chờ" in dash.bld_log_text.get("1.0", "end")
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_explore_profile_save_load_and_model():
+    dash = safe_dashboard()
+    try:
+        dash.aux_explore_var.set(True)
+        dash.aux_explore_coin_var.set(True)
+        dash.aux_explore_turns_var.set("7")
+        dash._update_explore_turns_visibility()
+
+        profile = dash._collect_unified_profile()
+        assert profile["logistics"]["auto_explore"] is True
+        assert profile["logistics"]["explore_use_whip"] is False
+        assert profile["logistics"]["explore_use_coin"] is True
+        assert profile["logistics"]["explore_turns"] == "7"
+
+        # Reset UI rồi nạp lại từ profile
+        dash.aux_explore_var.set(False)
+        dash.aux_explore_coin_var.set(False)
+        dash.aux_explore_whip_var.set(True)
+        dash.aux_explore_turns_var.set("1")
+        dash._update_explore_turns_visibility()
+
+        loaded = dash._apply_unified_profile(profile)
+        assert "Hậu Cần" in loaded
+        assert dash.aux_explore_var.get() is True
+        assert dash.aux_explore_whip_var.get() is False
+        assert dash.aux_explore_coin_var.get() is True
+        assert dash.aux_explore_turns_var.get() == "7"
+        assert dash.aux_explore_turns_frame.winfo_manager() == "pack"
+
+        # Kiểm tra LogisticsProfile dataclass & loại trừ tương hỗ khi dữ liệu có cả 2 cờ
+        lp = LogisticsProfile.from_dict({
+            "auto_explore": True,
+            "explore_use_whip": True,
+            "explore_use_coin": True,
+            "explore_turns": "5",
+        })
+        assert lp.auto_explore is True
+        assert lp.explore_use_whip is True
+        assert lp.explore_use_coin is False
+        assert lp.explore_turns == "5"
+    finally:
+        dash.destroy()
+
+
 
 
 

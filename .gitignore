@@ -52,7 +52,7 @@ test-results/
 *.swp
 *.swo
 *~
-
+*.exe
 # Logs
 *.log
 logs/

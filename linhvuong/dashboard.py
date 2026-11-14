@@ -12,6 +12,7 @@ Tích hợp 6 Tab toàn diện:
 import json
 import logging
 import queue
+import re
 import threading
 import time
 import tkinter as tk
@@ -32,6 +33,17 @@ from .battle import (
 )
 from .gateway import GatewayClient
 from .engine import AutomationEngine, TaskStatus
+from .generals import (
+    MODE_BY_LEVEL,
+    MODE_BY_NAME,
+    MODE_REMOVE,
+    MODE_SEQUENTIAL,
+    RewardSummary,
+    TacticianSummary,
+    collect_reward_targets,
+    configure_tacticians,
+    reward_all_generals,
+)
 from .locks import TargetLocks
 from .logger import open_logs_directory, setup_logger
 from .notifications import NotificationConfig, dispatch_boss_alert
@@ -720,6 +732,16 @@ class Dashboard(tk.Frame):
         self.bld_boost_var = self.aux_boost_var
         self.bld_comfort_var = self.aux_comfort_var
         self.aux_tribute_var = tk.BooleanVar(value=False)
+        self.aux_explore_var = tk.BooleanVar(value=False)
+        self.aux_explore_whip_var = tk.BooleanVar(value=False)
+        self.aux_explore_coin_var = tk.BooleanVar(value=False)
+        self.aux_explore_turns_var = tk.StringVar(value="1")
+        self._explore_left_seconds: int = 0
+        self._explore_countdown_after_id: Optional[str] = None
+        self._explore_worker_running: bool = False
+        self._explore_lock = threading.Lock()
+        self._explore_seq: int = 0
+        self._explore_stop_requested: bool = False
         self.log_amount_var = tk.StringVar(value="1")
         self.log_interval_var = tk.StringVar(value="60")
         self.dt_dest_x_var = tk.StringVar(value="")
@@ -944,6 +966,20 @@ class Dashboard(tk.Frame):
 
         ttk.Button(profile_frame, text="💾 Lưu Cấu Hình Tổng", style="Action.TButton", command=self._save_unified_profile_dialog).pack(side="left", padx=3)
         ttk.Button(profile_frame, text="📂 Nạp Cấu Hình Tổng", style="Action.TButton", command=self._load_unified_profile_dialog).pack(side="left", padx=3)
+        self.reward_all_btn = ttk.Button(
+            profile_frame,
+            text="🎁 Ban Thưởng Toàn Bộ",
+            style="Success.TButton",
+            command=self._on_reward_all_clicked,
+        )
+        self.reward_all_btn.pack(side="left", padx=(8, 3))
+        self.tactician_btn = ttk.Button(
+            profile_frame,
+            text="🧠 Thiết Lập Mưu Sĩ",
+            style="Action.TButton",
+            command=self._open_tactician_dialog,
+        )
+        self.tactician_btn.pack(side="left", padx=3)
 
         # Tầng trên: Thành & Doanh trại, Tướng đồn trú, Chi tiết biên chế
         top_body = tk.Frame(parent, bg=BG)
@@ -967,10 +1003,24 @@ class Dashboard(tk.Frame):
 
         f2 = ttk.LabelFrame(top_body, text="Tướng đồn trú", style="Card.TLabelframe")
         f2.grid(row=0, column=1, sticky="nsew", padx=6)
-        self.gen_tree = ttk.Treeview(f2, columns=("role", "lv", "hp", "status"), show="tree headings", selectmode="browse")
-        for col, text, w in (("#0", "Tên tướng", 100), ("role", "Chức vụ", 70), ("lv", "Cấp", 35), ("hp", "Thể lực", 70), ("status", "Trạng thái", 90)):
+        self.gen_tree = ttk.Treeview(
+            f2,
+            columns=("role", "lv", "hp", "loyalty", "tactician", "status"),
+            show="tree headings",
+            selectmode="browse",
+        )
+        for col, text, w in (
+            ("#0", "Tên tướng", 100),
+            ("role", "Chức vụ", 70),
+            ("lv", "Cấp", 35),
+            ("hp", "Thể lực", 68),
+            ("loyalty", "TT", 38),
+            ("tactician", "Mưu sĩ", 90),
+            ("status", "Trạng thái", 85),
+        ):
             self.gen_tree.heading(col, text=text)
-            self.gen_tree.column(col, width=w, anchor="center" if col in ("role", "lv", "status") else ("w" if col == "#0" else "e"))
+            anchor = "center" if col in ("role", "lv", "loyalty", "status") else ("w" if col in ("#0", "tactician") else "e")
+            self.gen_tree.column(col, width=w, anchor=anchor)
         self.gen_tree.pack(fill="both", expand=True, padx=6, pady=6)
         self.gen_tree.bind("<<TreeviewSelect>>", self._on_general)
 
@@ -1556,6 +1606,10 @@ class Dashboard(tk.Frame):
                 "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
                 "amount": self.log_amount_var.get() if hasattr(self, "log_amount_var") else "1000",
                 "auto_daily_reward": bool(self.aux_daily_reward_var.get()) if hasattr(self, "aux_daily_reward_var") else True,
+                "auto_explore": bool(self.aux_explore_var.get()) if hasattr(self, "aux_explore_var") else False,
+                "explore_use_whip": bool(self.aux_explore_whip_var.get()) if hasattr(self, "aux_explore_whip_var") else False,
+                "explore_use_coin": bool(self.aux_explore_coin_var.get()) if hasattr(self, "aux_explore_coin_var") else False,
+                "explore_turns": self.aux_explore_turns_var.get() if hasattr(self, "aux_explore_turns_var") else "1",
             },
             "ditrai": {
                 "dest_x": self.dt_dest_x_var.get() if hasattr(self, "dt_dest_x_var") else "",
@@ -2080,6 +2134,31 @@ class Dashboard(tk.Frame):
                 self.log_amount_var.set(str(log_data["amount"]))
             if hasattr(self, "aux_daily_reward_var") and "auto_daily_reward" in log_data:
                 self.aux_daily_reward_var.set(bool(log_data["auto_daily_reward"]))
+            if hasattr(self, "aux_explore_var") and "auto_explore" in log_data:
+                self.aux_explore_var.set(bool(log_data["auto_explore"]))
+            if "explore_use_whip" in log_data or "explore_use_coin" in log_data:
+                use_whip = bool(
+                    log_data.get(
+                        "explore_use_whip",
+                        self.aux_explore_whip_var.get() if hasattr(self, "aux_explore_whip_var") else False,
+                    )
+                )
+                use_coin = bool(
+                    log_data.get(
+                        "explore_use_coin",
+                        self.aux_explore_coin_var.get() if hasattr(self, "aux_explore_coin_var") else False,
+                    )
+                )
+                if use_whip and use_coin:
+                    use_coin = False
+                if hasattr(self, "aux_explore_whip_var"):
+                    self.aux_explore_whip_var.set(use_whip)
+                if hasattr(self, "aux_explore_coin_var"):
+                    self.aux_explore_coin_var.set(use_coin)
+            if hasattr(self, "aux_explore_turns_var") and "explore_turns" in log_data:
+                self.aux_explore_turns_var.set(str(log_data["explore_turns"]))
+            if hasattr(self, "_update_explore_turns_visibility"):
+                self._update_explore_turns_visibility()
             loaded_sections.append("Hậu Cần")
 
         # 7. Dịch Trại
@@ -5036,6 +5115,70 @@ class Dashboard(tk.Frame):
         self.aux_tribute_bld_combo.set("官府 (Quan Phủ)")
         self.aux_tribute_bld_combo.pack(side="left", padx=4)
 
+        r_aux4 = tk.Frame(f_aux, bg=BG)
+        r_aux4.pack(fill="x", padx=4, pady=2)
+        tk.Checkbutton(
+            r_aux4,
+            text="Thám bảo",
+            variable=self.aux_explore_var,
+            command=self._on_aux_explore_toggled,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=2)
+        self.aux_explore_time_lbl = tk.Label(
+            r_aux4,
+            text="(Còn: --)",
+            bg=BG,
+            fg="#4ade80",
+            font=("Segoe UI", 8, "bold"),
+        )
+        self.aux_explore_time_lbl.pack(side="left", padx=2)
+
+        r_aux5 = tk.Frame(f_aux, bg=BG)
+        r_aux5.pack(fill="x", padx=4, pady=2)
+        self.aux_explore_whip_cb = tk.Checkbutton(
+            r_aux5,
+            text="Dùng Roi",
+            variable=self.aux_explore_whip_var,
+            command=lambda: self._on_explore_clear_mode_changed("whip"),
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        )
+        self.aux_explore_whip_cb.pack(side="left", padx=2)
+        self.aux_explore_coin_cb = tk.Checkbutton(
+            r_aux5,
+            text="Dùng Coin",
+            variable=self.aux_explore_coin_var,
+            command=lambda: self._on_explore_clear_mode_changed("coin"),
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        )
+        self.aux_explore_coin_cb.pack(side="left", padx=2)
+        self.aux_explore_turns_frame = tk.Frame(r_aux5, bg=BG)
+        tk.Label(
+            self.aux_explore_turns_frame,
+            text="Số lượt:",
+            bg=BG,
+            fg=FG,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(4, 2))
+        self.aux_explore_turns_entry = ttk.Entry(
+            self.aux_explore_turns_frame,
+            textvariable=self.aux_explore_turns_var,
+            width=4,
+        )
+        self.aux_explore_turns_entry.pack(side="left")
+        self._update_explore_turns_visibility()
+
         # 3. Chuyển Quân Giới
         f_logis = ttk.LabelFrame(col3, text="Chuyển Quân Giới", style="Card.TLabelframe")
         f_logis.pack(fill="both", expand=True, padx=2, pady=4)
@@ -5490,6 +5633,285 @@ class Dashboard(tk.Frame):
         else:
             run_check()
 
+    def _update_explore_turns_visibility(self):
+        """Ẩn/hiện ô nhập số lượt Thám bảo tùy theo checkbox Dùng Roi / Dùng Coin."""
+        if not hasattr(self, "aux_explore_turns_frame"):
+            return
+        show = bool(self.aux_explore_whip_var.get() or self.aux_explore_coin_var.get())
+        if show:
+            if not self.aux_explore_turns_frame.winfo_manager():
+                self.aux_explore_turns_frame.pack(side="left", padx=2)
+        else:
+            self.aux_explore_turns_frame.pack_forget()
+
+    def _on_explore_clear_mode_changed(self, source: str):
+        """Đảm bảo Dùng Roi và Dùng Coin loại trừ lẫn nhau và đồng bộ ô Số lượt."""
+        if source == "whip" and self.aux_explore_whip_var.get():
+            self.aux_explore_coin_var.set(False)
+        elif source == "coin" and self.aux_explore_coin_var.get():
+            self.aux_explore_whip_var.set(False)
+        self._update_explore_turns_visibility()
+        if self.aux_explore_var.get() and (self.aux_explore_whip_var.get() or self.aux_explore_coin_var.get()):
+            self._check_and_run_explore(async_check=True)
+
+    def _on_aux_explore_toggled(self):
+        """Kích hoạt hoặc dừng kiểm tra/chạy Thám bảo khi bật tắt checkbox."""
+        self._explore_stop_requested = not bool(self.aux_explore_var.get())
+        self._check_and_run_explore(async_check=True)
+
+    def _log_explore(self, msg: str):
+        """Ghi nhật ký Thám bảo an toàn luồng vào Nhật ký Nội Chính."""
+        if threading.current_thread() is threading.main_thread():
+            self._append_bld_log(msg)
+        else:
+            try:
+                self.after(0, self._append_bld_log, msg)
+            except (RuntimeError, tk.TclError):
+                pass
+
+    def _reset_explore_clear_mode_ui(self):
+        """Bỏ tích Dùng Roi / Dùng Coin và ẩn ô Số lượt sau khi hoàn tất lượt."""
+        def _do():
+            try:
+                if hasattr(self, "aux_explore_whip_var"):
+                    self.aux_explore_whip_var.set(False)
+                if hasattr(self, "aux_explore_coin_var"):
+                    self.aux_explore_coin_var.set(False)
+                self._update_explore_turns_visibility()
+            except (RuntimeError, tk.TclError):
+                pass
+
+        if threading.current_thread() is threading.main_thread():
+            _do()
+        else:
+            try:
+                self.after(0, _do)
+            except (RuntimeError, tk.TclError):
+                pass
+
+    @staticmethod
+    def _format_explore_countdown(seconds: int) -> str:
+        seconds = max(0, int(seconds))
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        return f"{h}:{m:02d}:{s:02d}"
+
+    def _cancel_explore_countdown_timer(self):
+        old_id = getattr(self, "_explore_countdown_after_id", None)
+        if old_id is not None:
+            try:
+                self.after_cancel(old_id)
+            except Exception:
+                pass
+            self._explore_countdown_after_id = None
+
+    def _tick_explore_countdown(self):
+        self._explore_countdown_after_id = None
+        try:
+            if not (hasattr(self, "aux_explore_time_lbl") and self.aux_explore_time_lbl.winfo_exists()):
+                return
+            if self._explore_left_seconds > 0:
+                self._explore_left_seconds -= 1
+            if self._explore_left_seconds > 0:
+                self.aux_explore_time_lbl.configure(
+                    text=f"(Còn: {self._format_explore_countdown(self._explore_left_seconds)})",
+                    fg="#4ade80",
+                )
+                self._explore_countdown_after_id = self.after(1000, self._tick_explore_countdown)
+            else:
+                self.aux_explore_time_lbl.configure(text="(Sẵn sàng)", fg="#4ade80")
+                if self.aux_explore_var.get() and not self._explore_worker_running:
+                    self._check_and_run_explore(async_check=True)
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def _update_explore_countdown_ui(
+        self, left_seconds: Optional[int], error_text: str = "", seq: Optional[int] = None
+    ):
+        def _apply():
+            try:
+                if seq is not None and seq != self._explore_seq:
+                    return
+                if not (hasattr(self, "aux_explore_time_lbl") and self.aux_explore_time_lbl.winfo_exists()):
+                    return
+                self._cancel_explore_countdown_timer()
+                if error_text or left_seconds is None:
+                    self._explore_left_seconds = 0
+                    self.aux_explore_time_lbl.configure(text=f"({error_text or 'Lỗi'})", fg="#f87171")
+                    return
+                secs = max(0, int(left_seconds))
+                self._explore_left_seconds = secs
+                if secs > 0:
+                    self.aux_explore_time_lbl.configure(
+                        text=f"(Còn: {self._format_explore_countdown(secs)})",
+                        fg="#4ade80",
+                    )
+                    self._explore_countdown_after_id = self.after(1000, self._tick_explore_countdown)
+                else:
+                    self.aux_explore_time_lbl.configure(text="(Sẵn sàng)", fg="#4ade80")
+            except (RuntimeError, tk.TclError):
+                pass
+
+        if threading.current_thread() is threading.main_thread():
+            _apply()
+        else:
+            try:
+                self.after(0, _apply)
+            except (RuntimeError, tk.TclError):
+                pass
+
+    def _api_check_explore_status(self) -> tuple[bool, int, str]:
+        """Gọi Common.ashx?id=140 (lAction=0) kiểm tra thời gian chờ Thám bảo."""
+        try:
+            resp = self.gateway.call("Common.ashx", 140, {"lAction": "0", "lParam": "0", "_": ""})
+            if not isinstance(resp, dict):
+                return False, 0, "Lỗi kết nối"
+            ret_val = resp.get("ret", -1)
+            if ret_val != 0:
+                return False, 0, f"Lỗi API {ret_val}"
+            try:
+                left_seconds = max(0, int(resp.get("left", 0) or 0))
+            except (TypeError, ValueError):
+                left_seconds = 0
+            return left_seconds == 0, left_seconds, ""
+        except Exception as e:
+            return False, 0, f"Lỗi: {e}"
+
+    def _api_clear_explore_cooldown(self, clear_type: int) -> bool:
+        """Gọi Common.ashx?id=140 (lAction=2) xóa thời gian chờ bằng Roi (1) hoặc Coin (2)."""
+        try:
+            resp = self.gateway.call(
+                "Common.ashx", 140, {"lAction": "2", "lParam": str(clear_type), "_": ""}
+            )
+            return isinstance(resp, dict) and resp.get("ret", -1) == 0
+        except Exception:
+            return False
+
+    def _api_perform_explore(self) -> tuple[bool, str]:
+        """Gọi Common.ashx?id=140 (lAction=1) thực hiện Thám bảo và trích xuất tên vật phẩm."""
+        try:
+            resp = self.gateway.call("Common.ashx", 140, {"lAction": "1", "lParam": "0", "_": ""})
+            if not isinstance(resp, dict) or resp.get("ret", -1) != 0:
+                return False, ""
+            bonus = str(resp.get("bonus", "") or "")
+            match = re.search(r"获得：([^×<\n]+)", bonus)
+            if match:
+                item_name = match.group(1).strip()
+            else:
+                item_name = bonus.strip() or "Vật phẩm"
+            return True, item_name
+        except Exception:
+            return False, ""
+
+    def _check_and_run_explore(self, async_check: bool = True):
+        """Kiểm tra thời gian chờ Thám bảo và tự động thám bảo theo chế độ đã chọn."""
+        if not self.gateway:
+            return None
+        if async_check and self._explore_worker_running:
+            return None
+
+        on_main = threading.current_thread() is threading.main_thread()
+        if on_main:
+            auto_explore = bool(self.aux_explore_var.get())
+            use_whip = bool(self.aux_explore_whip_var.get())
+            use_coin = bool(self.aux_explore_coin_var.get())
+            turns_str = self.aux_explore_turns_var.get().strip()
+            if auto_explore:
+                self._explore_stop_requested = False
+        else:
+            auto_explore = False
+            use_whip = False
+            use_coin = False
+            turns_str = "1"
+
+        def run_check():
+            if not self._explore_lock.acquire(blocking=not async_check):
+                return
+            try:
+                self._explore_worker_running = True
+                self._explore_seq += 1
+                seq = self._explore_seq
+
+                if auto_explore and (use_whip or use_coin):
+                    clear_type = 1 if use_whip else 2
+                    mode_name = "Roi" if clear_type == 1 else "Coin"
+                    try:
+                        turns = int(turns_str)
+                    except (TypeError, ValueError):
+                        turns = 0
+
+                    if turns <= 0:
+                        self._log_explore(
+                            "⚠️ Số lượt thám bảo phải là số nguyên dương (> 0). Chuyển về chế độ chờ countdown."
+                        )
+                        self._reset_explore_clear_mode_ui()
+                    else:
+                        self._log_explore(f"🧭 Bắt đầu Thám bảo {turns} lượt (Dùng {mode_name})...")
+                        success_count = 0
+                        for turn_idx in range(1, turns + 1):
+                            if self._explore_stop_requested:
+                                self._log_explore(f"🛑 Đã dừng Thám bảo ở lượt {turn_idx}/{turns}.")
+                                break
+                            can_explore, left_seconds, err = self._api_check_explore_status()
+                            if err:
+                                self._log_explore(f"❌ Lượt {turn_idx}/{turns}: Lỗi kiểm tra Thám bảo ({err}).")
+                                break
+                            if not can_explore and left_seconds > 0:
+                                if not self._api_clear_explore_cooldown(clear_type):
+                                    self._log_explore(
+                                        f"⚠️ Lượt {turn_idx}/{turns}: Không thể xóa thời gian chờ (hết {mode_name}?), chuyển về chế độ chờ countdown."
+                                    )
+                                    break
+                                can_explore, left_seconds, err = self._api_check_explore_status()
+                                if err or not can_explore:
+                                    self._log_explore(
+                                        f"❌ Lượt {turn_idx}/{turns}: Vẫn còn thời gian chờ sau khi xóa ({err or f'{left_seconds}s'})."
+                                    )
+                                    break
+                            ok, item_name = self._api_perform_explore()
+                            if ok:
+                                success_count += 1
+                                self._log_explore(f"🧭 Thám bảo lượt {turn_idx}/{turns}: Nhận được {item_name}")
+                            else:
+                                self._log_explore(f"❌ Thám bảo lượt {turn_idx}/{turns} thất bại.")
+                                break
+                        self._reset_explore_clear_mode_ui()
+                        self._log_explore(f"✅ Hoàn tất Thám bảo ({success_count}/{turns} lượt thành công).")
+                        can_explore, left_seconds, err = self._api_check_explore_status()
+                        self._update_explore_countdown_ui(None if err else left_seconds, err, seq=seq)
+                        return
+
+                can_explore, left_seconds, err = self._api_check_explore_status()
+                if err:
+                    self._update_explore_countdown_ui(None, err, seq=seq)
+                    return
+
+                if can_explore and auto_explore and not self._explore_stop_requested:
+                    ok, item_name = self._api_perform_explore()
+                    if ok:
+                        self._log_explore(f"🧭 Thám bảo tự động: Nhận được {item_name}")
+                    else:
+                        self._log_explore("⚠️ Thám bảo tự động thất bại.")
+                    can_explore, left_seconds, err = self._api_check_explore_status()
+                    if err:
+                        self._update_explore_countdown_ui(None, err, seq=seq)
+                        return
+
+                self._update_explore_countdown_ui(left_seconds, "", seq=seq)
+            except Exception as e:
+                logger.debug(f"Lỗi kiểm tra/chạy Thám bảo: {e}")
+            finally:
+                self._explore_worker_running = False
+                self._explore_lock.release()
+
+        if async_check:
+            t = threading.Thread(target=run_check, daemon=True)
+            t.start()
+            return t
+        run_check()
+        return None
+
     def _schedule_periodic_boost_check(self):
         # Hủy timer cũ để tránh nhân bản chuỗi lặp mỗi lần reload roster
         old_id = getattr(self, "_boost_after_id", None)
@@ -5502,6 +5924,7 @@ class Dashboard(tk.Frame):
         try:
             if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
                 self._check_and_update_boost_status(async_check=True)
+                self._check_and_run_explore(async_check=True)
                 today_str = time.strftime("%Y-%m-%d")
                 if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():
                     if getattr(self, "_last_daily_claim_date", None) != today_str:
@@ -6989,6 +7412,7 @@ class Dashboard(tk.Frame):
         self.refresh_btn.state(["!disabled"])
         if roster.bases:
             self.city_tree.selection_set(str(roster.bases[0].id))
+            self._on_city()
 
         # Danh sách Căn cứ thi công (Thành & Doanh trại)
         if hasattr(self, "bld_bases_tree"):
@@ -7108,6 +7532,9 @@ class Dashboard(tk.Frame):
             self._fetch_city_buildings()
             self._on_gd_city_selected()
 
+        if hasattr(self, "_on_tac_roster_updated"):
+            self._on_tac_roster_updated()
+
         today_str = time.strftime("%Y-%m-%d")
         if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():
             if getattr(self, "_last_daily_claim_date", None) != today_str:
@@ -7133,7 +7560,14 @@ class Dashboard(tk.Frame):
                 "end",
                 iid=iid,
                 text=g.name,
-                values=(ROLE_TEXT.get(g.role, g.role), g.level, f"{g.stamina}/{g.stamina_max}", g.status_text),
+                values=(
+                    ROLE_TEXT.get(g.role, g.role),
+                    g.level,
+                    f"{g.stamina}/{g.stamina_max}",
+                    g.loyalty,
+                    g.tactician_name or "-",
+                    g.status_text,
+                ),
             )
 
     def _on_general(self, _event=None):
@@ -7150,7 +7584,15 @@ class Dashboard(tk.Frame):
                 val.set("-")
             return
         self.name_var.set(g.name)
-        self.info_var.set(f"{ROLE_TEXT.get(g.role, g.role)}  •  Cấp {g.level}  •  Sĩ khí {g.morale}")
+        info_parts = [
+            ROLE_TEXT.get(g.role, g.role),
+            f"Cấp {g.level}",
+            f"Sĩ khí {g.morale}",
+            f"TT {g.loyalty}",
+        ]
+        if g.role == "vo":
+            info_parts.append(f"Mưu sĩ: {g.tactician_name or 'Chưa có'}")
+        self.info_var.set("  •  ".join(info_parts))
         army = self.roster.army_of(g.id)
         if army is None:
             self.total_var.set("Không có biên chế quân")
@@ -7164,6 +7606,626 @@ class Dashboard(tk.Frame):
             bar.configure(maximum=top, value=n)
             val.set(str(n))
         self.total_var.set(f"Tổng quân: {army.total}")
+
+    # -------------------------------------------------------------------------
+    # BAN THƯỞNG TOÀN BỘ VĂN QUAN & VÕ TƯỚNG
+    # -------------------------------------------------------------------------
+    def _set_reward_busy(self, busy: bool):
+        """Cập nhật trạng thái đang xử lý của nút Ban thưởng toàn bộ."""
+        self._reward_running = busy
+        if hasattr(self, "reward_all_btn") and self.reward_all_btn.winfo_exists():
+            self.reward_all_btn.state(["disabled"] if busy else ["!disabled"])
+
+    def _on_reward_all_clicked(self):
+        """Tải lại roster mới nhất rồi mở hộp thoại xác nhận Ban thưởng toàn bộ."""
+        if getattr(self, "_reward_running", False):
+            return
+        if self.gateway is None:
+            messagebox.showwarning("Ban Thưởng Toàn Bộ", "Chưa kết nối tài khoản game.", parent=self)
+            return
+        self._set_reward_busy(True)
+        self.status.set("Đang kiểm tra Lòng trung thành của Văn quan & Võ tướng...")
+        q: queue.Queue = queue.Queue()
+        self._reward_queue = q
+
+        def _fetch_worker():
+            try:
+                fresh_roster = fetch_roster(self.gateway)
+                q.put(("fetched", fresh_roster, None))
+            except Exception as exc:
+                q.put(("fetched", None, str(exc)))
+
+        threading.Thread(target=_fetch_worker, daemon=True).start()
+        self.after(20, self._poll_reward_queue)
+
+    def _poll_reward_queue(self):
+        """Rút kết quả Ban thưởng từ hàng đợi trên luồng giao diện chính."""
+        if getattr(self, "_closing", False):
+            return
+        q = getattr(self, "_reward_queue", None)
+        if q is None:
+            return
+        keep_polling = True
+        while True:
+            try:
+                item = q.get_nowait()
+            except queue.Empty:
+                break
+            kind = item[0]
+            if kind == "fetched":
+                _, fresh_roster, err = item
+                keep_polling = False
+                self._confirm_and_run_reward(fresh_roster, err)
+            elif kind == "log":
+                self._log_global(item[1])
+            elif kind == "done":
+                _, summary, err = item
+                keep_polling = False
+                self._on_reward_finished(summary, err)
+        if keep_polling and getattr(self, "_reward_running", False):
+            self.after(30, self._poll_reward_queue)
+
+    def _confirm_and_run_reward(self, fresh_roster: Optional[Roster], error: Optional[str] = None):
+        """Hiển thị xác nhận số tướng và ước tính Vàng, sau đó chạy Ban thưởng nền."""
+        if getattr(self, "_closing", False):
+            return
+        if error is not None or fresh_roster is None:
+            self._set_reward_busy(False)
+            err_msg = error or "Không tải được danh sách tướng."
+            self.status.set(f"Lỗi kiểm tra Lòng trung thành: {err_msg}")
+            self._log_global(f"❌ Ban thưởng thất bại khi tải dữ liệu: {err_msg}")
+            messagebox.showerror("Ban Thưởng Toàn Bộ", f"Không thể tải danh sách tướng:\n{err_msg}", parent=self)
+            return
+
+        targets = collect_reward_targets(fresh_roster)
+        if not targets:
+            self._set_reward_busy(False)
+            self.status.set("Tất cả Văn quan và Võ tướng đều đã đạt 100 Lòng trung thành.")
+            messagebox.showinfo(
+                "Ban Thưởng Toàn Bộ",
+                "Tất cả Văn quan và Võ tướng đều đã đạt 100 Lòng trung thành.",
+                parent=self,
+            )
+            return
+
+        total_gold = sum(t.money_needed for t in targets)
+        van_count = sum(1 for t in targets if t.general.role == "van")
+        vo_count = len(targets) - van_count
+        confirmed = messagebox.askyesno(
+            "Xác nhận Ban Thưởng Toàn Bộ",
+            (
+                f"Tìm thấy {len(targets)} tướng có Lòng trung thành < 100 "
+                f"({van_count} Văn quan, {vo_count} Võ tướng).\n\n"
+                f"Ước tính tổng Vàng cần dùng: {total_gold:,}\n\n"
+                "Bạn có muốn tiến hành Ban thưởng toàn bộ lên 100 ngay không?"
+            ),
+            parent=self,
+        )
+        if not confirmed:
+            self._set_reward_busy(False)
+            self.status.set("Đã hủy Ban thưởng toàn bộ.")
+            return
+
+        self.status.set(f"Đang Ban thưởng {len(targets)} tướng...")
+        self._execute_reward_worker(fresh_roster)
+
+    def _execute_reward_worker(self, target_roster: Roster):
+        """Thực thi Ban thưởng toàn bộ trên luồng nền qua Queue."""
+        self._set_reward_busy(True)
+        q: queue.Queue = queue.Queue()
+        self._reward_queue = q
+
+        def _worker():
+            try:
+                summary = reward_all_generals(
+                    self.gateway,
+                    roster=target_roster,
+                    on_log=lambda m: q.put(("log", m)),
+                )
+                q.put(("done", summary, None))
+            except Exception as exc:
+                q.put(("done", None, str(exc)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+        self.after(20, self._poll_reward_queue)
+
+    def _on_reward_finished(self, summary: Optional[RewardSummary], error: Optional[str] = None):
+        """Tổng kết Ban thưởng và làm mới Roster nếu có ít nhất 1 tướng thành công."""
+        if getattr(self, "_closing", False):
+            return
+        self._set_reward_busy(False)
+        if error is not None or summary is None:
+            err_msg = error or "Lỗi không xác định."
+            self.status.set(f"Ban thưởng lỗi: {err_msg}")
+            self._log_global(f"❌ Ban thưởng lỗi: {err_msg}")
+            messagebox.showerror("Ban Thưởng Toàn Bộ", f"Đã xảy ra lỗi khi Ban thưởng:\n{err_msg}", parent=self)
+            return
+
+        summary_msg = (
+            f"Thành công: {summary.success}/{summary.total} tướng\n"
+            f"Thất bại: {summary.failed}\n"
+            f"Tổng Vàng đã chi: {summary.total_gold_spent:,}"
+        )
+        self.status.set(
+            f"Ban thưởng xong: {summary.success}/{summary.total} tướng (đã chi {summary.total_gold_spent:,} Vàng)"
+        )
+        self._log_global(
+            f"🎁 Ban thưởng hoàn tất: {summary.success} thành công, "
+            f"{summary.failed} thất bại, chi {summary.total_gold_spent:,} Vàng."
+        )
+        if summary.failed > 0:
+            messagebox.showwarning("Kết quả Ban Thưởng", summary_msg, parent=self)
+        else:
+            messagebox.showinfo("Kết quả Ban Thưởng", summary_msg, parent=self)
+
+        if summary.success > 0:
+            self.reload()
+
+    # -------------------------------------------------------------------------
+    # THIẾT LẬP MƯU SĨ CHO VÕ TƯỚNG
+    # -------------------------------------------------------------------------
+    def _open_tactician_dialog(self):
+        """Mở cửa sổ thiết lập Mưu sĩ cho Võ tướng theo thành/toàn bộ."""
+        existing = getattr(self, "_tac_dialog", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            self._on_tac_roster_updated()
+            return
+
+        win = tk.Toplevel(self)
+        win.title("🧠 Thiết Lập Mưu Sĩ Cho Võ Tướng")
+        win.geometry("920x640")
+        win.minsize(780, 520)
+        win.configure(bg=BG)
+        win.transient(self)
+        set_app_icon(win)
+        self._tac_dialog = win
+        self._tac_selected_ids: set[int] = set()
+        self._tac_running = False
+        self._tac_stop_event = None
+        self._tac_base_by_name: dict[str, int] = {}
+
+        def _on_close():
+            if getattr(self, "_tac_running", False):
+                if not messagebox.askyesno(
+                    "Đang xử lý Mưu sĩ",
+                    "Tác vụ thiết lập Mưu sĩ đang chạy. Dừng và đóng cửa sổ?",
+                    parent=win,
+                ):
+                    return
+                if self._tac_stop_event is not None:
+                    self._tac_stop_event.set()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_close)
+
+        # Thanh bộ lọc thành & nút chọn nhanh
+        top_bar = tk.Frame(win, bg=BG)
+        top_bar.pack(fill="x", padx=12, pady=(10, 6))
+
+        tk.Label(top_bar, text="Thành / Trại:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 6))
+        self.tac_city_combo = ttk.Combobox(top_bar, state="readonly", width=28)
+        self.tac_city_combo.pack(side="left", padx=(0, 10))
+        self.tac_city_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_tac_tree())
+
+        ttk.Button(top_bar, text="☑ Tất cả", style="Action.TButton", command=self._tac_select_all).pack(side="left", padx=2)
+        ttk.Button(top_bar, text="☐ Bỏ chọn", style="Action.TButton", command=self._tac_deselect_all).pack(side="left", padx=2)
+        ttk.Button(top_bar, text="✨ Chỉ chưa có MS", style="Action.TButton", command=self._tac_select_unassigned).pack(side="left", padx=2)
+        self.tac_refresh_btn = ttk.Button(top_bar, text="🔄 Làm mới", style="Action.TButton", command=self._tac_refresh_roster)
+        self.tac_refresh_btn.pack(side="right", padx=2)
+
+        self.tac_summary_var = tk.StringVar(value="")
+        tk.Label(win, textvariable=self.tac_summary_var, bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(
+            anchor="w", padx=12, pady=(0, 4)
+        )
+
+        # Bảng danh sách Võ tướng
+        tree_frame = ttk.LabelFrame(win, text="Danh sách Võ tướng", style="Card.TLabelframe")
+        tree_frame.pack(fill="both", expand=True, padx=12, pady=4)
+
+        self.tac_tree = ttk.Treeview(
+            tree_frame,
+            columns=("sel", "city", "lv", "tactician", "status"),
+            show="tree headings",
+            selectmode="browse",
+        )
+        for col, text, w, anchor in (
+            ("#0", "Võ tướng", 150, "w"),
+            ("sel", "Chọn", 50, "center"),
+            ("city", "Thành / Trại", 150, "w"),
+            ("lv", "Cấp", 55, "center"),
+            ("tactician", "Mưu sĩ hiện tại", 170, "w"),
+            ("status", "Trạng thái", 130, "center"),
+        ):
+            self.tac_tree.heading(col, text=text)
+            self.tac_tree.column(col, width=w, anchor=anchor)
+
+        tac_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tac_tree.yview)
+        self.tac_tree.configure(yscrollcommand=tac_scroll.set)
+        self.tac_tree.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
+        tac_scroll.pack(side="right", fill="y", padx=(0, 6), pady=6)
+
+        self.tac_tree.bind("<Button-1>", self._on_tac_tree_click)
+        self.tac_tree.bind("<space>", self._on_tac_tree_space)
+
+        # Tùy chọn Đổi mưu sĩ + các nút chế độ
+        ctrl_frame = tk.Frame(win, bg=BG)
+        ctrl_frame.pack(fill="x", padx=12, pady=(6, 4))
+
+        self.tac_reassign_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            ctrl_frame,
+            text="Đổi mưu sĩ (tháo mưu sĩ hiện tại của Võ tướng đã chọn để biên chế lại; trừ Văn quan đang làm Thái thú / bận)",
+            variable=self.tac_reassign_var,
+        ).pack(anchor="w", pady=(0, 6))
+
+        btn_row = tk.Frame(ctrl_frame, bg=BG)
+        btn_row.pack(fill="x")
+
+        self.tac_mode_buttons: list[ttk.Button] = []
+        mode_specs = (
+            ("📈 Theo cấp (Cao → Thấp)", "Success.TButton", MODE_BY_LEVEL),
+            ("🏷️ Theo tên", "Action.TButton", MODE_BY_NAME),
+            ("🔢 Tuần tự", "Action.TButton", MODE_SEQUENTIAL),
+            ("🔓 Tháo Mưu sĩ", "Warning.TButton", MODE_REMOVE),
+        )
+        for label, style_name, mode_val in mode_specs:
+            btn = ttk.Button(
+                btn_row,
+                text=label,
+                style=style_name,
+                command=lambda m=mode_val: self._start_tactician_action(m),
+            )
+            btn.pack(side="left", padx=(0, 6))
+            self.tac_mode_buttons.append(btn)
+
+        self.tac_stop_btn = ttk.Button(btn_row, text="⏹ Dừng", style="Danger.TButton", command=self._stop_tactician_action)
+        self.tac_stop_btn.pack(side="left", padx=(6, 0))
+        self.tac_stop_btn.state(["disabled"])
+
+        ttk.Button(btn_row, text="Đóng", style="Action.TButton", command=_on_close).pack(side="right")
+
+        # Trạng thái & nhật ký mini
+        self.tac_status_var = tk.StringVar(value="Sẵn sàng")
+        tk.Label(win, textvariable=self.tac_status_var, bg=BG, fg=ACCENT, font=("Segoe UI", 9, "bold")).pack(
+            anchor="w", padx=12, pady=(4, 2)
+        )
+
+        log_frame = ttk.LabelFrame(win, text="Nhật ký Mưu sĩ", style="Card.TLabelframe")
+        log_frame.pack(fill="x", padx=12, pady=(0, 10))
+        self.tac_log_text = tk.Text(
+            log_frame,
+            height=7,
+            bg=CARD,
+            fg=FG,
+            insertbackground=FG,
+            relief="flat",
+            font=("Consolas", 9),
+        )
+        self.tac_log_text.pack(fill="x", padx=6, pady=6)
+
+        self._sync_tac_city_combo(default_from_overview=True)
+        self._refresh_tac_tree()
+
+    def _on_tac_roster_updated(self):
+        """Đồng bộ danh sách thành và Võ tướng khi cửa sổ Thiết lập Mưu sĩ đang mở."""
+        win = getattr(self, "_tac_dialog", None)
+        if win is None or not win.winfo_exists():
+            return
+        self._sync_tac_city_combo(default_from_overview=False)
+        self._refresh_tac_tree()
+
+    def _sync_tac_city_combo(self, default_from_overview: bool = False):
+        """Cập nhật danh sách Thành/Trại trong combobox của hộp thoại Mưu sĩ."""
+        if not hasattr(self, "tac_city_combo") or not self.tac_city_combo.winfo_exists():
+            return
+        all_label = "🌟 Tất cả các thành"
+        values = [all_label]
+        self._tac_base_by_name = {}
+        selected_display = all_label
+
+        overview_base_id = None
+        if default_from_overview and hasattr(self, "city_tree"):
+            sel = self.city_tree.selection()
+            if sel:
+                try:
+                    overview_base_id = int(sel[0])
+                except ValueError:
+                    overview_base_id = None
+
+        current_text = self.tac_city_combo.get()
+        if self.roster:
+            for base in self.roster.bases:
+                values.append(base.display_name)
+                self._tac_base_by_name[base.display_name] = base.id
+                if default_from_overview and overview_base_id == base.id:
+                    selected_display = base.display_name
+
+        self.tac_city_combo["values"] = values
+        if default_from_overview:
+            self.tac_city_combo.set(selected_display)
+        elif current_text in values:
+            self.tac_city_combo.set(current_text)
+        else:
+            self.tac_city_combo.set(all_label)
+
+    def _get_tac_filter_base_id(self) -> Optional[int]:
+        """Trả về base_id đang lọc hoặc None nếu chọn tất cả các thành."""
+        if not hasattr(self, "tac_city_combo"):
+            return None
+        return self._tac_base_by_name.get(self.tac_city_combo.get())
+
+    def _refresh_tac_tree(self):
+        """Đổ dữ liệu Võ tướng theo thành đang chọn vào tac_tree và cập nhật tóm tắt."""
+        if not hasattr(self, "tac_tree") or not self.tac_tree.winfo_exists():
+            return
+        self.tac_tree.delete(*self.tac_tree.get_children())
+        if not self.roster:
+            self.tac_summary_var.set("Chưa có dữ liệu Roster.")
+            return
+
+        filter_base_id = self._get_tac_filter_base_id()
+        seen: set[int] = set()
+        shown_count = 0
+        free_civilians = 0
+
+        for base in self.roster.bases:
+            if filter_base_id is not None and base.id != filter_base_id:
+                continue
+            for g in self.roster.generals_of(base.id):
+                if g.id in seen:
+                    continue
+                seen.add(g.id)
+                if g.role == "van":
+                    if g.is_available_tactician:
+                        free_civilians += 1
+                    continue
+                if g.role != "vo":
+                    continue
+                shown_count += 1
+                is_sel = "☑" if g.id in self._tac_selected_ids else "☐"
+                self.tac_tree.insert(
+                    "",
+                    "end",
+                    iid=str(g.id),
+                    text=g.name,
+                    values=(
+                        is_sel,
+                        base.name,
+                        g.level,
+                        g.tactician_name or "-",
+                        g.status_text,
+                    ),
+                )
+
+        self._update_tac_summary(shown_count, free_civilians)
+
+    def _update_tac_summary(self, shown_count: Optional[int] = None, free_civilians: Optional[int] = None):
+        """Cập nhật dòng thống kê nhanh phía trên bảng Võ tướng."""
+        if not hasattr(self, "tac_summary_var"):
+            return
+        if shown_count is None and hasattr(self, "tac_tree") and self.tac_tree.winfo_exists():
+            shown_count = len(self.tac_tree.get_children())
+        if free_civilians is None and self.roster:
+            filter_base_id = self._get_tac_filter_base_id()
+            seen_van: set[int] = set()
+            free_civilians = 0
+            for base in self.roster.bases:
+                if filter_base_id is not None and base.id != filter_base_id:
+                    continue
+                for g in self.roster.generals_of(base.id):
+                    if g.id in seen_van or g.role != "van":
+                        continue
+                    seen_van.add(g.id)
+                    if g.is_available_tactician:
+                        free_civilians += 1
+        visible_ids = {int(iid) for iid in self.tac_tree.get_children()} if hasattr(self, "tac_tree") else set()
+        selected_visible = len(self._tac_selected_ids & visible_ids)
+        self.tac_summary_var.set(
+            f"Võ tướng hiển thị: {shown_count or 0}  •  Đang chọn: {selected_visible} "
+            f"(Tổng chọn: {len(self._tac_selected_ids)})  •  "
+            f"Văn quan sẵn sàng làm Mưu sĩ: {free_civilians or 0}"
+        )
+
+    def _toggle_tac_item(self, iid: str):
+        """Đảo trạng thái chọn/bỏ chọn cho một dòng trong tac_tree."""
+        if not self.tac_tree.exists(iid):
+            return
+        gid = int(iid)
+        vals = list(self.tac_tree.item(iid, "values"))
+        if vals[0] == "☑":
+            vals[0] = "☐"
+            self._tac_selected_ids.discard(gid)
+        else:
+            vals[0] = "☑"
+            self._tac_selected_ids.add(gid)
+        self.tac_tree.item(iid, values=vals)
+        self._update_tac_summary()
+
+    def _on_tac_tree_click(self, event):
+        item = self.tac_tree.identify_row(event.y)
+        col = self.tac_tree.identify_column(event.x)
+        if not item or not self.tac_tree.exists(item):
+            return
+        if col in ("#1", "#0") or not col:
+            self._toggle_tac_item(item)
+
+    def _on_tac_tree_space(self, _event=None):
+        sel = self.tac_tree.selection()
+        if sel:
+            self._toggle_tac_item(sel[0])
+
+    def _apply_tac_bulk_selection(self, predicate: Callable[[General], bool]):
+        """Áp dụng chọn hàng loạt lên các Võ tướng đang hiển thị thỏa predicate."""
+        if not self.roster or not hasattr(self, "tac_tree") or not self.tac_tree.winfo_exists():
+            return
+        by_id: dict[int, General] = {}
+        for base in self.roster.bases:
+            for g in self.roster.generals_of(base.id):
+                if g.role == "vo":
+                    by_id[g.id] = g
+        for iid in self.tac_tree.get_children():
+            gid = int(iid)
+            g = by_id.get(gid)
+            selected = bool(g and predicate(g))
+            if selected:
+                self._tac_selected_ids.add(gid)
+            else:
+                self._tac_selected_ids.discard(gid)
+            vals = list(self.tac_tree.item(iid, "values"))
+            vals[0] = "☑" if selected else "☐"
+            self.tac_tree.item(iid, values=vals)
+        self._update_tac_summary()
+
+    def _tac_select_all(self):
+        self._apply_tac_bulk_selection(lambda _g: True)
+
+    def _tac_deselect_all(self):
+        self._apply_tac_bulk_selection(lambda _g: False)
+
+    def _tac_select_unassigned(self):
+        self._apply_tac_bulk_selection(lambda g: g.tactician_id <= 0)
+
+    def _tac_refresh_roster(self):
+        if getattr(self, "_tac_running", False):
+            return
+        self.reload()
+
+    def _append_tac_log(self, msg: str):
+        """Ghi log vào cả khung mini trong hộp thoại Mưu sĩ và log toàn cục (gọi trên UI thread)."""
+        self._log_global(msg)
+        widget = getattr(self, "tac_log_text", None)
+        if widget is not None and widget.winfo_exists():
+            self._append_text_buffer(widget, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+
+    def _set_tac_running(self, running: bool):
+        """Bật/tắt các nút điều khiển trong hộp thoại Mưu sĩ khi đang chạy."""
+        self._tac_running = running
+        win = getattr(self, "_tac_dialog", None)
+        if win is None or not win.winfo_exists():
+            return
+        for btn in getattr(self, "tac_mode_buttons", []):
+            if btn.winfo_exists():
+                btn.state(["disabled"] if running else ["!disabled"])
+        if hasattr(self, "tac_refresh_btn") and self.tac_refresh_btn.winfo_exists():
+            self.tac_refresh_btn.state(["disabled"] if running else ["!disabled"])
+        if hasattr(self, "tac_stop_btn") and self.tac_stop_btn.winfo_exists():
+            self.tac_stop_btn.state(["!disabled"] if running else ["disabled"])
+
+    def _stop_tactician_action(self):
+        if self._tac_stop_event is not None:
+            self._tac_stop_event.set()
+            self.tac_status_var.set("Đang dừng tác vụ Mưu sĩ...")
+
+    def _start_tactician_action(self, mode: str):
+        """Khởi chạy tác vụ biên chế / tháo Mưu sĩ trên luồng nền qua Queue."""
+        if getattr(self, "_tac_running", False):
+            return
+        if self.gateway is None:
+            messagebox.showwarning("Thiết Lập Mưu Sĩ", "Chưa kết nối tài khoản game.", parent=self._tac_dialog)
+            return
+
+        selected_ids = sorted(self._tac_selected_ids)
+        if not selected_ids:
+            messagebox.showwarning(
+                "Thiết Lập Mưu Sĩ",
+                "Vui lòng chọn ít nhất 1 Võ tướng trong danh sách.",
+                parent=self._tac_dialog,
+            )
+            return
+
+        reassign_existing = bool(self.tac_reassign_var.get()) if hasattr(self, "tac_reassign_var") else False
+        self._tac_stop_event = threading.Event()
+        stop_event = self._tac_stop_event
+        self._set_tac_running(True)
+        self.tac_status_var.set("Đang tải dữ liệu tướng mới nhất & thực thi...")
+        q: queue.Queue = queue.Queue()
+        self._tac_queue = q
+
+        def _worker():
+            try:
+                fresh_roster = fetch_roster(self.gateway)
+                summary = configure_tacticians(
+                    self.gateway,
+                    fresh_roster,
+                    selected_general_ids=selected_ids,
+                    mode=mode,
+                    reassign_existing=reassign_existing,
+                    stop_event=stop_event,
+                    on_log=lambda m: q.put(("log", m)),
+                )
+                q.put(("done", summary, None))
+            except Exception as exc:
+                q.put(("done", None, str(exc)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+        self.after(20, self._poll_tac_queue)
+
+    def _poll_tac_queue(self):
+        """Rút log và kết quả Mưu sĩ từ hàng đợi trên luồng giao diện chính."""
+        if getattr(self, "_closing", False):
+            return
+        q = getattr(self, "_tac_queue", None)
+        if q is None:
+            return
+        keep_polling = True
+        while True:
+            try:
+                item = q.get_nowait()
+            except queue.Empty:
+                break
+            if item[0] == "log":
+                self._append_tac_log(item[1])
+            elif item[0] == "done":
+                keep_polling = False
+                self._on_tactician_finished(item[1], item[2])
+        if keep_polling and getattr(self, "_tac_running", False):
+            self.after(30, self._poll_tac_queue)
+
+    def _on_tactician_finished(self, summary: Optional[TacticianSummary], error: Optional[str] = None):
+        """Cập nhật trạng thái sau khi biên chế / tháo Mưu sĩ xong."""
+        if getattr(self, "_closing", False):
+            return
+        self._set_tac_running(False)
+        win = getattr(self, "_tac_dialog", None)
+
+        if error is not None or summary is None:
+            err_msg = error or "Lỗi không xác định."
+            self._append_tac_log(f"❌ Lỗi thiết lập Mưu sĩ: {err_msg}")
+            if win is not None and win.winfo_exists():
+                self.tac_status_var.set(f"Lỗi: {err_msg}")
+                messagebox.showerror("Thiết Lập Mưu Sĩ", f"Đã xảy ra lỗi:\n{err_msg}", parent=win)
+            return
+
+        skipped = (
+            summary.skipped_has_tactician
+            + summary.skipped_busy
+            + summary.no_tactician_to_remove
+            + summary.no_available_civilian
+        )
+        msg = (
+            f"Hoàn tất: Biên chế {summary.assigned}, Tháo {summary.removed}, "
+            f"Bỏ qua {skipped}, Thất bại {summary.failed}"
+        )
+        self._append_tac_log(f"🧠 {msg}")
+        if win is not None and win.winfo_exists():
+            self.tac_status_var.set(msg)
+            messagebox.showinfo(
+                "Kết quả Thiết Lập Mưu Sĩ",
+                (
+                    f"Biên chế mới: {summary.assigned}\n"
+                    f"Đã tháo: {summary.removed}\n"
+                    f"Đã có Mưu sĩ (giữ nguyên): {summary.skipped_has_tactician}\n"
+                    f"Đang bận (bỏ qua): {summary.skipped_busy}\n"
+                    f"Thiếu Văn quan khả dụng: {summary.no_available_civilian}\n"
+                    f"Thất bại: {summary.failed}"
+                ),
+                parent=win,
+            )
+
+        if summary.assigned > 0 or summary.removed > 0:
+            self.reload()
 
     # -------------------------------------------------------------------------
     # LUYỆN SĨ KHÍ QUÂN ĐỘI ĐA THÀNH (CONCURRENT MULTI-CITY MORALE TRAINING)
@@ -7962,6 +9024,8 @@ class Dashboard(tk.Frame):
         try:
             if getattr(self, "_boost_after_id", None) is not None:
                 self.after_cancel(self._boost_after_id)
+            if getattr(self, "_explore_countdown_after_id", None) is not None:
+                self.after_cancel(self._explore_countdown_after_id)
         except Exception:
             pass
         for name in ("_tp_runner", "_gd_runner", "_bm_runner", "_bld_runner", "_res_runner"):

@@ -402,15 +402,27 @@ class LogisticsProfile:
     army_type_idx: int = 0
     amount: str = "1000"
     auto_daily_reward: bool = True
+    auto_explore: bool = False
+    explore_use_whip: bool = False
+    explore_use_coin: bool = False
+    explore_turns: str = "1"
 
     @classmethod
     def from_dict(cls, data: dict) -> "LogisticsProfile":
         if not isinstance(data, dict):
             return cls()
+        use_whip = bool(data.get("explore_use_whip", False))
+        use_coin = bool(data.get("explore_use_coin", False))
+        if use_whip and use_coin:
+            use_coin = False
         return cls(
             army_type_idx=int(data.get("army_type_idx", 0)),
             amount=str(data.get("amount", "1000")),
             auto_daily_reward=bool(data.get("auto_daily_reward", True)),
+            auto_explore=bool(data.get("auto_explore", False)),
+            explore_use_whip=use_whip,
+            explore_use_coin=use_coin,
+            explore_turns=str(data.get("explore_turns", "1")),
         )
 
 

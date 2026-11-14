@@ -18,8 +18,24 @@ Tướng chuyên về quân sự (loại 2), có chỉ số dũng võ, thể l�
 _Avoid_: Tướng võ, martial
 
 **Văn quan**:
-Tướng chuyên về mưu lược, nội chính và điều hành (loại 1), đảm nhiệm chức vụ Thái thú, nghiên cứu Kỹ Thuật Đại Học hoặc mưu sĩ hỗ trợ, không tham gia đánh ải Thảo Phạt.
+Tướng chuyên về mưu lược, nội chính và điều hành (loại 1), đảm nhiệm chức vụ Thái thú, nghiên cứu Kỹ Thuật Đại Học hoặc Mưu sĩ hỗ trợ, không tham gia đánh ải Thảo Phạt.
 _Avoid_: Văn tướng, mưu sĩ (khi chỉ chung văn chức)
+
+**Mưu sĩ**:
+Văn quan được biên chế đi theo hỗ trợ trực tiếp cho một Võ tướng cụ thể trong tác chiến.
+_Avoid_: Quân sư, partner
+
+**Thái thú**:
+Chức vụ điều hành nội chính của một Thành do một Văn quan đảm nhiệm; khi đang giữ chức vụ này thì không thể đồng thời biên chế làm Mưu sĩ.
+_Avoid_: Chủ thành, mayor
+
+**Lòng trung thành**:
+Chỉ số gắn bó của Văn quan hoặc Võ tướng (thang 0–100), khác với Sĩ khí của đạo quân.
+_Avoid_: Độ trung thành, loyalty (khi nói tiếng Việt)
+
+**Ban thưởng**:
+Hành động dùng Vàng khôi phục Lòng trung thành của Văn quan hoặc Võ tướng lên mức tối đa (100).
+_Avoid_: Thưởng vàng, tăng trung thành, reward
 
 **Di trại**:
 Hành động dời Doanh trại dã ngoại từng bước trên bản đồ tọa độ về hướng mục tiêu trước khi xuất kích hoặc theo tọa độ chỉ định.
@@ -375,7 +391,9 @@ _Avoid_: Chuyển proxy thủ công, restart session, switch proxy
 Nguồn cung cấp danh sách proxy miễn phí được tích hợp sẵn (như ProxyScrape SOCKS5 JSON) hoặc qua liên kết ngoài, hỗ trợ cơ chế tiền lọc chất lượng (độ trễ, tỷ lệ hoạt động) trước khi đưa vào bể kiểm định.
 _Avoid_: FreeProxyList, ProxyScrapeFeed, danh sách proxy chùa
 
-
+**Thám Bảo**:
+Hoạt động tầm phỏng và khám phá báu vật, danh tướng định kỳ cấp tài khoản (`Common.ashx?id=140`), vận hành theo hai chế độ: chờ hết thời gian đếm ngược tự nhiên (`lAction=0`, `lAction=1`) hoặc xóa thời gian chờ cưỡng bức bằng đạo cụ Roi (`lAction=2, lParam=1`) / Coin (`lAction=2, lParam=2`) theo số lượt chỉ định.
+_Avoid_: Đào bảo, quay thưởng, explore
 
 
 ## Danh Mục Công Trình (Nhà)
