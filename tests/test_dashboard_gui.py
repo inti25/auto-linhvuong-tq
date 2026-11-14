@@ -1314,6 +1314,22 @@ def test_dashboard_boost_status_time_parsing_and_cid():
         # Kiểm tra payload phải có cid
         assert any(c[0] == "Common.ashx" and c[1] == 77 and "cid" in c[2] for c in calls)
         assert dash.aux_boost_time_lbl.cget("text") == "(Còn: 2234:39:14)"
+        assert dash._boost_left_seconds == 8044754
+
+        # Kiểm tra đếm ngược từng giây của DS kiến trúc
+        dash._tick_boost_countdown()
+        assert dash._boost_left_seconds == 8044753
+        assert dash.aux_boost_time_lbl.cget("text") == "(Còn: 2234:39:13)"
+
+        # Khi đếm về 0 và aux_boost_var=True -> hiển thị (Hết hạn) và gọi kiểm tra/kích hoạt lại
+        dash._boost_left_seconds = 1
+        dash.aux_boost_var.set(True)
+        with patch.object(dash, "_check_and_update_boost_status") as mock_boost_check:
+            dash._tick_boost_countdown()
+            assert dash._boost_left_seconds == 0
+            assert dash.aux_boost_time_lbl.cget("text") == "(Hết hạn)"
+            assert dash.aux_boost_time_lbl.cget("fg") == "#f87171"
+            mock_boost_check.assert_called_once_with(async_check=True)
     finally:
         dash.destroy()
 

@@ -731,6 +731,8 @@ class Dashboard(tk.Frame):
         self.aux_boost_var = tk.BooleanVar(value=True)
         self.bld_boost_var = self.aux_boost_var
         self.bld_comfort_var = self.aux_comfort_var
+        self._boost_left_seconds: int = 0
+        self._boost_countdown_after_id: Optional[str] = None
         self.aux_tribute_var = tk.BooleanVar(value=False)
         self.aux_explore_var = tk.BooleanVar(value=False)
         self.aux_explore_whip_var = tk.BooleanVar(value=False)
@@ -5546,6 +5548,88 @@ class Dashboard(tk.Frame):
                     break
                 time.sleep(1)
 
+    def _cancel_after_timer(self, attr_name: str):
+        """Hủy lịch after đang chờ theo tên thuộc tính nếu có."""
+        old_id = getattr(self, attr_name, None)
+        if old_id is not None:
+            try:
+                self.after_cancel(old_id)
+            except Exception:
+                pass
+            setattr(self, attr_name, None)
+
+    def _tick_aux_countdown(
+        self,
+        *,
+        seconds_attr: str,
+        after_attr: str,
+        label_attr: str,
+        zero_text: str,
+        zero_fg: str,
+        tick_cb: Callable[[], None],
+        on_zero: Optional[Callable[[], None]] = None,
+    ):
+        """Giảm bộ đếm ngược mỗi giây và kích hoạt hành động khi về 0."""
+        setattr(self, after_attr, None)
+        try:
+            lbl = getattr(self, label_attr, None)
+            if not (lbl is not None and lbl.winfo_exists()):
+                return
+            secs = max(0, int(getattr(self, seconds_attr, 0) or 0) - 1)
+            setattr(self, seconds_attr, secs)
+            if secs > 0:
+                lbl.configure(text=f"(Còn: {self._format_explore_countdown(secs)})", fg="#4ade80")
+                setattr(self, after_attr, self.after(1000, tick_cb))
+            else:
+                lbl.configure(text=zero_text, fg=zero_fg)
+                if on_zero is not None:
+                    on_zero()
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def _cancel_boost_countdown_timer(self):
+        self._cancel_after_timer("_boost_countdown_after_id")
+
+    def _tick_boost_countdown(self):
+        self._tick_aux_countdown(
+            seconds_attr="_boost_left_seconds",
+            after_attr="_boost_countdown_after_id",
+            label_attr="aux_boost_time_lbl",
+            zero_text="(Hết hạn)",
+            zero_fg="#f87171",
+            tick_cb=self._tick_boost_countdown,
+            on_zero=lambda: self._check_and_update_boost_status(async_check=True)
+            if self.aux_boost_var.get()
+            else None,
+        )
+
+    def _update_boost_countdown_ui(self, remaining: int):
+        def _apply():
+            try:
+                if not (hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists()):
+                    return
+                self._cancel_boost_countdown_timer()
+                secs = max(0, int(remaining))
+                self._boost_left_seconds = secs
+                if secs > 0:
+                    self.aux_boost_time_lbl.configure(
+                        text=f"(Còn: {self._format_explore_countdown(secs)})",
+                        fg="#4ade80",
+                    )
+                    self._boost_countdown_after_id = self.after(1000, self._tick_boost_countdown)
+                else:
+                    self.aux_boost_time_lbl.configure(text="(Hết hạn)", fg="#f87171")
+            except (RuntimeError, tk.TclError):
+                pass
+
+        if threading.current_thread() is threading.main_thread():
+            _apply()
+        else:
+            try:
+                self.after(0, _apply)
+            except (RuntimeError, tk.TclError):
+                pass
+
     def _check_and_update_boost_status(self, async_check: bool = True):
         """Kiểm tra thời gian còn lại của DS kiến trúc (xây 3 công trình) và tự kích hoạt nếu hết hạn."""
         def run_check():
@@ -5555,31 +5639,9 @@ class Dashboard(tk.Frame):
                 city_id = getattr(self, "_current_bld_city_id", 0) or 0
                 resp = self.gateway.call("Common.ashx", 77, {"cid": str(city_id), "_": ""}) or {}
                 remaining = parse_boost_remaining_time(resp, city_id)
+                self._update_boost_countdown_ui(remaining)
 
-                def _update_ui(text, fg):
-                    if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
-                        self.aux_boost_time_lbl.configure(text=text, fg=fg)
-
-                if remaining > 0:
-                    h = remaining // 3600
-                    m = (remaining % 3600) // 60
-                    s = remaining % 60
-                    t_str = f"{h}:{m:02d}:{s:02d}"
-                    if threading.current_thread() is threading.main_thread():
-                        _update_ui(f"(Còn: {t_str})", "#4ade80")
-                    else:
-                        try:
-                            self.after(0, lambda: _update_ui(f"(Còn: {t_str})", "#4ade80"))
-                        except RuntimeError:
-                            pass
-                else:
-                    if threading.current_thread() is threading.main_thread():
-                        _update_ui("(Hết hạn)", "#f87171")
-                    else:
-                        try:
-                            self.after(0, lambda: _update_ui("(Hết hạn)", "#f87171"))
-                        except RuntimeError:
-                            pass
+                if remaining <= 0:
                     if self.aux_boost_var.get():
                         now_ts = time.time()
                         last_act = max(
@@ -5698,33 +5760,20 @@ class Dashboard(tk.Frame):
         return f"{h}:{m:02d}:{s:02d}"
 
     def _cancel_explore_countdown_timer(self):
-        old_id = getattr(self, "_explore_countdown_after_id", None)
-        if old_id is not None:
-            try:
-                self.after_cancel(old_id)
-            except Exception:
-                pass
-            self._explore_countdown_after_id = None
+        self._cancel_after_timer("_explore_countdown_after_id")
 
     def _tick_explore_countdown(self):
-        self._explore_countdown_after_id = None
-        try:
-            if not (hasattr(self, "aux_explore_time_lbl") and self.aux_explore_time_lbl.winfo_exists()):
-                return
-            if self._explore_left_seconds > 0:
-                self._explore_left_seconds -= 1
-            if self._explore_left_seconds > 0:
-                self.aux_explore_time_lbl.configure(
-                    text=f"(Còn: {self._format_explore_countdown(self._explore_left_seconds)})",
-                    fg="#4ade80",
-                )
-                self._explore_countdown_after_id = self.after(1000, self._tick_explore_countdown)
-            else:
-                self.aux_explore_time_lbl.configure(text="(Sẵn sàng)", fg="#4ade80")
-                if self.aux_explore_var.get() and not self._explore_worker_running:
-                    self._check_and_run_explore(async_check=True)
-        except (RuntimeError, tk.TclError):
-            pass
+        self._tick_aux_countdown(
+            seconds_attr="_explore_left_seconds",
+            after_attr="_explore_countdown_after_id",
+            label_attr="aux_explore_time_lbl",
+            zero_text="(Sẵn sàng)",
+            zero_fg="#4ade80",
+            tick_cb=self._tick_explore_countdown,
+            on_zero=lambda: self._check_and_run_explore(async_check=True)
+            if self.aux_explore_var.get() and not self._explore_worker_running
+            else None,
+        )
 
     def _update_explore_countdown_ui(
         self, left_seconds: Optional[int], error_text: str = "", seq: Optional[int] = None
@@ -9024,6 +9073,8 @@ class Dashboard(tk.Frame):
         try:
             if getattr(self, "_boost_after_id", None) is not None:
                 self.after_cancel(self._boost_after_id)
+            if getattr(self, "_boost_countdown_after_id", None) is not None:
+                self.after_cancel(self._boost_countdown_after_id)
             if getattr(self, "_explore_countdown_after_id", None) is not None:
                 self.after_cancel(self._explore_countdown_after_id)
         except Exception:
