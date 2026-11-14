@@ -792,6 +792,12 @@ class AccountLoginFrame(tk.Frame):
         self.status.set(msg)
         self.btn.state(["!disabled"])
 
+    def reset(self):
+        """Khôi phục trạng thái ban đầu của khung đăng nhập sau khi đăng xuất."""
+        self.pass_var.set("")
+        self.status.set("")
+        self.btn.state(["!disabled"])
+
     def _succeeded(
         self,
         session,
@@ -804,6 +810,7 @@ class AccountLoginFrame(tk.Frame):
         proxy_url,
         proxy_pool,
     ):
+        self.btn.state(["!disabled"])
         self.status.set("✅ Đăng nhập thành công!")
         if self.on_login_success:
             self.on_login_success(
@@ -1310,6 +1317,10 @@ class MultiAccountApp(tk.Tk):
         if acc:
             acc["password"] = ""  # Xóa sạch mật khẩu trong RAM
             acc["session"] = None
+
+        lf = self.login_frames.get(account_key)
+        if lf and getattr(lf, "winfo_exists", lambda: False)():
+            lf.reset()
 
         card = self.cards.get(account_key)
         if card:

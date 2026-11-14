@@ -344,3 +344,61 @@ def test_multi_account_app_coffee_button_and_dialog(temp_settings):
         dlg.destroy()
     finally:
         app.destroy()
+
+
+def test_multi_account_app_relogin_after_logout_button_is_enabled(temp_settings, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    init_data = {
+        "accounts": {
+            "user1 @ S53": {"server": 53, "username": "user1"},
+        }
+    }
+    temp_settings.write_text(json.dumps(init_data), encoding="utf-8")
+    app = safe_multi_account_app()
+    state = {"phase": "init", "logout_btn_disabled": None, "logout_pass": None, "logout_status": None, "relogged_in": False, "error": None}
+    try:
+        with patch("linhvuong.gui.login"), patch("linhvuong.dashboard.GatewayClient"):
+            def step_login1():
+                lf = app.login_frames["user1 @ S53"]
+                lf.pass_var.set("secret1")
+                lf.btn.invoke()
+                state["phase"] = "wait_login1"
+                app.after(20, poll)
+
+            def poll(attempts=0):
+                if attempts > 100:
+                    state["error"] = f"Timeout in phase {state['phase']}"
+                    app.quit()
+                    return
+                if state["phase"] == "wait_login1":
+                    if "user1 @ S53" in app.dashboards:
+                        app._on_logout("user1 @ S53")
+                        lf_after = app.login_frames.get("user1 @ S53")
+                        state["logout_btn_disabled"] = lf_after.btn.instate(["disabled"]) if lf_after else None
+                        state["logout_pass"] = lf_after.pass_var.get() if lf_after else None
+                        state["logout_status"] = lf_after.status.get() if lf_after else None
+                        if lf_after and not state["logout_btn_disabled"]:
+                            lf_after.pass_var.set("secret2")
+                            lf_after.btn.invoke()
+                            state["phase"] = "wait_login2"
+                            app.after(20, poll, 0)
+                            return
+                        app.quit()
+                        return
+                elif state["phase"] == "wait_login2":
+                    if "user1 @ S53" in app.dashboards:
+                        state["relogged_in"] = True
+                        app.quit()
+                        return
+                app.after(20, poll, attempts + 1)
+
+            app.after(10, step_login1)
+            app.mainloop()
+
+        assert state["error"] is None, state["error"]
+        assert state["logout_btn_disabled"] is False
+        assert state["logout_pass"] == ""
+        assert state["logout_status"] == ""
+        assert state["relogged_in"] is True
+    finally:
+        app.destroy()
