@@ -777,6 +777,15 @@ def classify_item_role(item_type_id: int) -> Optional[str]:
     return None
 
 
+def civil_priority_tier(gen: General, active_tactician_ids: Optional[set[int]] = None) -> int:
+    """Xếp tầng ưu tiên Văn quan: 0 = Thái thú, 1 = Mưu sĩ đang biên chế, 2 = Nhàn rỗi."""
+    if gen.is_mayor:
+        return 0
+    if gen.is_tactician or (active_tactician_ids is not None and gen.id in active_tactician_ids):
+        return 1
+    return 2
+
+
 @dataclass(frozen=True)
 class EquipmentItem:
     item_id: int
@@ -786,6 +795,7 @@ class EquipmentItem:
     quantity: int = 1
     general_id: int = 0
     general_name: str = ""
+    politics: int = 0
 
     @property
     def role(self) -> Optional[str]:
@@ -802,6 +812,11 @@ class EquipmentItem:
     @property
     def sort_key(self) -> tuple[int, int, int]:
         return (-self.level, -self.item_type_id, self.item_id)
+
+    @property
+    def mayor_sort_key(self) -> tuple[int, int, int, int]:
+        """Khóa sắp xếp ưu tiên cho Thái thú: Nội chính cao nhất trước, rồi cấp và mã loại."""
+        return (-self.politics, -self.level, -self.item_type_id, self.item_id)
 
 
 @dataclass
@@ -840,6 +855,7 @@ def _parse_inventory_rows_for_type(
         item_id = int(row[0] or 0)
         quantity = max(1, int(row[1] or 1))
         item_type_id = int(row[2] or 0)
+        politics = max(0, int(row[6] or 0))
         level = max(1, int(row[7] or 1))
         general_id = int(row[8] or 0)
         general_name = str(row[9] or "") if len(row) > 9 else ""
@@ -855,6 +871,7 @@ def _parse_inventory_rows_for_type(
                 quantity=1,
                 general_id=general_id,
                 general_name=general_name,
+                politics=politics,
             )
         else:
             free_quantities[item_id] = quantity
@@ -870,6 +887,7 @@ def _parse_inventory_rows_for_type(
                             level=level,
                             quantity=quantity - copy_idx,
                             general_id=0,
+                            politics=politics,
                         )
                     )
 
@@ -1031,6 +1049,317 @@ def _unequip_selected_generals(
     return True
 
 
+def _equip_single_slot(
+    gateway: GatewayClient,
+    inventory: EquipmentInventory,
+    summary: EquipSummary,
+    city_id: int,
+    city_name: str,
+    gen: General,
+    equip_type: int,
+    pool: list[EquipmentItem],
+    candidate: EquipmentItem,
+    current_item: Optional[EquipmentItem],
+    on_log: Optional[Callable[[str], None]],
+    role_note: str = "",
+) -> bool:
+    """Thực hiện mặc/nâng cấp một ứng viên vào ô trang bị và đồng bộ kho/server."""
+    slot_name = EQUIP_SLOT_NAMES[equip_type]
+    ok, _ret, msg = equip_general_item(gateway, city_id, gen.id, equip_type, candidate.item_id)
+    if ok:
+        for idx, item in enumerate(pool):
+            if item is candidate or item.item_id == candidate.item_id:
+                pool.pop(idx)
+                break
+        summary.equipped += 1
+        if current_item is not None:
+            replaced_role = current_item.role or gen.role
+            if replaced_role in ("vo", "van"):
+                back_pool = inventory.free_items.setdefault((replaced_role, equip_type), [])
+                back_pool.append(replace(current_item, general_id=0, general_name="", quantity=1))
+                back_pool.sort(key=lambda it: it.sort_key)
+        inventory.equipped_by_general.setdefault(gen.id, {})[equip_type] = replace(
+            candidate,
+            quantity=1,
+            general_id=gen.id,
+            general_name=gen.name,
+        )
+        upgrade_note = f" (thay {current_item.short_label})" if current_item is not None else ""
+        _emit(
+            on_log,
+            f"   ✅ [{city_name}] {gen.name}{role_note} (Lv.{gen.level}) mặc {slot_name}: "
+            f"{candidate.short_label}{upgrade_note}",
+        )
+        if candidate.quantity > 1 or current_item is not None:
+            _refresh_free_slot_from_server(
+                gateway,
+                inventory,
+                equip_type,
+                consumed_item_id=candidate.item_id,
+                prev_quantity=candidate.quantity,
+            )
+        return True
+
+    summary.failed += 1
+    pool[:] = [it for it in pool if it.item_id != candidate.item_id]
+    _emit(
+        on_log,
+        f"   ❌ [{city_name}] {gen.name}{role_note} mặc {slot_name} ({candidate.short_label}) thất bại: {msg}",
+    )
+    return False
+
+
+def _assign_standard_targets(
+    gateway: GatewayClient,
+    inventory: EquipmentInventory,
+    summary: EquipSummary,
+    targets: list[tuple[int, str, General]],
+    processed: int,
+    total_targets: int,
+    stop_event: Optional[threading.Event],
+    on_log: Optional[Callable[[str], None]],
+    on_progress: Optional[Callable[[int, int], None]],
+    role_note: str = "",
+) -> tuple[bool, int]:
+    """Phân bổ trang bị theo thứ tự bậc phẩm chất giảm dần (sort_key) cho một nhóm tướng."""
+    for city_id, city_name, gen in targets:
+        if stop_event and stop_event.is_set():
+            summary.stopped = True
+            _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
+            return False, processed
+
+        for equip_type in EQUIP_TYPES:
+            if stop_event and stop_event.is_set():
+                summary.stopped = True
+                _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
+                return False, processed
+
+            pool = inventory.free_items.setdefault((gen.role, equip_type), [])
+            pool.sort(key=lambda it: it.sort_key)
+            current_item = inventory.equipped_by_general.get(gen.id, {}).get(equip_type)
+
+            if not pool:
+                if current_item is None:
+                    summary.no_item_available += 1
+                else:
+                    summary.skipped_optimal += 1
+                continue
+
+            candidate = pool[0]
+            if current_item is not None and (
+                (candidate.level, candidate.item_type_id) <= (current_item.level, current_item.item_type_id)
+            ):
+                summary.skipped_optimal += 1
+                continue
+
+            _equip_single_slot(
+                gateway,
+                inventory,
+                summary,
+                city_id,
+                city_name,
+                gen,
+                equip_type,
+                pool,
+                candidate,
+                current_item,
+                on_log,
+                role_note=role_note,
+            )
+
+        processed += 1
+        _emit_progress(on_progress, processed, total_targets)
+
+    return True, processed
+
+
+def _assign_civil_generals(
+    gateway: GatewayClient,
+    roster: Roster,
+    inventory: EquipmentInventory,
+    summary: EquipSummary,
+    civil_targets: list[tuple[int, str, General]],
+    processed: int,
+    total_targets: int,
+    stop_event: Optional[threading.Event],
+    on_log: Optional[Callable[[str], None]],
+    on_progress: Optional[Callable[[int, int], None]],
+) -> tuple[bool, int]:
+    """Biên chế đồ thông minh cho Văn quan: Thái thú (Nội chính) -> Mưu sĩ -> Nhàn rỗi -> Vét Thái thú."""
+    active_tac_ids = roster.active_tactician_ids()
+    mayor_targets: list[tuple[int, str, General]] = []
+    tactician_targets: list[tuple[int, str, General]] = []
+    idle_civil_targets: list[tuple[int, str, General]] = []
+
+    for target in civil_targets:
+        tier = civil_priority_tier(target[2], active_tac_ids)
+        if tier == 0:
+            mayor_targets.append(target)
+        elif tier == 1:
+            tactician_targets.append(target)
+        else:
+            idle_civil_targets.append(target)
+
+    mayor_resolved_slots: set[tuple[int, int]] = set()
+
+    # Lượt 1: Thái thú ưu tiên đồ tăng Nội chính (politics > 0); nhường đồ politics == 0 cho Mưu sĩ
+    if mayor_targets:
+        _emit(
+            on_log,
+            f"📌 Đang phân bổ trang bị Nội chính cho Thái thú ({len(mayor_targets)} tướng, ưu tiên Cao → Thấp)...",
+        )
+        for city_id, city_name, gen in mayor_targets:
+            if stop_event and stop_event.is_set():
+                summary.stopped = True
+                _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
+                return False, processed
+
+            for equip_type in EQUIP_TYPES:
+                if stop_event and stop_event.is_set():
+                    summary.stopped = True
+                    _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
+                    return False, processed
+
+                pool = inventory.free_items.setdefault(("van", equip_type), [])
+                current_item = inventory.equipped_by_general.get(gen.id, {}).get(equip_type)
+                pol_candidates = sorted(
+                    (it for it in pool if it.politics > 0),
+                    key=lambda it: it.mayor_sort_key,
+                )
+
+                if not pol_candidates:
+                    if current_item is not None and current_item.politics > 0:
+                        summary.skipped_optimal += 1
+                        mayor_resolved_slots.add((gen.id, equip_type))
+                    continue
+
+                candidate = pol_candidates[0]
+                mayor_resolved_slots.add((gen.id, equip_type))
+                if current_item is not None and (
+                    (candidate.politics, candidate.level, candidate.item_type_id)
+                    <= (current_item.politics, current_item.level, current_item.item_type_id)
+                ):
+                    summary.skipped_optimal += 1
+                    continue
+
+                _equip_single_slot(
+                    gateway,
+                    inventory,
+                    summary,
+                    city_id,
+                    city_name,
+                    gen,
+                    equip_type,
+                    pool,
+                    candidate,
+                    current_item,
+                    on_log,
+                    role_note=" [Thái thú]",
+                )
+
+    # Lượt 2: Mưu sĩ đang biên chế rồi mới đến Quan văn nhàn rỗi
+    if tactician_targets:
+        _emit(
+            on_log,
+            f"📌 Đang phân bổ trang bị Mưu sĩ đang biên chế ({len(tactician_targets)} tướng, ưu tiên Cao → Thấp)...",
+        )
+        ok, processed = _assign_standard_targets(
+            gateway,
+            inventory,
+            summary,
+            tactician_targets,
+            processed,
+            total_targets,
+            stop_event,
+            on_log,
+            on_progress,
+            role_note=" [Mưu sĩ]",
+        )
+        if not ok:
+            return False, processed
+
+    if idle_civil_targets:
+        _emit(
+            on_log,
+            f"📌 Đang phân bổ trang bị Quan văn nhàn rỗi ({len(idle_civil_targets)} tướng, ưu tiên Cao → Thấp)...",
+        )
+        ok, processed = _assign_standard_targets(
+            gateway,
+            inventory,
+            summary,
+            idle_civil_targets,
+            processed,
+            total_targets,
+            stop_event,
+            on_log,
+            on_progress,
+        )
+        if not ok:
+            return False, processed
+
+    # Lượt 3: Vét đồ còn dư trong kho vào các ô chưa xử lý của Thái thú
+    if mayor_targets:
+        has_unresolved = any(
+            (gen.id, eq_type) not in mayor_resolved_slots
+            for _, _, gen in mayor_targets
+            for eq_type in EQUIP_TYPES
+        )
+        if has_unresolved:
+            _emit(on_log, f"📌 Đang vét trang bị còn dư vào ô trống cho Thái thú ({len(mayor_targets)} tướng)...")
+        for city_id, city_name, gen in mayor_targets:
+            if stop_event and stop_event.is_set():
+                summary.stopped = True
+                _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
+                return False, processed
+
+            for equip_type in EQUIP_TYPES:
+                if (gen.id, equip_type) in mayor_resolved_slots:
+                    continue
+                if stop_event and stop_event.is_set():
+                    summary.stopped = True
+                    _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
+                    return False, processed
+
+                pool = inventory.free_items.setdefault(("van", equip_type), [])
+                pool.sort(key=lambda it: it.sort_key)
+                current_item = inventory.equipped_by_general.get(gen.id, {}).get(equip_type)
+
+                if not pool:
+                    if current_item is None:
+                        summary.no_item_available += 1
+                    else:
+                        summary.skipped_optimal += 1
+                    continue
+
+                candidate = pool[0]
+                if current_item is not None and (
+                    (candidate.politics, candidate.level, candidate.item_type_id)
+                    <= (current_item.politics, current_item.level, current_item.item_type_id)
+                ):
+                    summary.skipped_optimal += 1
+                    continue
+
+                _equip_single_slot(
+                    gateway,
+                    inventory,
+                    summary,
+                    city_id,
+                    city_name,
+                    gen,
+                    equip_type,
+                    pool,
+                    candidate,
+                    current_item,
+                    on_log,
+                    role_note=" [Thái thú]",
+                )
+
+            processed += 1
+            _emit_progress(on_progress, processed, total_targets)
+
+    return True, processed
+
+
 def configure_equipment(
     gateway: GatewayClient,
     roster: Roster,
@@ -1042,7 +1371,7 @@ def configure_equipment(
     on_log: Optional[Callable[[str], None]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> EquipSummary:
-    """Tự động trang bị hoặc tháo trang bị cho Quan văn & Võ tướng theo cấp độ từ cao xuống thấp."""
+    """Tự động trang bị hoặc tháo trang bị cho Quan văn & Võ tướng theo ưu tiên vai trò và cấp độ."""
     if mode not in VALID_EQUIP_MODES:
         raise ValueError(f"Chế độ trang bị không hợp lệ: {mode}")
 
@@ -1133,90 +1462,45 @@ def configure_equipment(
         for bucket in inventory.free_items.values():
             bucket.sort(key=lambda it: it.sort_key)
 
-    # Bước 2: Tách Võ tướng & Văn quan, mỗi nhóm sắp theo Cấp độ giảm dần (Cao -> Thấp)
-    grouped: list[tuple[str, list[tuple[int, str, General]]]] = []
-    for role_key in ("vo", "van"):
-        role_targets = [t for t in idle_sorted_all if t[2].role == role_key]
-        if role_targets:
-            grouped.append((role_key, role_targets))
+    # Bước 2: Tách Võ tướng (Cao -> Thấp) và Văn quan (Thái thú -> Mưu sĩ -> Nhàn rỗi)
+    vo_targets = [t for t in idle_sorted_all if t[2].role == "vo"]
+    van_targets = [t for t in idle_sorted_all if t[2].role == "van"]
 
     total_targets = len(idle_sorted_all)
     processed = 0
     _emit_progress(on_progress, 0, total_targets)
 
-    for role_key, role_targets in grouped:
-        role_label = "Võ tướng" if role_key == "vo" else "Văn quan"
-        _emit(on_log, f"📌 Đang phân bổ trang bị {role_label} ({len(role_targets)} tướng, ưu tiên Cao → Thấp)...")
-        for city_id, city_name, gen in role_targets:
-            if stop_event and stop_event.is_set():
-                summary.stopped = True
-                _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
-                return summary
+    if vo_targets:
+        _emit(on_log, f"📌 Đang phân bổ trang bị Võ tướng ({len(vo_targets)} tướng, ưu tiên Cao → Thấp)...")
+        ok, processed = _assign_standard_targets(
+            gateway,
+            inventory,
+            summary,
+            vo_targets,
+            processed,
+            total_targets,
+            stop_event,
+            on_log,
+            on_progress,
+        )
+        if not ok:
+            return summary
 
-            for equip_type in EQUIP_TYPES:
-                if stop_event and stop_event.is_set():
-                    summary.stopped = True
-                    _emit(on_log, "🛑 Đã dừng Tự động trang bị theo yêu cầu.")
-                    return summary
-
-                slot_name = EQUIP_SLOT_NAMES[equip_type]
-                pool = inventory.free_items.setdefault((gen.role, equip_type), [])
-                current_item = inventory.equipped_by_general.get(gen.id, {}).get(equip_type)
-
-                if not pool:
-                    if current_item is None:
-                        summary.no_item_available += 1
-                    else:
-                        summary.skipped_optimal += 1
-                    continue
-
-                candidate = pool[0]
-                if current_item is not None and (
-                    (candidate.level, candidate.item_type_id) <= (current_item.level, current_item.item_type_id)
-                ):
-                    summary.skipped_optimal += 1
-                    continue
-
-                ok, _ret, msg = equip_general_item(gateway, city_id, gen.id, equip_type, candidate.item_id)
-                if ok:
-                    pool.pop(0)
-                    summary.equipped += 1
-                    if current_item is not None:
-                        replaced_role = current_item.role or gen.role
-                        if replaced_role in ("vo", "van"):
-                            back_pool = inventory.free_items.setdefault((replaced_role, equip_type), [])
-                            back_pool.append(replace(current_item, general_id=0, general_name="", quantity=1))
-                            back_pool.sort(key=lambda it: it.sort_key)
-                    inventory.equipped_by_general.setdefault(gen.id, {})[equip_type] = replace(
-                        candidate,
-                        quantity=1,
-                        general_id=gen.id,
-                        general_name=gen.name,
-                    )
-                    upgrade_note = f" (thay {current_item.short_label})" if current_item is not None else ""
-                    _emit(
-                        on_log,
-                        f"   ✅ [{city_name}] {gen.name} (Lv.{gen.level}) mặc {slot_name}: "
-                        f"{candidate.short_label}{upgrade_note}",
-                    )
-                    if candidate.quantity > 1 or current_item is not None:
-                        _refresh_free_slot_from_server(
-                            gateway,
-                            inventory,
-                            equip_type,
-                            consumed_item_id=candidate.item_id,
-                            prev_quantity=candidate.quantity,
-                        )
-                else:
-                    summary.failed += 1
-                    pool[:] = [it for it in pool if it.item_id != candidate.item_id]
-                    _emit(
-                        on_log,
-                        f"   ❌ [{city_name}] {gen.name} mặc {slot_name} ({candidate.short_label}) thất bại: {msg}",
-                    )
-
-            processed += 1
-            _emit_progress(on_progress, processed, total_targets)
+    if van_targets:
+        ok, processed = _assign_civil_generals(
+            gateway,
+            roster,
+            inventory,
+            summary,
+            van_targets,
+            processed,
+            total_targets,
+            stop_event,
+            on_log,
+            on_progress,
+        )
+        if not ok:
+            return summary
 
     _emit(
         on_log,

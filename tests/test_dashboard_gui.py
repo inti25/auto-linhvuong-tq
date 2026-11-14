@@ -3475,6 +3475,38 @@ def test_equip_dialog_execution_assign_and_unequip():
         dash.destroy()
 
 
+def test_equip_dialog_civil_priority_order():
+    """Bảng Trang bị xếp Văn quan theo ưu tiên Thái thú -> Mưu sĩ (special_status=3) -> Rảnh rỗi."""
+    import time
+
+    dash = safe_dashboard()
+    try:
+        c1 = City(id=100, name="ThanhA", type="Thành", pos_x=10, pos_y=20, level=15)
+        idle_high = General(id=10, name="VanNhanRoi", role="van", level=90, morale=100, stamina=100, stamina_max=100)
+        tactician = General(
+            id=11, name="MuuSi3", role="van", level=30, morale=100, stamina=100, stamina_max=100, special_status=3
+        )
+        mayor = General(
+            id=12, name="ThaiThu1", role="van", level=40, morale=100, stamina=100, stamina_max=100, special_status=1
+        )
+        roster = Roster(cities=[c1], camps=[], _generals={100: [idle_high, tactician, mayor]})
+        dash._loaded(roster)
+
+        dash.gateway.call = lambda *_a, **_kw: {"ret": 0, "list": []}
+        dash._open_equip_dialog()
+        deadline = time.time() + 2.0
+        while dash._equip_running and time.time() < deadline:
+            dash.update()
+            time.sleep(0.02)
+
+        assert list(dash.equip_tree.get_children()) == ["12", "11", "10"]
+        assert dash.equip_tree.item("12", "values")[8] == "Thái thú"
+        assert dash.equip_tree.item("11", "values")[8] == "Mưu sĩ"
+        assert dash.equip_tree.item("10", "values")[8] == "Rảnh rỗi"
+    finally:
+        dash.destroy()
+
+
 
 
 

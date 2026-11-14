@@ -46,6 +46,7 @@ from .generals import (
     EquipmentInventory,
     RewardSummary,
     TacticianSummary,
+    civil_priority_tier,
     collect_reward_targets,
     configure_equipment,
     configure_tacticians,
@@ -8561,7 +8562,14 @@ class Dashboard(tk.Frame):
                 seen.add(g.id)
                 rows.append((base.name, g))
 
-        rows.sort(key=lambda item: (-item[1].level, item[1].id))
+        active_tac_ids = self.roster.active_tactician_ids()
+        rows.sort(
+            key=lambda item: (
+                civil_priority_tier(item[1], active_tac_ids) if item[1].role == "van" else 2,
+                -item[1].level,
+                item[1].id,
+            )
+        )
 
         for base_name, g in rows:
             is_sel = "☑" if g.id in self._equip_selected_ids else "☐"

@@ -633,3 +633,162 @@ def test_configure_equipment_stacked_item_split_and_failed_item_eviction():
         (11, 2, 9001),
         (12, 2, 9002),
     ]
+
+
+def test_configure_equipment_smart_civil_mayor_tactician_idle_priority():
+    """Thái thú ưu tiên đồ Nội chính > 0; đồ Nội chính = 0 nhường Mưu sĩ đang biên chế -> Nhàn rỗi -> Vét Thái thú."""
+    c1 = _make_city(100, "ThanhA")
+    vo_gen = General(
+        id=1,
+        name="VoMaster",
+        role="vo",
+        level=120,
+        morale=100,
+        stamina=100,
+        stamina_max=100,
+        tactician_id=13,
+        tactician_name="MuuSiTheoTuong",
+    )
+    mayor = General(
+        id=10,
+        name="ThaiThu",
+        role="van",
+        level=200,
+        morale=100,
+        stamina=100,
+        stamina_max=100,
+        special_status=1,
+    )
+    tactician = General(
+        id=11,
+        name="MuuSi",
+        role="van",
+        level=100,
+        morale=100,
+        stamina=100,
+        stamina_max=100,
+        special_status=3,
+    )
+    # Văn quan biên chế được nhận diện qua active_tactician_ids() dù special_status=0
+    tactician_via_vo = General(
+        id=13,
+        name="MuuSiTheoTuong",
+        role="van",
+        level=95,
+        morale=100,
+        stamina=100,
+        stamina_max=100,
+        special_status=0,
+    )
+    idle_van = General(
+        id=12,
+        name="NhanRoi",
+        role="van",
+        level=150,
+        morale=100,
+        stamina=100,
+        stamina_max=100,
+        special_status=0,
+    )
+
+    assert tactician.is_tactician is True
+    assert tactician.status_text == "Mưu sĩ"
+
+    roster = Roster(
+        cities=[c1],
+        camps=[],
+        _generals={100: [idle_van, tactician, mayor]},
+    )
+
+    def _civil_handler(ep, oid, body):
+        if ep == "Common.ashx" and oid == 24:
+            lt = body["lType"]
+            if lt == "1":
+                return {
+                    "ret": 0,
+                    "list": [
+                        [1001, 1, 1220, 60, 10, 27, 0, 1, 0, ""],   # 武侯纶巾 (Nội chính = 0)
+                        [1002, 1, 1207, 20, 0, 0, 14, 1, 0, ""],   # 状元冠 (Nội chính = 14)
+                    ],
+                }
+            if lt == "2":
+                return {
+                    "ret": 0,
+                    "list": [
+                        [2000, 1, 2218, 0, 16, 30, 0, 1, 10, "ThaiThu"],  # 智多星羽扇 (Nội chính = 0)
+                        [2001, 1, 2217, 0, 26, 0, 20, 1, 0, ""],           # 文曲星羽扇 (Nội chính = 20)
+                    ],
+                }
+            if lt == "4":
+                return {
+                    "ret": 0,
+                    "list": [
+                        [4001, 1, 4213, 0, 3, 15, 0, 1, 0, ""],   # 白石 (Nội chính = 0)
+                        [4002, 1, 4205, 0, 0, 10, 0, 1, 0, ""],   # 快航 (Nội chính = 0)
+                    ],
+                }
+            return {"ret": 0, "list": []}
+        return {"ret": 0}
+
+    gw = FakeGateway(_civil_handler)
+    summary = configure_equipment(
+        gw,
+        roster,
+        [10, 11, 12],
+        mode=EQUIP_MODE_ASSIGN,
+        reassign_existing=False,
+    )
+    assert summary.equipped == 6
+    assert summary.failed == 0
+    assert [
+        (int(body["lGeneralID"]), int(body["lEquipType"]), int(body["lEquipID"]))
+        for ep, oid, body in gw.calls
+        if ep == "OPT.ashx" and oid == 58
+    ] == [
+        (10, 1, 1002),  # Thái thú chọn 1207 (Nội chính = 14), nhường 1220
+        (10, 2, 2001),  # Thái thú nâng cấp từ 2218 -> 2217 (Nội chính = 20), trả 2000 về kho
+        (11, 1, 1001),  # Mưu sĩ (Lv.100) nhận 1220 trước Văn nhàn rỗi (Lv.150)
+        (11, 2, 2000),  # Mưu sĩ nhận lại 2218 từ Thái thú
+        (11, 4, 4001),  # Mưu sĩ nhận ngựa 白石 (4213)
+        (12, 4, 4002),  # Văn nhàn rỗi nhận ngựa 快航 (4205)
+    ]
+
+    # Kiểm tra vòng vét cuối cho Thái thú + nhận diện Mưu sĩ qua active_tactician_ids()
+    roster_sweep = Roster(
+        cities=[c1],
+        camps=[],
+        _generals={100: [vo_gen, idle_van, tactician_via_vo, tactician, mayor]},
+    )
+    assert roster_sweep.active_tactician_ids() == {13}
+
+    def _sweep_handler(ep, oid, body):
+        if ep == "Common.ashx" and oid == 24 and body["lType"] == "4":
+            return {
+                "ret": 0,
+                "list": [
+                    [4001, 1, 4213, 0, 3, 15, 0, 1, 0, ""],
+                    [4002, 1, 4205, 0, 0, 10, 0, 1, 0, ""],
+                    [4003, 1, 4201, 0, 0, 2, 0, 1, 0, ""],   # 松风 dư thứ 3 -> vét cho Thái thú ở cuối
+                    [4004, 1, 4202, 0, 0, 4, 0, 1, 0, ""],   # 飞镰 -> nhường cho Nhàn rỗi trước Thái thú
+                ],
+            }
+        return {"ret": 0, "list": []}
+
+    gw_sweep = FakeGateway(_sweep_handler)
+    sum_sweep = configure_equipment(
+        gw_sweep,
+        roster_sweep,
+        [10, 11, 12, 13],
+        mode=EQUIP_MODE_ASSIGN,
+    )
+    assert sum_sweep.equipped == 4
+    assert [
+        (int(body["lGeneralID"]), int(body["lEquipType"]), int(body["lEquipID"]))
+        for ep, oid, body in gw_sweep.calls
+        if ep == "OPT.ashx" and oid == 58
+    ] == [
+        (11, 4, 4001),  # Mưu sĩ Lv.100 lấy 白石 (4213)
+        (13, 4, 4002),  # Mưu sĩ biên chế Lv.95 lấy 快航 (4205)
+        (12, 4, 4004),  # Văn nhàn rỗi Lv.150 lấy 飞镰 (4202)
+        (10, 4, 4003),  # Thái thú Lv.200 vét ô trống cuối cùng bằng 松风 (4201)
+    ]

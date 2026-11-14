@@ -69,7 +69,7 @@ class General:
     status: int = 0  # 0: rảnh rỗi, != 0: bận
     upgrading_time: int = 0  # thời gian nâng sĩ khí còn lại (giây)
     loyalty: int = 100  # Lòng trung thành (0-100)
-    special_status: int = 0  # 0: bình thường, 1: Thái thú, 2: Mưu sĩ
+    special_status: int = 0  # 0: bình thường, 1: Thái thú, 2/3: Mưu sĩ
     tactician_id: int = 0  # ID Mưu sĩ đang theo (chỉ áp dụng cho Võ tướng)
     tactician_name: str = ""  # Tên Mưu sĩ đang theo
 
@@ -85,7 +85,7 @@ class General:
     @property
     def is_tactician(self) -> bool:
         """Văn quan đang được biên chế làm Mưu sĩ cho Võ tướng."""
-        return self.special_status == 2
+        return self.special_status in (2, 3)
 
     @property
     def is_available_tactician(self) -> bool:
@@ -100,7 +100,7 @@ class General:
             return f"Nâng SK ({self.upgrading_time}s)"
         if self.special_status == 1:
             return "Thái thú"
-        if self.special_status == 2:
+        if self.special_status in (2, 3):
             return "Mưu sĩ"
         return "Rảnh rỗi"
 
@@ -141,6 +141,15 @@ class Roster:
 
     def generals_of(self, base_id: int) -> list[General]:
         return list(self._generals.get(base_id, []))
+
+    def active_tactician_ids(self) -> set[int]:
+        """Tập hợp ID các Văn quan đang được biên chế làm Mưu sĩ cho Võ tướng."""
+        return {
+            gen.tactician_id
+            for base in self.bases
+            for gen in self.generals_of(base.id)
+            if gen.role == "vo" and gen.tactician_id > 0
+        }
 
     def army_of(self, general_id: int) -> Optional[Army]:
         return self._armies.get(general_id)
