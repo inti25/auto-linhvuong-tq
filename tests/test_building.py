@@ -1,8 +1,19 @@
+import threading
 import pytest
 
 from linhvuong.gateway import GatewayClient
 from linhvuong.tasks.base import CaptchaRequired
-from linhvuong.tasks.building import BuildingPlan, BuildingTask
+from linhvuong.tasks.building import (
+    CHEST_MAPPING,
+    DEFAULT_FALLBACK_BOX_ORDER,
+    NO_SWITCH_CHESTS,
+    RESOURCE_BOX_NAMES,
+    BuildingPlan,
+    BuildingTask,
+    chest_needs_city_switch,
+    open_single_chest,
+    run_batch_open_chest,
+)
 
 
 class Resp:
@@ -1422,5 +1433,143 @@ def test_building_task_rechecks_slots_and_stops_on_unexpected_opt65_failure_when
     assert out == "slots_busy"
     opt65_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
     assert len(opt65_calls) == 1
+
+
+def test_chest_catalog_and_resource_box_constants():
+    assert len(CHEST_MAPPING) == 33
+    assert len(NO_SWITCH_CHESTS) == 17
+    assert set(NO_SWITCH_CHESTS).issubset(set(CHEST_MAPPING.keys()))
+    assert 6 in RESOURCE_BOX_NAMES
+    assert "Dân Sinh Bảo Phiên" in RESOURCE_BOX_NAMES[6]
+    assert DEFAULT_FALLBACK_BOX_ORDER == [24, 16, 11, 6, 1]
+
+
+def test_open_single_chest_api48_with_and_without_city_switch():
+    # 1. Rương cần chuyển thành (Dân Sinh Bảo Nang -> id=1)
+    server = FakeServer(handlers={"City.ashx?id=50": {"ret": 0}, "Common.ashx?id=48": {"ret": 0}})
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+    assert chest_needs_city_switch("民生之囊 - Dân Sinh Bảo Nang") is True
+
+    ok, ret, _msg = open_single_chest(gw, "民生之囊 - Dân Sinh Bảo Nang", city_id=101)
+    assert (ok, ret) == (True, 0)
+    assert [k for k, _ in server.calls] == ["City.ashx?id=50", "Common.ashx?id=48"]
+    assert server.calls[0][1]["tid"] == "101"
+    assert server.calls[1][1]["lBoxID"] == "1"
+
+    # 2. Từ chối mở rương cần chuyển thành nếu city_id là Doanh trại (<= 0) hoặc None
+    server.calls.clear()
+    ok_camp, ret_camp, _ = open_single_chest(gw, "民生之囊 - Dân Sinh Bảo Nang", city_id=-1085)
+    assert ok_camp is False
+    assert ret_camp == -2
+    assert server.calls == []
+
+    # 3. Rương cấp tài khoản (Phúc Khoán Bảo Nang -> id=5, không chuyển thành)
+    server.calls.clear()
+    assert chest_needs_city_switch("福券之囊 - Phúc Khoán Bảo Nang") is False
+    ok2, ret2, _ = open_single_chest(gw, "福券之囊 - Phúc Khoán Bảo Nang", city_id=None)
+    assert (ok2, ret2) == (True, 0)
+    assert [k for k, _ in server.calls] == ["Common.ashx?id=48"]
+    assert server.calls[0][1]["lBoxID"] == "5"
+
+
+def test_open_single_chest_special_gift_pack_api69():
+    server = FakeServer(handlers={"OPT.ashx?id=69": {"ret": 0}})
+    gw = GatewayClient(57, server, sleep=lambda s: None)
+
+    chest = "金碧辉煌礼包 - Kim Bích Huy Hoàng Lễ Bao"
+    assert chest_needs_city_switch(chest) is False
+    ok, ret, _ = open_single_chest(gw, chest, city_id=101)
+    assert (ok, ret) == (True, 0)
+    assert [k for k, _ in server.calls] == ["OPT.ashx?id=69"]
+    payload = server.calls[0][1]
+    assert payload["type"] == "33"
+    assert payload["param1"] == "222"
+    assert payload["param2"] == "0"
+    assert payload["paytype"] == "1"
+
+
+def test_run_batch_open_chest_multithreaded_success():
+    lock = threading.Lock()
+    recorded_calls = []
+
+    class _ThreadSafeServer:
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            with lock:
+                recorded_calls.append((key, dict(data or {})))
+            return Resp({"ret": 0})
+
+    gw = GatewayClient(57, _ThreadSafeServer(), sleep=lambda s: None)
+    logs = []
+    progress_events = []
+
+    summary = run_batch_open_chest(
+        gateway=gw,
+        chest_name="福券之囊 - Phúc Khoán Bảo Nang",
+        times=10,
+        max_workers=5,
+        on_log=logs.append,
+        on_progress=lambda d, t, p: progress_events.append((d, t, p)),
+    )
+
+    assert summary["success_count"] == 10
+    assert summary["failed_count"] == 0
+    assert summary["completed"] == 10
+    assert summary["total"] == 10
+    assert summary["aborted_reason"] is None
+    assert len(recorded_calls) == 10
+    assert progress_events[-1] == (10, 10, 100.0)
+    for idx in range(1, 11):
+        assert any(f"Lượt {idx}/10" in line for line in logs)
+
+
+def test_run_batch_open_chest_aborts_on_10014_out_of_stock():
+    lock = threading.Lock()
+    call_counter = {"n": 0}
+
+    class _OutOfStockServer:
+        def post(self, url, data=None, headers=None, timeout=None):
+            with lock:
+                call_counter["n"] += 1
+                idx = call_counter["n"]
+            if idx <= 2:
+                return Resp({"ret": 0})
+            return Resp({"ret": 10014})
+
+    gw = GatewayClient(57, _OutOfStockServer(), sleep=lambda s: None)
+    logs = []
+    summary = run_batch_open_chest(
+        gateway=gw,
+        chest_name="神武之囊 - Thần Vũ Bảo Nang",
+        times=30,
+        max_workers=5,
+        on_log=logs.append,
+    )
+
+    assert summary["aborted_reason"] == "out_of_stock"
+    assert summary["completed"] < 30
+    assert any("10014" in m for m in logs)
+
+
+def test_run_batch_open_chest_aborts_on_110_captcha():
+    class _CaptchaServer:
+        def post(self, url, data=None, headers=None, timeout=None):
+            return Resp({"ret": 110})
+
+    gw = GatewayClient(57, _CaptchaServer(), sleep=lambda s: None)
+    stop_ev = threading.Event()
+    logs = []
+    summary = run_batch_open_chest(
+        gateway=gw,
+        chest_name="神武之囊 - Thần Vũ Bảo Nang",
+        times=20,
+        max_workers=5,
+        stop_event=stop_ev,
+        on_log=logs.append,
+    )
+
+    assert summary["aborted_reason"] == "captcha"
+    assert stop_ev.is_set() is True
+    assert any("Captcha" in m for m in logs)
 
 

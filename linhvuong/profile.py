@@ -123,8 +123,8 @@ class ResourceProfile:
     iron_pct: str = "70"
     stone_pct: str = "70"
     food_pct: str = "70"
-    gold_box_idx: int = 1
-    tn_box_idx: int = 3
+    gold_box_idx: int = 2
+    tn_box_idx: int = 4
     auto_open_box: bool = False
     resource_cities: list[int] = field(default_factory=list)
 
@@ -147,8 +147,8 @@ class ResourceProfile:
             iron_pct=str(data.get("iron_pct", "70")),
             stone_pct=str(data.get("stone_pct", "70")),
             food_pct=str(data.get("food_pct", "70")),
-            gold_box_idx=int(data.get("gold_box_idx", 1)),
-            tn_box_idx=int(data.get("tn_box_idx", 3)),
+            gold_box_idx=int(data.get("gold_box_idx", 2)),
+            tn_box_idx=int(data.get("tn_box_idx", 4)),
             auto_open_box=bool(data.get("auto_open_box", False)),
             resource_cities=sorted(res_cities),
         )

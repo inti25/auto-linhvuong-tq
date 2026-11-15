@@ -11,6 +11,8 @@ Reverse engineered chính xác từ ZBuild.exe:
   7. Tự động An Dân khôi phục sĩ khí/lòng dân: OPT.ashx?id=4 (lType=1, tid).
 """
 
+import queue
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -63,11 +65,300 @@ RESOURCE_BOX_NAMES = {
     24: "民生之鼎 - Dân Sinh Bảo Đỉnh",
     16: "民生之椟 - Dân Sinh Chi Độc",
     11: "民生之匣 - Dân Sinh Chi Hạp",
+    6: "民生之幡 - Dân Sinh Bảo Phiên",
     1: "民生之囊 - Dân Sinh Chi Nang",
     35: "白金资源礼盒 - Bạch Kim Tài Nguyên Lễ Hộp",
 }
 
-DEFAULT_FALLBACK_BOX_ORDER = [24, 16, 11, 1]
+DEFAULT_FALLBACK_BOX_ORDER = [24, 16, 11, 6, 1]
+
+RET_OUT_OF_CHESTS = 10014
+
+CHEST_MAPPING: dict[str, Any] = {
+    "民生之囊 - Dân Sinh Bảo Nang": 1,
+    "民生之幡 - Dân Sinh Bảo Phiên": 6,
+    "民生之匣 - Dân Sinh Bảo Hạp": 11,
+    "民生之椟 - Dân Sinh Bảo Độc": 16,
+    "民生之鼎 - Dân Sinh Bảo Đỉnh": 24,
+    "白金资源礼盒 - Bạch Kim Tư Nguyên Lễ Hạp": 35,
+    "古器之囊 - Cổ Khí Bảo Nang": 2,
+    "古器之幡 - Cổ Khí Bảo Phiên": 7,
+    "古器之匣 - Cổ Khí Bảo Hạp": 12,
+    "古器之椟 - Cổ Khí Bảo Độc": 17,
+    "古器之鼎 - Cổ Khí Bảo Đỉnh": 25,
+    "神武之囊 - Thần Vũ Bảo Nang": 3,
+    "神武之幡 - Thần Vũ Bảo Phiên": 8,
+    "神武之匣 - Thần Vũ Bảo Hạp": 13,
+    "神武之椟 - Thần Vũ Bảo Độc": 21,
+    "神武之鼎 - Thần Vũ Bảo Đỉnh": 26,
+    "天宿之囊 - Thiên Túc Bảo Nang": 4,
+    "天宿之鼎 - Thiên Túc Bảo Đỉnh": 27,
+    "福券之囊 - Phúc Khoán Bảo Nang": 5,
+    "福券之幡 - Phúc Khoán Bảo Phiên": 10,
+    "福券之匣 - Phúc Khoán Bảo Hạp": 15,
+    "福券之椟 - Phúc Khoán Bảo Độc": 23,
+    "福券之鼎 - Phúc Khoán Bảo Đỉnh": 28,
+    "军械补给礼盒 - Quân Giới Bổ Cấp Bảo Rương": 44,
+    "御赐之匣 - Ngự Tứ Bảo Hạp": 53,
+    "高级军械礼盒 - Cao Cấp Quân Giới Lễ Rương": 72,
+    "古器王鼎 - Cổ Khí Vương Đỉnh": 73,
+    "镇国军资 - Long Phi Rương": 75,
+    "衣匣 - Thiên Mệnh Rương": 76,
+    "金碧辉煌礼包 - Kim Bích Huy Hoàng Lễ Bao": {"id": 33, "api": 69, "param1": 222},
+    "万夫莫开礼包 - Vạn Phu Mạc Khai Lễ Bao": {"id": 33, "api": 69, "param1": 221},
+    "跃马扬刀礼包 - Dược Mã Dương Đao Lễ Bao": {"id": 33, "api": 69, "param1": 346},
+    "虎踞一方礼包 - Hổ Cứ Nhất Phương Lễ Bao": {"id": 33, "api": 69, "param1": 347},
+}
+
+NO_SWITCH_CHESTS: set[str] = {
+    "福券之囊 - Phúc Khoán Bảo Nang",
+    "福券之幡 - Phúc Khoán Bảo Phiên",
+    "福券之匣 - Phúc Khoán Bảo Hạp",
+    "福券之椟 - Phúc Khoán Bảo Độc",
+    "福券之鼎 - Phúc Khoán Bảo Đỉnh",
+    "神武之囊 - Thần Vũ Bảo Nang",
+    "神武之幡 - Thần Vũ Bảo Phiên",
+    "神武之匣 - Thần Vũ Bảo Hạp",
+    "神武之椟 - Thần Vũ Bảo Độc",
+    "神武之鼎 - Thần Vũ Bảo Đỉnh",
+    "御赐之匣 - Ngự Tứ Bảo Hạp",
+    "天宿之囊 - Thiên Túc Bảo Nang",
+    "天宿之鼎 - Thiên Túc Bảo Đỉnh",
+    "金碧辉煌礼包 - Kim Bích Huy Hoàng Lễ Bao",
+    "万夫莫开礼包 - Vạn Phu Mạc Khai Lễ Bao",
+    "跃马扬刀礼包 - Dược Mã Dương Đao Lễ Bao",
+    "虎踞一方礼包 - Hổ Cứ Nhất Phương Lễ Bao",
+}
+
+
+def chest_needs_city_switch(chest_name: str) -> bool:
+    """Kiểm tra loại rương có yêu cầu chuyển ngữ cảnh Thành (City.ashx?id=50) trước khi mở không."""
+    return chest_name not in NO_SWITCH_CHESTS
+
+
+def open_single_chest(
+    gateway: GatewayClient,
+    chest_name: str,
+    city_id: Optional[int] = None,
+) -> tuple[bool, int, str]:
+    """Mở 1 Rương Đạo Cụ (Common.ashx?id=48) hoặc Lễ Bao Đặc Biệt (OPT.ashx?id=69)."""
+    if chest_name not in CHEST_MAPPING:
+        return False, -1, f"Loại rương không hợp lệ: {chest_name}"
+
+    if chest_needs_city_switch(chest_name):
+        try:
+            cid = int(city_id) if city_id is not None else 0
+        except (ValueError, TypeError):
+            cid = 0
+        if cid <= 0:
+            return False, -2, "Vui lòng chọn một Thành hợp lệ (ID dương) để nhận vật phẩm từ rương"
+
+        sw_resp = gateway.call("City.ashx", 50, {"tid": str(cid), "_": ""})
+        if sw_resp is None:
+            return False, -1, f"Không thể kết nối khi chuyển sang thành {cid}"
+        sw_ret = int(sw_resp.get("ret", 0))
+        if sw_ret in (110, RET_CAPTCHA_REQUIRED):
+            return False, sw_ret, f"Server yêu cầu giải Captcha khi chuyển thành (mã {sw_ret})"
+        if sw_ret != RET_OK:
+            return False, sw_ret, f"Không thể chuyển sang thành {cid} (mã {sw_ret})"
+
+    chest_info = CHEST_MAPPING[chest_name]
+    if isinstance(chest_info, dict):
+        box_id = chest_info["id"]
+        api_type = chest_info.get("api", 48)
+        param1 = chest_info.get("param1", 0)
+    else:
+        box_id = int(chest_info)
+        api_type = 48
+        param1 = 0
+
+    if api_type == 69:
+        resp = gateway.call(
+            "OPT.ashx",
+            69,
+            {
+                "type": str(box_id),
+                "param1": str(param1),
+                "param2": "0",
+                "paytype": "1",
+                "_": "",
+            },
+        )
+    else:
+        resp = gateway.call("Common.ashx", 48, {"lBoxID": str(box_id), "_": ""})
+
+    if not isinstance(resp, dict):
+        return False, -1, "Mở thất bại (không nhận được phản hồi hợp lệ)"
+
+    try:
+        ret = int(resp.get("ret", -1))
+    except (ValueError, TypeError):
+        ret = -1
+
+    if ret == RET_OK:
+        return True, RET_OK, "Mở thành công"
+    if ret == RET_OUT_OF_CHESTS:
+        return False, RET_OUT_OF_CHESTS, "Đã hết rương/lễ bao trong túi đồ (mã 10014)"
+    if ret in (110, RET_CAPTCHA_REQUIRED):
+        return False, ret, f"Server yêu cầu giải Captcha (mã {ret})"
+    return False, ret, f"Mở thất bại (mã {ret})"
+
+
+def run_batch_open_chest(
+    gateway: GatewayClient,
+    chest_name: str,
+    times: int,
+    city_id: Optional[int] = None,
+    city_name: str = "",
+    max_workers: int = 5,
+    stop_event: Optional[threading.Event] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_progress: Optional[Callable[[int, int, float], None]] = None,
+) -> dict[str, Any]:
+    """Mở Rương Đạo Cụ / Lễ Bao Đặc Biệt hàng loạt bằng đa luồng, ghi log tuần tự và dừng sớm khi hết rương/Captcha."""
+    if times <= 0:
+        return {
+            "success_count": 0,
+            "failed_count": 0,
+            "completed": 0,
+            "total": 0,
+            "aborted_reason": None,
+            "last_ret": None,
+        }
+
+    needs_switch = chest_needs_city_switch(chest_name)
+    if needs_switch:
+        try:
+            valid_cid = int(city_id) if city_id is not None else 0
+        except (ValueError, TypeError):
+            valid_cid = 0
+        if valid_cid <= 0:
+            err_msg = "Vui lòng chọn một Thành hợp lệ (ID dương) để nhận vật phẩm từ rương"
+            if on_log:
+                on_log(f"❌ {err_msg}")
+            return {
+                "success_count": 0,
+                "failed_count": 0,
+                "completed": 0,
+                "total": times,
+                "aborted_reason": "invalid_city",
+                "last_ret": -2,
+            }
+
+    task_queue: queue.Queue[int] = queue.Queue()
+    for i in range(1, times + 1):
+        task_queue.put(i)
+
+    state_lock = threading.RLock()
+    abort_flag = threading.Event()
+    completed_count = 0
+    success_count = 0
+    failed_count = 0
+    aborted_reason: Optional[str] = None
+    last_ret: Optional[int] = None
+    next_to_report = 1
+    completed_results: dict[int, tuple[bool, int, str]] = {}
+
+    city_tag = f" tại [{city_name}]" if (needs_switch and city_name) else ""
+
+    def _drain_queue() -> None:
+        while True:
+            try:
+                task_queue.get_nowait()
+                task_queue.task_done()
+            except queue.Empty:
+                break
+
+    def _emit_turn_log(turn_idx: int, ok: bool, ret_code: int, message: str) -> None:
+        if not on_log:
+            return
+        if ok:
+            on_log(f"✅ Lượt {turn_idx}/{times}: Mở [{chest_name}]{city_tag} thành công.")
+        else:
+            on_log(f"❌ Lượt {turn_idx}/{times}: Mở [{chest_name}]{city_tag} - {message}")
+
+    def _worker() -> None:
+        nonlocal completed_count, success_count, failed_count, aborted_reason, last_ret, next_to_report
+        while not abort_flag.is_set() and not (stop_event and stop_event.is_set()):
+            try:
+                turn_idx = task_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            try:
+                if abort_flag.is_set() or (stop_event and stop_event.is_set()):
+                    continue
+
+                ok, ret_code, message = open_single_chest(gateway, chest_name, city_id=city_id)
+
+                with state_lock:
+                    completed_count += 1
+                    last_ret = ret_code
+                    if ok:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+
+                    completed_results[turn_idx] = (ok, ret_code, message)
+                    while next_to_report in completed_results:
+                        r_ok, r_code, r_msg = completed_results.pop(next_to_report)
+                        _emit_turn_log(next_to_report, r_ok, r_code, r_msg)
+                        next_to_report += 1
+
+                    if ret_code == RET_OUT_OF_CHESTS:
+                        if aborted_reason is None:
+                            aborted_reason = "out_of_stock"
+                        abort_flag.set()
+                        _drain_queue()
+                    elif ret_code in (110, RET_CAPTCHA_REQUIRED):
+                        if aborted_reason is None:
+                            aborted_reason = "captcha"
+                        abort_flag.set()
+                        if stop_event is not None:
+                            stop_event.set()
+                        _drain_queue()
+
+                    if on_progress:
+                        pct = (completed_count / times) * 100.0
+                        on_progress(completed_count, times, pct)
+            finally:
+                task_queue.task_done()
+
+    worker_count = min(max(1, int(max_workers)), times)
+    threads = [
+        threading.Thread(target=_worker, name=f"OpenChestWorker-{idx + 1}", daemon=True)
+        for idx in range(worker_count)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Flush bất kỳ kết quả nào còn lại do thứ tự nhảy cóc khi dừng giữa chừng
+    with state_lock:
+        for rem_idx in sorted(completed_results.keys()):
+            r_ok, r_code, r_msg = completed_results.pop(rem_idx)
+            _emit_turn_log(rem_idx, r_ok, r_code, r_msg)
+
+        if aborted_reason == "out_of_stock":
+            if on_log:
+                on_log(f"🛑 Dừng mở rương: Đã hết [{chest_name}] trong túi đồ (mã 10014).")
+        elif aborted_reason == "captcha":
+            if on_log:
+                on_log(f"⚠️ Dừng mở rương: Server yêu cầu giải Captcha (mã {last_ret})!")
+        elif stop_event is not None and stop_event.is_set() and aborted_reason is None:
+            aborted_reason = "stopped"
+            if on_log:
+                on_log("⏹️ Đã dừng tiến trình mở rương theo yêu cầu.")
+
+    return {
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "completed": completed_count,
+        "total": times,
+        "aborted_reason": aborted_reason,
+        "last_ret": last_ret,
+    }
 
 
 def parse_remaining_seconds(raw_val) -> int:

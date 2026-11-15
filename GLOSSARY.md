@@ -220,12 +220,24 @@ _Avoid_: Cân bằng cấp, level balance, round-robin
 
 
 **Đạo Cụ Tài Nguyên**:
-Vật phẩm dạng hòm/rương/đỉnh trong túi đồ của người chơi, khi mở sẽ cung cấp một lượng lớn tài nguyên xây dựng (Gỗ, Đá, Sắt, Lúa). Điển hình: Dân Sinh Bảo Đỉnh (ID: 24), Dân Sinh Chi Độc (ID: 16), Dân Sinh Chi Hạp (ID: 11), Dân Sinh Chi Nang (ID: 1), Bạch Kim Tài Nguyên Lễ Hộp (ID: 35).
+Vật phẩm dạng hòm/rương/đỉnh trong túi đồ của người chơi, khi mở sẽ cung cấp một lượng lớn tài nguyên xây dựng (Gỗ, Đá, Sắt, Lúa). Điển hình: Dân Sinh Bảo Đỉnh (ID: 24), Dân Sinh Chi Độc (ID: 16), Dân Sinh Chi Hạp (ID: 11), Dân Sinh Bảo Phiên (ID: 6), Dân Sinh Chi Nang (ID: 1), Bạch Kim Tài Nguyên Lễ Hộp (ID: 35).
 _Avoid_: Hộp quà, bùa tài nguyên, resource chest
 
 **Tự Động Mở Rương**:
 Cơ chế tự động gửi lệnh mở đạo cụ tài nguyên qua API `Common.ashx?id=48` (`lBoxID`) ngay khi phát hiện căn cứ không đủ tài nguyên để tiến hành nâng cấp hoặc hạ cấp công trình.
 _Avoid_: Cắn rương, auto open box
+
+**Rương Đạo Cụ**:
+Các vật phẩm dạng túi/phiên/hạp/độc/đỉnh trong túi đồ của người chơi được mở qua `Common.ashx?id=48` (`lBoxID`), bao gồm rương tài nguyên Dân Sinh (1, 6, 11, 16, 24), Bạch Kim Tư Nguyên Lễ Hạp (35), Cổ Khí (2, 7, 12, 17, 25, 73), Thần Vũ (3, 8, 13, 21, 26), Thiên Túc (4, 27), Phúc Khoán (5, 10, 15, 23, 28), Quân Giới Bổ Cấp (44, 72), Ngự Tứ Bảo Hạp (53), Long Phi Rương (75) và Thiên Mệnh Rương (76).
+_Avoid_: Rương thường, box item
+
+**Lễ Bao Đặc Biệt**:
+Các gói lễ bao sự kiện đặc biệt mở qua `OPT.ashx?id=69` với `type=33`, `param2=0`, `paytype=1` và mã định danh gói truyền ở `param1` (`222`: Kim Bích Huy Hoàng Lễ Bao, `221`: Vạn Phu Mạc Khai Lễ Bao, `346`: Dược Mã Dương Đao Lễ Bao, `347`: Hổ Cứ Nhất Phương Lễ Bao).
+_Avoid_: Rương 69, special chest, gói quà đặc biệt
+
+**Mở Rương Hàng Loạt**:
+Tiện ích do người chơi chủ động kích hoạt để mở liên tiếp một số lượng lớn Rương Đạo Cụ hoặc Lễ Bao Đặc Biệt theo số lượt chỉ định bằng đa luồng (tối đa 5 luồng song song), tự động chuyển ngữ cảnh Thành (`City.ashx?id=50`) đối với các loại rương cộng vật phẩm trực tiếp vào thành trì và tự động dừng ngay khi hết rương trong túi đồ (mã lỗi 10014) hoặc phát sinh Captcha (mã lỗi 110).
+_Avoid_: Spam mở rương, auto cắn rương thủ công, batch chest opener
 
 **Chu Kỳ Lặp**:
 Khoảng thời gian nghỉ (đơn vị: Giây) giữa các lượt thực thi hoặc kiểm tra định kỳ của các tác vụ chạy nền (Thảo Phạt, Gọi Dân, Bình Man, Xây Dựng, Nghiên Cứu Kỹ Thuật), có ngưỡng sàn an toàn tối thiểu 3.0s.

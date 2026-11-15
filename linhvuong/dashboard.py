@@ -66,7 +66,18 @@ from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import MAN_TARGET_OPTIONS, MODE_CAMP, MODE_CITY, BinhMan
 from .tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
 from .tasks.di_trai import DiTrai
-from .tasks.building import BUILDING_NAMES, BuildingPlan, BuildingTask, parse_boost_remaining_time
+from .tasks.building import (
+    BUILDING_NAMES,
+    CHEST_MAPPING,
+    NO_SWITCH_CHESTS,
+    RET_OUT_OF_CHESTS,
+    BuildingPlan,
+    BuildingTask,
+    chest_needs_city_switch,
+    open_single_chest,
+    parse_boost_remaining_time,
+    run_batch_open_chest,
+)
 from .tasks.goi_dan import GoiDan, VONG_LINH
 from .tasks.logistics import ArmyTransferOrder, LogisticsTask
 from .tasks.morale import MoraleTrainer
@@ -772,6 +783,12 @@ class Dashboard(tk.Frame):
         self._craft_thread: Optional[threading.Thread] = None
         self._craft_last_run: dict[int, float] = {}
         self._craft_statuses: dict[int, str] = {}
+
+        # Trạng thái Mở Rương Hàng Loạt
+        self._chest_running: bool = False
+        self._chest_stop_event: Optional[threading.Event] = None
+        self._chest_thread: Optional[threading.Thread] = None
+        self._chest_queue: Optional[queue.Queue] = None
 
         # Widget log đệm
         self.bld_log_text = tk.Text(self)
@@ -1565,8 +1582,8 @@ class Dashboard(tk.Frame):
                 "iron_pct": self.res_iron_pct_var.get() if hasattr(self, "res_iron_pct_var") else "70",
                 "stone_pct": self.res_stone_pct_var.get() if hasattr(self, "res_stone_pct_var") else "70",
                 "food_pct": self.res_food_pct_var.get() if hasattr(self, "res_food_pct_var") else "70",
-                "gold_box_idx": self.res_gold_box_combo.current() if hasattr(self, "res_gold_box_combo") else 1,
-                "tn_box_idx": self.res_tn_box_combo.current() if hasattr(self, "res_tn_box_combo") else 3,
+                "gold_box_idx": self.res_gold_box_combo.current() if hasattr(self, "res_gold_box_combo") else 2,
+                "tn_box_idx": self.res_tn_box_combo.current() if hasattr(self, "res_tn_box_combo") else 4,
                 "auto_open_box": bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False,
                 "resource_cities": sorted(list(self._selected_resource_cities)),
             },
@@ -5088,6 +5105,7 @@ class Dashboard(tk.Frame):
 
         box_options = [
             "1: 民生之囊 - Dân Sinh Bảo Nang",
+            "6: 民生之幡 - Dân Sinh Bảo Phiên",
             "11: 民生之匣 - Dân Sinh Chi Hạp",
             "16: 民生之椟 - Dân Sinh Chi Độc",
             "24: 民生之鼎 - Dân Sinh Bảo Đỉnh",
@@ -5098,14 +5116,14 @@ class Dashboard(tk.Frame):
         r_box1.pack(fill="x", padx=6, pady=2)
         tk.Label(r_box1, text="Rương Vàng:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
         self.res_gold_box_combo = ttk.Combobox(r_box1, state="readonly", width=32, values=box_options)
-        self.res_gold_box_combo.set(box_options[1])
+        self.res_gold_box_combo.set(box_options[2])
         self.res_gold_box_combo.pack(side="left", fill="x", expand=True, padx=4)
 
         r_box2 = tk.Frame(f_res_thresh, bg=BG)
         r_box2.pack(fill="x", padx=6, pady=2)
         tk.Label(r_box2, text="Rương TN:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
         self.res_tn_box_combo = ttk.Combobox(r_box2, state="readonly", width=32, values=box_options)
-        self.res_tn_box_combo.set(box_options[3])
+        self.res_tn_box_combo.set(box_options[4])
         self.res_tn_box_combo.pack(side="left", fill="x", expand=True, padx=4)
         self.bld_box_combo = self.res_tn_box_combo
 
@@ -5196,6 +5214,50 @@ class Dashboard(tk.Frame):
         )
         self.aux_explore_turns_entry.pack(side="left")
         self._update_explore_turns_visibility()
+
+        # 2b. Mở Rương Hàng Loạt
+        f_chest = ttk.LabelFrame(col3, text="📦 Mở Rương Hàng Loạt", style="Card.TLabelframe")
+        f_chest.pack(fill="x", padx=2, pady=4)
+
+        r_c1 = tk.Frame(f_chest, bg=BG)
+        r_c1.pack(fill="x", padx=4, pady=2)
+        tk.Label(r_c1, text="Loại:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        chest_names = list(CHEST_MAPPING.keys())
+        self.chest_type_combo = ttk.Combobox(r_c1, state="readonly", width=30, values=chest_names)
+        if chest_names:
+            self.chest_type_combo.current(0)
+        self.chest_type_combo.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.chest_type_combo.bind("<<ComboboxSelected>>", self._on_chest_type_selected)
+
+        r_c2 = tk.Frame(f_chest, bg=BG)
+        r_c2.pack(fill="x", padx=4, pady=2)
+        tk.Label(r_c2, text="Thành:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.chest_city_combo = ttk.Combobox(r_c2, state="readonly", width=13)
+        self.chest_city_combo.pack(side="left", fill="x", expand=True, padx=(4, 6))
+        tk.Label(r_c2, text="Số lượt:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.chest_times_var = tk.StringVar(value="1")
+        self.chest_times_entry = ttk.Entry(r_c2, textvariable=self.chest_times_var, width=5)
+        self.chest_times_entry.pack(side="left", padx=(4, 0))
+
+        r_c3 = tk.Frame(f_chest, bg=BG)
+        r_c3.pack(fill="x", padx=4, pady=2)
+        self.chest_start_btn = ttk.Button(
+            r_c3, text="📦 Mở Rương", style="Success.TButton", command=self._start_open_chest_batch
+        )
+        self.chest_start_btn.pack(side="left", padx=(0, 3))
+        self.chest_stop_btn = ttk.Button(
+            r_c3, text="⏹ Dừng", style="Danger.TButton", state="disabled", command=self._stop_open_chest_batch
+        )
+        self.chest_stop_btn.pack(side="left", padx=(0, 6))
+        self.chest_progress_lbl = tk.Label(
+            r_c3, text="Tiến độ: 0% (0/0)", bg=BG, fg=MUTED, font=("Segoe UI", 8)
+        )
+        self.chest_progress_lbl.pack(side="right", padx=(2, 0))
+
+        self.chest_progress_bar = ttk.Progressbar(
+            f_chest, orient="horizontal", mode="determinate", maximum=100
+        )
+        self.chest_progress_bar.pack(fill="x", padx=4, pady=(0, 4))
 
         # 3. Chuyển Quân Giới
         f_logis = ttk.LabelFrame(col3, text="Chuyển Quân Giới", style="Card.TLabelframe")
@@ -5563,6 +5625,208 @@ class Dashboard(tk.Frame):
                 if not self._res_monitor_running:
                     break
                 time.sleep(1)
+
+    def _on_chest_type_selected(self, _event=None):
+        """Cập nhật trạng thái chọn Thành theo loại rương (vô hiệu hóa với rương cấp tài khoản)."""
+        if not hasattr(self, "chest_type_combo") or not hasattr(self, "chest_city_combo"):
+            return
+        if getattr(self, "_chest_running", False):
+            return
+        chest_name = self.chest_type_combo.get().strip()
+        if not chest_needs_city_switch(chest_name):
+            self.chest_city_combo.configure(state="disabled")
+        else:
+            self.chest_city_combo.configure(state="readonly")
+
+    def _get_selected_chest_city(self) -> tuple[Optional[int], str]:
+        """Lấy Thành hợp lệ (ID dương) đang chọn cho chức năng Mở Rương Hàng Loạt."""
+        if not self.roster:
+            return None, ""
+        sel_text = self.chest_city_combo.get().strip() if hasattr(self, "chest_city_combo") else ""
+        if sel_text:
+            for c in self.roster.cities:
+                if sel_text in (c.display_name, c.name):
+                    return c.id, c.name
+            for b in self.roster.bases:
+                if sel_text in (b.display_name, b.name):
+                    return b.id, b.name
+
+        if hasattr(self, "chest_city_combo"):
+            sel_idx = self.chest_city_combo.current()
+            if 0 <= sel_idx < len(self.roster.cities):
+                c = self.roster.cities[sel_idx]
+                return c.id, c.name
+
+        cur_cid = getattr(self, "_current_bld_city_id", None)
+        if cur_cid and int(cur_cid) > 0:
+            b = self.roster.base_by_id(int(cur_cid))
+            if b and not b.is_camp:
+                return b.id, b.name
+        return None, ""
+
+    def _set_chest_controls_running(self, running: bool):
+        """Chuyển trạng thái điều khiển của khung Mở Rương Hàng Loạt."""
+        self._chest_running = running
+        if running:
+            if hasattr(self, "chest_start_btn") and self.chest_start_btn.winfo_exists():
+                self.chest_start_btn.configure(state="disabled")
+            if hasattr(self, "chest_stop_btn") and self.chest_stop_btn.winfo_exists():
+                self.chest_stop_btn.configure(state="normal")
+            if hasattr(self, "chest_type_combo") and self.chest_type_combo.winfo_exists():
+                self.chest_type_combo.configure(state="disabled")
+            if hasattr(self, "chest_city_combo") and self.chest_city_combo.winfo_exists():
+                self.chest_city_combo.configure(state="disabled")
+            if hasattr(self, "chest_times_entry") and self.chest_times_entry.winfo_exists():
+                self.chest_times_entry.configure(state="disabled")
+        else:
+            if hasattr(self, "chest_start_btn") and self.chest_start_btn.winfo_exists():
+                self.chest_start_btn.configure(state="normal")
+            if hasattr(self, "chest_stop_btn") and self.chest_stop_btn.winfo_exists():
+                self.chest_stop_btn.configure(state="disabled")
+            if hasattr(self, "chest_type_combo") and self.chest_type_combo.winfo_exists():
+                self.chest_type_combo.configure(state="readonly")
+            if hasattr(self, "chest_times_entry") and self.chest_times_entry.winfo_exists():
+                self.chest_times_entry.configure(state="normal")
+            self._on_chest_type_selected()
+
+    def _start_open_chest_batch(self):
+        """Khởi chạy tác vụ Mở Rương Hàng Loạt bằng đa luồng."""
+        if getattr(self, "_chest_running", False):
+            return
+        if self.gateway is None:
+            messagebox.showwarning("Cảnh báo", "Chưa kết nối tài khoản game!")
+            return
+
+        chest_name = self.chest_type_combo.get().strip() if hasattr(self, "chest_type_combo") else ""
+        if chest_name not in CHEST_MAPPING:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn loại rương hợp lệ!")
+            return
+
+        times_raw = self.chest_times_var.get().strip() if hasattr(self, "chest_times_var") else ""
+        try:
+            times = int(times_raw)
+            if times <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            messagebox.showerror("Lỗi", "Số lượt mở rương phải là số nguyên dương!")
+            return
+
+        if times > 5000:
+            if not messagebox.askyesno(
+                "Xác nhận",
+                f"Bạn sắp mở {times} rương. Số lượng lớn có thể mất nhiều thời gian.\nBạn có muốn tiếp tục?",
+            ):
+                return
+
+        needs_switch = chest_needs_city_switch(chest_name)
+        if needs_switch:
+            city_id, city_name = self._get_selected_chest_city()
+            if city_id is None or city_id <= 0:
+                messagebox.showwarning(
+                    "Cảnh báo",
+                    "Vui lòng chọn một Thành hợp lệ (không phải Doanh trại) để mở loại rương này!",
+                )
+                return
+        else:
+            city_id, city_name = None, ""
+
+        self._chest_stop_event = threading.Event()
+        q: queue.Queue = queue.Queue()
+        self._chest_queue = q
+        self._set_chest_controls_running(True)
+        if hasattr(self, "chest_progress_bar"):
+            self.chest_progress_bar.configure(value=0)
+        if hasattr(self, "chest_progress_lbl"):
+            self.chest_progress_lbl.configure(text=f"Tiến độ: 0% (0/{times})")
+
+        if needs_switch:
+            self._append_bld_log(f"📦 Bắt đầu mở {times}x [{chest_name}] tại Thành [{city_name}]...")
+        else:
+            self._append_bld_log(f"📦 Bắt đầu mở {times}x [{chest_name}]...")
+
+        stop_ev = self._chest_stop_event
+
+        def _worker():
+            summary: dict[str, Any] = {
+                "success_count": 0,
+                "failed_count": 0,
+                "completed": 0,
+                "total": times,
+                "aborted_reason": None,
+                "last_ret": None,
+            }
+            err_msg: Optional[str] = None
+            try:
+                summary = run_batch_open_chest(
+                    gateway=self.gateway,
+                    chest_name=chest_name,
+                    times=times,
+                    city_id=city_id,
+                    city_name=city_name,
+                    max_workers=5,
+                    stop_event=stop_ev,
+                    on_log=lambda m: q.put(("log", m)),
+                    on_progress=lambda done, total, pct: q.put(("progress", done, total, pct)),
+                )
+            except Exception as ex:
+                logger.exception(f"Lỗi khi mở rương hàng loạt: {ex}")
+                err_msg = str(ex)
+                q.put(("log", f"❌ Lỗi mở rương hàng loạt: {ex}"))
+            finally:
+                q.put(("done", chest_name, times, summary, err_msg))
+
+        self._chest_thread = threading.Thread(target=_worker, name="OpenChestBatchRunner", daemon=True)
+        self._chest_thread.start()
+        self.after(20, self._poll_chest_queue)
+
+    def _poll_chest_queue(self):
+        """Rút tiến độ, log và kết quả Mở Rương Hàng Loạt trên luồng giao diện chính."""
+        q = getattr(self, "_chest_queue", None)
+        if q is None:
+            return
+        keep_polling = True
+        while True:
+            try:
+                item = q.get_nowait()
+            except queue.Empty:
+                break
+            kind = item[0]
+            if kind == "log":
+                self._append_bld_log(item[1])
+            elif kind == "progress":
+                _, done, total, pct = item
+                if hasattr(self, "chest_progress_bar") and self.chest_progress_bar.winfo_exists():
+                    self.chest_progress_bar.configure(value=pct)
+                if hasattr(self, "chest_progress_lbl") and self.chest_progress_lbl.winfo_exists():
+                    self.chest_progress_lbl.configure(text=f"Tiến độ: {pct:.0f}% ({done}/{total})")
+            elif kind == "done":
+                _, chest_name, times, summary, _err = item
+                keep_polling = False
+                self._set_chest_controls_running(False)
+                succ = summary.get("success_count", 0)
+                fail = summary.get("failed_count", 0)
+                comp = summary.get("completed", 0)
+                tot = summary.get("total", times)
+                pct = (comp / tot * 100.0) if tot > 0 else 0.0
+                if hasattr(self, "chest_progress_bar") and self.chest_progress_bar.winfo_exists():
+                    self.chest_progress_bar.configure(value=pct)
+                if hasattr(self, "chest_progress_lbl") and self.chest_progress_lbl.winfo_exists():
+                    self.chest_progress_lbl.configure(text=f"Tiến độ: {pct:.0f}% ({comp}/{tot})")
+                if summary.get("aborted_reason") == "captcha" and hasattr(self, "status"):
+                    self.status.set("Cần giải Captcha")
+                self._append_bld_log(
+                    f"🏁 Kết thúc mở [{chest_name}]: Thành công {succ}/{tot}, Thất bại {fail}."
+                )
+        if keep_polling and getattr(self, "_chest_running", False):
+            self.after(20, self._poll_chest_queue)
+
+    def _stop_open_chest_batch(self):
+        """Dừng tiến trình Mở Rương Hàng Loạt đang chạy."""
+        if getattr(self, "_chest_running", False) and getattr(self, "_chest_stop_event", None):
+            self._chest_stop_event.set()
+            if hasattr(self, "chest_stop_btn") and self.chest_stop_btn.winfo_exists():
+                self.chest_stop_btn.configure(state="disabled")
+            self._append_bld_log("⏹️ Đang dừng tiến trình mở rương...")
 
     def _cancel_after_timer(self, attr_name: str):
         """Hủy lịch after đang chờ theo tên thuộc tính nếu có."""
@@ -7510,10 +7774,12 @@ class Dashboard(tk.Frame):
         city_items = [c.display_name for c in roster.cities]
         camps_items = [c.display_name for c in roster.camps] if roster.camps else all_base_items
 
-        for combo in (self.bld_city_combo, self.res_city_combo, self.bm_parent_city_combo, self.gd_city_combo):
+        for combo in (self.bld_city_combo, self.res_city_combo, self.bm_parent_city_combo, self.gd_city_combo, self.chest_city_combo):
             combo["values"] = city_items
-            if city_items and not combo.get():
+            if city_items and (not combo.get() or combo.get() not in city_items):
                 combo.current(0)
+
+        self._on_chest_type_selected()
 
         if self._research_city_id and hasattr(self, "res_city_combo") and roster.cities:
             for idx, c in enumerate(roster.cities):
@@ -9714,6 +9980,9 @@ class Dashboard(tk.Frame):
                 self._tac_stop_event.set()
             if getattr(self, "_equip_stop_event", None):
                 self._equip_stop_event.set()
+            if getattr(self, "_chest_stop_event", None):
+                self._chest_stop_event.set()
+                self._chest_running = False
         except Exception:
             pass
         try:

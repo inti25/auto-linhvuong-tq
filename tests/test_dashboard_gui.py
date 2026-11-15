@@ -161,7 +161,7 @@ def test_dashboard_building_tree_interactive_controls():
         assert hasattr(dash, "bld_open_box_var")
         assert dash.bld_open_box_var.get() is False
         assert hasattr(dash, "bld_box_combo")
-        assert len(dash.bld_box_combo["values"]) == 5
+        assert len(dash.bld_box_combo["values"]) == 6
         assert "24: 民生之鼎 - Dân Sinh Bảo Đỉnh" in dash.bld_box_combo.get()
         assert dash.bld_box_max_var.get() == "5"
         assert dash.bld_box_fallback_var.get() is True
@@ -3503,6 +3503,96 @@ def test_equip_dialog_civil_priority_order():
         assert dash.equip_tree.item("12", "values")[8] == "Thái thú"
         assert dash.equip_tree.item("11", "values")[8] == "Mưu sĩ"
         assert dash.equip_tree.item("10", "values")[8] == "Rảnh rỗi"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_batch_chest_opener_widgets_and_execution():
+    import time
+    from linhvuong.tasks.building import CHEST_MAPPING
+
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # 1. Đầy đủ 33 loại rương và chỉ nạp Thành (2 thành, loại trừ Doanh trại)
+        assert hasattr(dash, "chest_type_combo")
+        assert len(dash.chest_type_combo["values"]) == 33
+        assert dash.chest_type_combo.get() == list(CHEST_MAPPING.keys())[0]
+
+        assert len(dash.chest_city_combo["values"]) == 2
+        assert dash.chest_times_var.get() == "1"
+        assert str(dash.chest_stop_btn.cget("state")) == "disabled"
+        assert dash.chest_progress_lbl.cget("text") == "Tiến độ: 0% (0/0)"
+
+        # 2. Chọn rương tài khoản -> khóa combobox Thành; chọn rương thành trì -> mở lại readonly
+        dash.chest_type_combo.set("福券之囊 - Phúc Khoán Bảo Nang")
+        dash._on_chest_type_selected()
+        assert str(dash.chest_city_combo.cget("state")) == "disabled"
+
+        dash.chest_type_combo.set("民生之囊 - Dân Sinh Bảo Nang")
+        dash._on_chest_type_selected()
+        assert str(dash.chest_city_combo.cget("state")) == "readonly"
+
+        # 3. Thực thi mở 3 rương Lễ Bao Đặc Biệt (API 69)
+        api_calls = []
+
+        def fake_gw_call(ep, oid, payload=None, **_kw):
+            api_calls.append((ep, oid, dict(payload or {})))
+            return {"ret": 0}
+
+        dash.gateway.call = fake_gw_call
+        dash.chest_type_combo.set("金碧辉煌礼包 - Kim Bích Huy Hoàng Lễ Bao")
+        dash._on_chest_type_selected()
+        dash.chest_times_var.set("3")
+        dash._start_open_chest_batch()
+
+        deadline = time.time() + 3.0
+        while dash._chest_running and time.time() < deadline:
+            dash.update()
+            time.sleep(0.02)
+        dash.update()
+
+        assert dash._chest_running is False
+        assert len(api_calls) == 3
+        assert all(ep == "OPT.ashx" and oid == 69 and p["param1"] == "222" for ep, oid, p in api_calls)
+        assert dash.chest_progress_lbl.cget("text") == "Tiến độ: 100% (3/3)"
+        assert float(dash.chest_progress_bar.cget("value")) == pytest.approx(100.0)
+        log_content = dash.bld_log_text.get("1.0", "end")
+        assert "Kết thúc mở [金碧辉煌礼包 - Kim Bích Huy Hoàng Lễ Bao]: Thành công 3/3" in log_content
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_batch_chest_validation_and_confirm():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # 1. Số lượt không hợp lệ
+        dash.chest_times_var.set("0")
+        with patch("linhvuong.dashboard.messagebox.showerror") as mock_err:
+            dash._start_open_chest_batch()
+            assert mock_err.called
+
+        # 2. Số lượt > 5000 hỏi xác nhận và hủy nếu người dùng chọn Không
+        dash.chest_times_var.set("5001")
+        with patch("linhvuong.dashboard.messagebox.askyesno", return_value=False) as mock_ask:
+            dash._start_open_chest_batch()
+            assert mock_ask.called
+            assert dash._chest_running is False
+
+        # 3. Từ chối nếu chọn Doanh trại cho rương yêu cầu Thành
+        dash.chest_type_combo.set("民生之囊 - Dân Sinh Bảo Nang")
+        dash.chest_times_var.set("1")
+        dash.chest_city_combo["values"] = [r.camps[0].display_name]
+        dash.chest_city_combo.current(0)
+        with patch("linhvuong.dashboard.messagebox.showwarning") as mock_warn:
+            dash._start_open_chest_batch()
+            assert mock_warn.called
+            assert dash._chest_running is False
     finally:
         dash.destroy()
 
