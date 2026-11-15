@@ -63,6 +63,31 @@ ATTACK_ACTIONS = {
     14: "Phản kích",
 }
 
+ATTACK_ACTION_COMBO_OPTIONS = [
+    "Tự thích ứng theo binh chủng",
+    "Cố định Hỏa tiễn (13 - Cung)",
+    "Cố định Đột kích (10 - Kỵ)",
+    "Cố định Mãnh công (11 - Bộ)",
+    "Cố định Phản kích (14)",
+    "Tấn công phổ thông (1)",
+]
+
+
+def parse_attack_action_combo(combo_val: str) -> tuple[str, int]:
+    """Phân tích chuỗi chọn chiêu tấn công từ combobox thành (attack_action_mode, fixed_action_id)."""
+    val = (combo_val or "").strip()
+    if "13" in val:
+        return "fixed", 13
+    if "10" in val:
+        return "fixed", 10
+    if "11" in val:
+        return "fixed", 11
+    if "14" in val:
+        return "fixed", 14
+    if "(1)" in val or val == "1" or "phổ thông" in val.lower():
+        return "fixed", 1
+    return "adaptive", 13
+
 STRATAGEMS = {
     0: "Không dùng",
     92: "Kim thiền thoát xác",

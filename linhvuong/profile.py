@@ -207,6 +207,8 @@ class GoiDanProfile:
     auto_recruit: bool = True
     auto_morale: bool = True
     min_morale: str = "95"
+    attack_action_mode: str = "adaptive"
+    action_combo_idx: int = 0
 
     @classmethod
     def from_dict(cls, data: dict) -> "GoiDanProfile":
@@ -248,6 +250,8 @@ class GoiDanProfile:
             auto_recruit=bool(auto_rec),
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
+            attack_action_mode=str(data.get("attack_action_mode", "adaptive")),
+            action_combo_idx=int(data.get("action_combo_idx", 0)),
         )
 
 
@@ -276,6 +280,8 @@ class BaseBinhManConfig:
     auto_recruit: bool = True
     auto_morale: bool = True
     min_morale: str = "95"
+    attack_action_mode: str = "adaptive"
+    action_combo_idx: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -319,6 +325,8 @@ class BaseBinhManConfig:
             auto_recruit=bool(data.get("auto_recruit", True)),
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
+            attack_action_mode=str(data.get("attack_action_mode", "adaptive")),
+            action_combo_idx=int(data.get("action_combo_idx", 0)),
         )
 
 
@@ -342,6 +350,8 @@ class BinhManProfile:
     auto_recruit: bool = True
     auto_morale: bool = True
     min_morale: str = "95"
+    attack_action_mode: str = "adaptive"
+    action_combo_idx: int = 0
     bases: dict[str, BaseBinhManConfig] = field(default_factory=dict)
     current_base_id: Optional[int] = None
 
@@ -391,6 +401,8 @@ class BinhManProfile:
             auto_recruit=bool(data.get("auto_recruit", True)),
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
+            attack_action_mode=str(data.get("attack_action_mode", "adaptive")),
+            action_combo_idx=int(data.get("action_combo_idx", 0)),
             bases=bases_map,
             current_base_id=current_base_id,
         )

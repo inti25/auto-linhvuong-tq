@@ -3597,6 +3597,132 @@ def test_dashboard_batch_chest_validation_and_confirm():
         dash.destroy()
 
 
+def test_dashboard_attack_action_combos_include_counterattack_14():
+    """Cả 3 tab Chiến Trường, Bình Man, Gọi Man đều có danh sách Chiêu tấn công gồm Phản kích (14)."""
+    from linhvuong.battle import ATTACK_ACTION_COMBO_OPTIONS
+
+    dash = safe_dashboard()
+    try:
+        expected = list(ATTACK_ACTION_COMBO_OPTIONS)
+        assert len(expected) == 6
+        assert "Cố định Phản kích (14)" in expected
+
+        for attr in ("bt_action_mode_combo", "bm_action_mode_combo", "gd_action_mode_combo"):
+            combo = getattr(dash, attr)
+            assert list(combo["values"]) == expected
+            assert combo.current() == 0
+
+        # Kiểm tra _build_combat_config với Phản kích (14) và Tấn công phổ thông (1) không bị đụng chuỗi con "1"
+        dash.bt_action_mode_combo.current(4)
+        dash._on_bt_action_mode_changed()
+        assert dash.bt_action_mode_var.get() == "fixed"
+        cfg_counter = dash._build_combat_config()
+        assert cfg_counter.attack_action_mode == "fixed"
+        assert cfg_counter.fixed_action_id == 14
+
+        dash.bt_action_mode_combo.current(5)
+        dash._on_bt_action_mode_changed()
+        assert dash.bt_action_mode_var.get() == "fixed"
+        cfg_basic = dash._build_combat_config()
+        assert cfg_basic.attack_action_mode == "fixed"
+        assert cfg_basic.fixed_action_id == 1
+
+        dash.bt_action_mode_combo.current(0)
+        dash._on_bt_action_mode_changed()
+        assert dash.bt_action_mode_var.get() == "adaptive"
+        cfg_auto = dash._build_combat_config()
+        assert cfg_auto.attack_action_mode == "adaptive"
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_binhman_goidan_attack_action_config_runtime_and_profile(tmp_path):
+    """Bình Man (theo từng căn cứ) và Gọi Man dùng Chiêu tấn công riêng, giữ cờ Chiến Trường & lưu profile."""
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        # Tab Chiến Trường đặt khác: tự đổi trận False, mưu kế 93 (idx 1), chiêu Đột kích (10)
+        dash.bt_auto_counter_var.set(False)
+        dash.bt_stratagem_combo.current(1)
+        dash.bt_action_mode_combo.current(2)
+        dash._on_bt_action_mode_changed()
+
+        # 1. Gọi Man chọn "Cố định Phản kích (14)" (index 4)
+        dash.gd_action_mode_combo.current(4)
+        dash._on_gd_action_mode_changed()
+        assert dash.gd_action_mode_var.get() == "fixed"
+
+        gd_task = dash._create_goidan_task()
+        assert gd_task is not None
+        assert gd_task.combat_config.attack_action_mode == "fixed"
+        assert gd_task.combat_config.fixed_action_id == 14
+        # Vẫn kế thừa thiết lập phụ trợ từ Tab Chiến Trường
+        assert gd_task.combat_config.auto_counter_formation is False
+        assert gd_task.combat_config.offensive_stratagem_id == 93
+
+        # 2. Bình Man: căn cứ ThànhChinh (15230) chọn Phản kích (14 - idx 4), Trại (-1085) chọn Mãnh công (11 - idx 3)
+        dash.bm_bases_tree.selection_set("15230")
+        dash._on_bm_bases_tree_select()
+        dash.bm_action_mode_combo.current(4)
+        dash._on_bm_action_mode_changed()
+        dash.bm_base_configs[15230].enabled = True
+        dash.bm_base_configs[15230].generals = [417506]
+
+        # Test _create_binhman_task đơn lẻ khi đang chọn 15230
+        bm_single = dash._create_binhman_task()
+        assert bm_single is not None
+        assert bm_single.combat_config.attack_action_mode == "fixed"
+        assert bm_single.combat_config.fixed_action_id == 14
+
+        dash.bm_bases_tree.selection_set("-1085")
+        dash._on_bm_bases_tree_select()
+        dash.bm_action_mode_combo.current(3)
+        dash._on_bm_action_mode_changed()
+        dash.bm_base_configs[-1085].enabled = True
+        dash.bm_base_configs[-1085].generals = [417520]
+        dash.bm_base_configs[15237].enabled = False
+
+        tasks = dash._create_binhman_tasks()
+        assert len(tasks) == 2
+        t_city = next(t for t in tasks if t.origin == (100, 200))
+        t_camp = next(t for t in tasks if t.origin == (110, 210))
+        assert t_city.combat_config.attack_action_mode == "fixed"
+        assert t_city.combat_config.fixed_action_id == 14
+        assert t_city.combat_config.auto_counter_formation is False
+        assert t_camp.combat_config.attack_action_mode == "fixed"
+        assert t_camp.combat_config.fixed_action_id == 11
+
+        # 3. Lưu hồ sơ & nạp lại để xác nhận đồng bộ UI và bm_base_configs
+        prof_file = tmp_path / "combat_action_profile.json"
+        dash._save_unified_profile(prof_file)
+
+        dash.gd_action_mode_combo.current(0)
+        dash._on_gd_action_mode_changed()
+        dash.bm_action_mode_combo.current(0)
+        dash._on_bm_action_mode_changed()
+        dash.bm_base_configs.clear()
+
+        ok, _msg = dash._load_unified_profile(prof_file)
+        assert ok is True
+        assert dash.gd_action_mode_combo.current() == 4
+        assert dash.gd_action_mode_var.get() == "fixed"
+        assert dash.bm_base_configs[15230].action_combo_idx == 4
+        assert dash.bm_base_configs[15230].attack_action_mode == "fixed"
+        assert dash.bm_base_configs[-1085].action_combo_idx == 3
+        assert dash.bm_base_configs[-1085].attack_action_mode == "fixed"
+
+        dash.bm_bases_tree.selection_set("15230")
+        dash._on_bm_bases_tree_select()
+        assert dash.bm_action_mode_combo.current() == 4
+        dash.bm_bases_tree.selection_set("-1085")
+        dash._on_bm_bases_tree_select()
+        assert dash.bm_action_mode_combo.current() == 3
+    finally:
+        dash.destroy()
+
+
 
 
 

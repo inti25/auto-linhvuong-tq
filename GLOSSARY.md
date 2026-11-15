@@ -344,7 +344,7 @@ Bộ máy điều khiển và giám sát diễn biến chiến trường tập t
 _Avoid_: Battle controller riêng lẻ, script đánh trận
 
 **Phương Thức Tấn Công Chi Tiết**:
-Hành động chiến thuật được gửi qua `OPT.ashx?id=54` áp dụng cho từng đạo quân trong hiệp đấu, bao gồm: Phổ thông (1), Đơn chiến (2), Phòng ngự (3), Rút lui (4), Đột kích (10 - Kỵ binh), Mãnh công (11 - Bộ binh), Thủy công (12), Hỏa tiễn (13 - Cung thủ), Phản kích (14).
+Hành động chiến thuật được gửi qua `OPT.ashx?id=54` áp dụng cho từng đạo quân trong hiệp đấu, bao gồm: Phổ thông (1), Đơn chiến (2), Phòng ngự (3), Rút lui (4), Đột kích (10 - Kỵ binh), Mãnh công (11 - Bộ binh), Thủy công (12), Hỏa tiễn (13 - Cung thủ), Phản kích (14). Danh sách lựa chọn Chiêu tấn công (`ATTACK_ACTION_COMBO_OPTIONS`) hỗ trợ cấu hình độc lập trên từng phân hệ **Chiến Trường**, **Bình Man** (theo từng **Căn Cứ Bình Man**) và **Gọi Man**, gồm 6 chế độ: `Tự thích ứng theo binh chủng` (`adaptive`), `Cố định Hỏa tiễn (13 - Cung)`, `Cố định Đột kích (10 - Kỵ)`, `Cố định Mãnh công (11 - Bộ)`, `Cố định Phản kích (14)`, và `Tấn công phổ thông (1)`.
 _Avoid_: Lệnh đánh, skill đánh thường
 
 **Mưu Kế Chiến Trường**:

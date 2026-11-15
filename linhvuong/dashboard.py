@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional, Union
 
 from .auth import login
 from .battle import (
+    ATTACK_ACTION_COMBO_OPTIONS,
     ATTACK_ACTIONS,
     FORMATION_NAMES,
     STRATAGEMS,
@@ -30,6 +31,7 @@ from .battle import (
     BattleState,
     BattleTroop,
     CombatConfig,
+    parse_attack_action_combo,
 )
 from .gateway import GatewayClient
 from .engine import AutomationEngine, TaskStatus
@@ -1536,6 +1538,34 @@ class Dashboard(tk.Frame):
     # -------------------------------------------------------------------------
     # HỒ SƠ CẤU HÌNH TỔNG HỢP (UNIFIED PROFILE CONFIGURATION)
     # -------------------------------------------------------------------------
+    @staticmethod
+    def _sync_action_mode_from_combo(var: tk.StringVar, combo: ttk.Combobox) -> str:
+        """Đồng bộ attack_action_mode từ giá trị đang chọn trên combobox Chiêu tấn công."""
+        mode_str, _ = parse_attack_action_combo(combo.get())
+        var.set(mode_str)
+        return mode_str
+
+    @staticmethod
+    def _apply_action_mode_widgets(
+        var: Optional[tk.StringVar],
+        combo: Optional[ttk.Combobox],
+        action_mode: Optional[str] = None,
+        combo_idx: Optional[int] = None,
+    ) -> None:
+        """Khôi phục combobox và StringVar Chiêu tấn công an toàn theo biên."""
+        if combo is not None and combo_idx is not None:
+            try:
+                vals = list(combo["values"])
+                idx = int(combo_idx)
+                if 0 <= idx < len(vals):
+                    combo.current(idx)
+                elif vals:
+                    combo.current(0)
+            except (ValueError, TypeError, tk.TclError):
+                pass
+        if var is not None and action_mode is not None:
+            var.set(str(action_mode))
+
     def _collect_unified_profile(self) -> dict:
         if hasattr(self, "_save_bm_current_base_config"):
             self._save_bm_current_base_config()
@@ -1615,6 +1645,8 @@ class Dashboard(tk.Frame):
                 "auto_recruit": bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True,
                 "auto_morale": bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True,
                 "min_morale": self.gd_min_morale_var.get() if hasattr(self, "gd_min_morale_var") else "95",
+                "attack_action_mode": self.gd_action_mode_var.get() if hasattr(self, "gd_action_mode_var") else "adaptive",
+                "action_combo_idx": self.gd_action_mode_combo.current() if hasattr(self, "gd_action_mode_combo") else 0,
             },
             "binh_man": {
                 "mode": self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1,
@@ -1634,6 +1666,8 @@ class Dashboard(tk.Frame):
                 "auto_recruit": bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True,
                 "auto_morale": bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True,
                 "min_morale": self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95",
+                "attack_action_mode": self.bm_action_mode_var.get() if hasattr(self, "bm_action_mode_var") else "adaptive",
+                "action_combo_idx": self.bm_action_mode_combo.current() if hasattr(self, "bm_action_mode_combo") else 0,
                 "current_base_id": self._current_bm_base_id,
                 "bases": {str(bid): cfg.to_dict() for bid, cfg in self.bm_base_configs.items()} if hasattr(self, "bm_base_configs") else {},
             },
@@ -2017,6 +2051,12 @@ class Dashboard(tk.Frame):
                 self.gd_auto_morale_var.set(bool(gd_data["auto_morale"]))
             if hasattr(self, "gd_min_morale_var") and "min_morale" in gd_data:
                 self.gd_min_morale_var.set(str(gd_data["min_morale"]))
+            self._apply_action_mode_widgets(
+                getattr(self, "gd_action_mode_var", None),
+                getattr(self, "gd_action_mode_combo", None),
+                gd_data.get("attack_action_mode") if "attack_action_mode" in gd_data else None,
+                gd_data.get("action_combo_idx") if "action_combo_idx" in gd_data else None,
+            )
             if "generals" in gd_data and isinstance(gd_data["generals"], list):
                 gd_gens = [int(x) for x in gd_data["generals"] if str(x).isdigit()]
                 self._pending_gd_generals = set(gd_gens)
@@ -2085,6 +2125,12 @@ class Dashboard(tk.Frame):
                 self.bm_auto_morale_var.set(bool(bm_data["auto_morale"]))
             if hasattr(self, "bm_min_morale_var") and "min_morale" in bm_data:
                 self.bm_min_morale_var.set(str(bm_data["min_morale"]))
+            self._apply_action_mode_widgets(
+                getattr(self, "bm_action_mode_var", None),
+                getattr(self, "bm_action_mode_combo", None),
+                bm_data.get("attack_action_mode") if "attack_action_mode" in bm_data else None,
+                bm_data.get("action_combo_idx") if "action_combo_idx" in bm_data else None,
+            )
             if "current_base_id" in bm_data and bm_data["current_base_id"] is not None:
                 try:
                     self._current_bm_base_id = int(bm_data["current_base_id"])
@@ -2124,6 +2170,8 @@ class Dashboard(tk.Frame):
                     auto_recruit=bool(bm_data.get("auto_recruit", True)),
                     auto_morale=bool(bm_data.get("auto_morale", True)),
                     min_morale=str(bm_data.get("min_morale", "95")),
+                    attack_action_mode=str(bm_data.get("attack_action_mode", "adaptive")),
+                    action_combo_idx=int(bm_data.get("action_combo_idx", 0)),
                 )
                 self._pending_bm_legacy_config = legacy_cfg
                 target_bid = None
@@ -2212,13 +2260,12 @@ class Dashboard(tk.Frame):
                 self.bt_auto_counter_var.set(bool(cb_data["auto_counter_formation"]))
             if hasattr(self, "bt_window_var") and "formation_window_seconds" in cb_data:
                 self.bt_window_var.set(str(cb_data["formation_window_seconds"]))
-            if hasattr(self, "bt_action_mode_var") and "attack_action_mode" in cb_data:
-                self.bt_action_mode_var.set(str(cb_data["attack_action_mode"]))
-            if hasattr(self, "bt_action_mode_combo") and "action_combo_idx" in cb_data:
-                try:
-                    self.bt_action_mode_combo.current(int(cb_data["action_combo_idx"]))
-                except Exception:
-                    pass
+            self._apply_action_mode_widgets(
+                getattr(self, "bt_action_mode_var", None),
+                getattr(self, "bt_action_mode_combo", None),
+                cb_data.get("attack_action_mode") if "attack_action_mode" in cb_data else None,
+                cb_data.get("action_combo_idx") if "action_combo_idx" in cb_data else None,
+            )
             if hasattr(self, "bt_skip_confused_var") and "skip_confused_enemy" in cb_data:
                 self.bt_skip_confused_var.set(bool(cb_data["skip_confused_enemy"]))
             if hasattr(self, "bt_leave_boss_var") and "leave_boss_last" in cb_data:
@@ -3137,9 +3184,18 @@ class Dashboard(tk.Frame):
         self.gd_min_morale_var = tk.StringVar(value="95")
         ttk.Entry(mor_f, textvariable=self.gd_min_morale_var, width=5).pack(side="left")
 
+        # Row 4: Chiêu tấn công
+        tk.Label(top, text="Chiêu tấn công:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", padx=4, pady=4)
+        self.gd_action_mode_var = tk.StringVar(value="adaptive")
+        self.gd_action_mode_combo = ttk.Combobox(top, state="readonly", width=24)
+        self.gd_action_mode_combo["values"] = list(ATTACK_ACTION_COMBO_OPTIONS)
+        self.gd_action_mode_combo.current(0)
+        self.gd_action_mode_combo.grid(row=4, column=1, columnspan=3, sticky="w", padx=4, pady=4)
+        self.gd_action_mode_combo.bind("<<ComboboxSelected>>", self._on_gd_action_mode_changed)
+
         # Điều khiển
         ctrl_frame = tk.Frame(top, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=4, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=5, padx=16)
         self.gd_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Gọi Man", style="Success.TButton", command=self._toggle_goidan)
         self.gd_start_btn.pack(side="top", pady=2)
         self.gd_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_goidan_once)
@@ -3280,6 +3336,10 @@ class Dashboard(tk.Frame):
         if hasattr(self, "gd_log_text") and self.gd_log_text:
             self.gd_log_text.delete("1.0", "end")
 
+    def _on_gd_action_mode_changed(self, _event=None):
+        if hasattr(self, "gd_action_mode_combo") and hasattr(self, "gd_action_mode_var"):
+            self._sync_action_mode_from_combo(self.gd_action_mode_var, self.gd_action_mode_combo)
+
     def _get_gd_target_type(self) -> int:
         if hasattr(self, "gd_target_dropdown"):
             sel = self.gd_target_dropdown.get_selected()
@@ -3347,6 +3407,7 @@ class Dashboard(tk.Frame):
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
         auto_recruit = bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True
         auto_morale = bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True
+        gd_combo_val = self.gd_action_mode_combo.get() if hasattr(self, "gd_action_mode_combo") else None
 
         return GoiDan(
             ctx=ctx,
@@ -3360,7 +3421,7 @@ class Dashboard(tk.Frame):
             auto_recover=self.gd_recover_var.get(),
             refill_amount=500,
             sleep_fn=time.sleep,
-            combat_config=self._build_combat_config(),
+            combat_config=self._build_combat_config(action_combo_val=gd_combo_val),
             on_battle_found=lambda bid: self.after(
                 0, lambda b=bid: self.bt_id_var.set(str(b)) if hasattr(self, "bt_id_var") else None
             ),
@@ -3705,6 +3766,15 @@ class Dashboard(tk.Frame):
         self.bm_min_morale_var = tk.StringVar(value="95")
         ttk.Entry(bm_mor_f, textvariable=self.bm_min_morale_var, width=5).pack(side="left")
 
+        # Row 6: Chiêu tấn công
+        tk.Label(f_bm, text="Chiêu tấn công:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w", padx=4, pady=4)
+        self.bm_action_mode_var = tk.StringVar(value="adaptive")
+        self.bm_action_mode_combo = ttk.Combobox(f_bm, state="readonly", width=24)
+        self.bm_action_mode_combo["values"] = list(ATTACK_ACTION_COMBO_OPTIONS)
+        self.bm_action_mode_combo.current(0)
+        self.bm_action_mode_combo.grid(row=6, column=1, columnspan=3, sticky="w", padx=4, pady=4)
+        self.bm_action_mode_combo.bind("<<ComboboxSelected>>", self._on_bm_action_mode_changed)
+
         # 2. Bảng danh sách võ tướng
         f_gens = ttk.LabelFrame(col_right, text="Võ tướng xuất kích", style="Card.TLabelframe")
         f_gens.grid(row=1, column=0, sticky="nsew", pady=(0, 4))
@@ -3848,6 +3918,12 @@ class Dashboard(tk.Frame):
             if hasattr(self, "bm_camp_id_entry"):
                 self.bm_camp_id_entry.configure(state="normal")
 
+    def _on_bm_action_mode_changed(self, _event=None):
+        if hasattr(self, "bm_action_mode_combo") and hasattr(self, "bm_action_mode_var"):
+            self._sync_action_mode_from_combo(self.bm_action_mode_var, self.bm_action_mode_combo)
+        if hasattr(self, "_save_bm_current_base_config"):
+            self._save_bm_current_base_config()
+
     def _on_bm_mode_changed(self):
         mode = self.bm_mode_var.get() if hasattr(self, "bm_mode_var") else 1
         self._update_bm_mode_ui_states(mode)
@@ -3906,6 +3982,8 @@ class Dashboard(tk.Frame):
                 auto_recruit=t_auto_rec,
                 auto_morale=t_auto_mor,
                 min_morale=str(t_min_mor),
+                attack_action_mode="adaptive",
+                action_combo_idx=0,
             )
             self.bm_base_configs[base.id] = cfg
         return cfg
@@ -4054,6 +4132,13 @@ class Dashboard(tk.Frame):
             cfg.auto_morale = bool(self.bm_auto_morale_var.get())
         if hasattr(self, "bm_min_morale_var"):
             cfg.min_morale = str(self.bm_min_morale_var.get() or "95")
+        if hasattr(self, "bm_action_mode_combo"):
+            idx = self.bm_action_mode_combo.current()
+            cfg.action_combo_idx = idx if idx >= 0 else 0
+            if hasattr(self, "bm_action_mode_var"):
+                cfg.attack_action_mode = self._sync_action_mode_from_combo(self.bm_action_mode_var, self.bm_action_mode_combo)
+            else:
+                cfg.attack_action_mode = parse_attack_action_combo(self.bm_action_mode_combo.get())[0]
         self._update_bm_bases_tree_gen_count()
 
     def _load_bm_base_config(self, base_id: int):
@@ -4102,6 +4187,12 @@ class Dashboard(tk.Frame):
             self.bm_auto_morale_var.set(cfg.auto_morale)
         if hasattr(self, "bm_min_morale_var"):
             self.bm_min_morale_var.set(str(cfg.min_morale))
+        self._apply_action_mode_widgets(
+            getattr(self, "bm_action_mode_var", None),
+            getattr(self, "bm_action_mode_combo", None),
+            str(getattr(cfg, "attack_action_mode", "adaptive") or "adaptive"),
+            int(getattr(cfg, "action_combo_idx", 0) or 0),
+        )
 
         self._update_bm_mode_ui_states(cfg.mode)
 
@@ -4347,6 +4438,9 @@ class Dashboard(tk.Frame):
             thresh_int = int(cfg.threshold) if str(cfg.threshold).isdigit() else 30
             mor_int = int(cfg.min_morale) if str(cfg.min_morale).isdigit() else 95
             b_types = cfg.target_types if cfg.target_types else ([int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()] if isinstance(cfg.mantypes, str) else [7, 8, 9, 10])
+            combo_vals = list(ATTACK_ACTION_COMBO_OPTIONS)
+            c_idx = int(getattr(cfg, "action_combo_idx", 0) or 0)
+            b_combo_val = combo_vals[c_idx] if 0 <= c_idx < len(combo_vals) else combo_vals[0]
 
             task = BinhMan(
                 ctx=ctx,
@@ -4360,7 +4454,7 @@ class Dashboard(tk.Frame):
                 return_threshold=thresh_int,
                 mode=mode,
                 sleep_fn=time.sleep,
-                combat_config=self._build_combat_config(),
+                combat_config=self._build_combat_config(action_combo_val=b_combo_val),
                 on_battle_found=lambda bid: self.after(
                     0, lambda x=bid: self.bt_id_var.set(str(x)) if hasattr(self, "bt_id_var") else None
                 ),
@@ -4498,6 +4592,7 @@ class Dashboard(tk.Frame):
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
         auto_recruit = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
         auto_morale = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
+        bm_combo_val = self.bm_action_mode_combo.get() if hasattr(self, "bm_action_mode_combo") else None
 
         return BinhMan(
             ctx=ctx,
@@ -4511,7 +4606,7 @@ class Dashboard(tk.Frame):
             return_threshold=threshold,
             mode=mode,
             sleep_fn=time.sleep,
-            combat_config=self._build_combat_config(),
+            combat_config=self._build_combat_config(action_combo_val=bm_combo_val),
             on_battle_found=lambda bid: self.after(
                 0, lambda b=bid: self.bt_id_var.set(str(b)) if hasattr(self, "bt_id_var") else None
             ),
@@ -9579,13 +9674,7 @@ class Dashboard(tk.Frame):
         tk.Label(cfg_r2, text="Chiêu tấn công:", bg=CARD, fg=FG, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 4))
         self.bt_action_mode_var = tk.StringVar(value="adaptive")
         self.bt_action_mode_combo = ttk.Combobox(cfg_r2, state="readonly", width=24)
-        self.bt_action_mode_combo["values"] = [
-            "Tự thích ứng theo binh chủng",
-            "Cố định Hỏa tiễn (13 - Cung)",
-            "Cố định Đột kích (10 - Kỵ)",
-            "Cố định Mãnh công (11 - Bộ)",
-            "Tấn công phổ thông (1)",
-        ]
+        self.bt_action_mode_combo["values"] = list(ATTACK_ACTION_COMBO_OPTIONS)
         self.bt_action_mode_combo.current(0)
         self.bt_action_mode_combo.pack(side="left", padx=(0, 12))
         self.bt_action_mode_combo.bind("<<ComboboxSelected>>", self._on_bt_action_mode_changed)
@@ -9743,11 +9832,7 @@ class Dashboard(tk.Frame):
         bt_log_scroll.pack(side="right", fill="y")
 
     def _on_bt_action_mode_changed(self, event=None):
-        val = self.bt_action_mode_combo.get()
-        if "thích ứng" in val.lower():
-            self.bt_action_mode_var.set("adaptive")
-        else:
-            self.bt_action_mode_var.set("fixed")
+        self._sync_action_mode_from_combo(self.bt_action_mode_var, self.bt_action_mode_combo)
 
     def _append_bt_log(self, msg: str):
         if hasattr(self, "bt_log_text") and self.bt_log_text:
@@ -9819,22 +9904,12 @@ class Dashboard(tk.Frame):
             self.bt_start_btn.configure(text="⏹️ Dừng Theo Dõi", style="Danger.TButton")
             threading.Thread(target=self._bt_auto_thread, daemon=True).start()
 
-    def _build_combat_config(self) -> CombatConfig:
-        action_mode = "adaptive"
-        fixed_id = 13
-        combo_val = self.bt_action_mode_combo.get() if hasattr(self, "bt_action_mode_combo") else ""
-        if "13" in combo_val:
-            fixed_id = 13
-            action_mode = "fixed"
-        elif "10" in combo_val:
-            fixed_id = 10
-            action_mode = "fixed"
-        elif "11" in combo_val:
-            fixed_id = 11
-            action_mode = "fixed"
-        elif "1" in combo_val:
-            fixed_id = 1
-            action_mode = "fixed"
+    def _build_combat_config(self, action_combo_val: Optional[str] = None) -> CombatConfig:
+        if action_combo_val is None:
+            combo_val = self.bt_action_mode_combo.get() if hasattr(self, "bt_action_mode_combo") else ""
+        else:
+            combo_val = action_combo_val
+        action_mode, fixed_id = parse_attack_action_combo(combo_val)
 
         s_val = self.bt_stratagem_combo.get() if hasattr(self, "bt_stratagem_combo") else ""
         s_id = int(s_val.split(".")[0]) if "." in s_val and s_val.split(".")[0].isdigit() else 0

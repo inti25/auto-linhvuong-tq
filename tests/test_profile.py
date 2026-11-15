@@ -357,6 +357,50 @@ def test_nien_thu_profile_defaults_and_roundtrip(tmp_path):
     assert nt.enabled is True
 
 
+def test_goi_dan_and_binh_man_attack_action_profile_roundtrip():
+    from linhvuong.profile import BaseBinhManConfig
+
+    # Giá trị mặc định
+    prof = Profile()
+    assert prof.goi_dan.attack_action_mode == "adaptive"
+    assert prof.goi_dan.action_combo_idx == 0
+    assert prof.binh_man.attack_action_mode == "adaptive"
+    assert prof.binh_man.action_combo_idx == 0
+    default_base = BaseBinhManConfig()
+    assert default_base.attack_action_mode == "adaptive"
+    assert default_base.action_combo_idx == 0
+
+    # Thiết lập Phản kích (14 - index 4) & Đột kích (10 - index 2) và kiểm tra roundtrip
+    prof.goi_dan.attack_action_mode = "fixed"
+    prof.goi_dan.action_combo_idx = 4
+    prof.binh_man.attack_action_mode = "fixed"
+    prof.binh_man.action_combo_idx = 4
+    prof.binh_man.bases["101"] = BaseBinhManConfig(
+        name="Thành Chủ",
+        enabled=True,
+        mode=2,
+        attack_action_mode="fixed",
+        action_combo_idx=4,
+    )
+    prof.binh_man.bases["-999"] = BaseBinhManConfig(
+        name="Trại Tiền Tuyến",
+        enabled=True,
+        mode=1,
+        attack_action_mode="fixed",
+        action_combo_idx=2,
+    )
+
+    loaded = Profile.from_dict(prof.to_dict())
+    assert loaded.goi_dan.attack_action_mode == "fixed"
+    assert loaded.goi_dan.action_combo_idx == 4
+    assert loaded.binh_man.attack_action_mode == "fixed"
+    assert loaded.binh_man.action_combo_idx == 4
+    assert loaded.binh_man.bases["101"].attack_action_mode == "fixed"
+    assert loaded.binh_man.bases["101"].action_combo_idx == 4
+    assert loaded.binh_man.bases["-999"].attack_action_mode == "fixed"
+    assert loaded.binh_man.bases["-999"].action_combo_idx == 2
+
+
 
 
 
