@@ -2916,6 +2916,7 @@ def test_overview_tab_displays_loyalty_tactician_and_action_buttons():
         assert hasattr(dash, "tactician_btn")
         assert hasattr(dash, "equip_btn")
         assert hasattr(dash, "armament_btn")
+        assert hasattr(dash, "rename_btn")
 
         c1 = City(id=15230, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
         g1 = General(
@@ -3858,5 +3859,53 @@ def test_resource_monitor_switches_city_and_skips_failed_reads():
         dash.gateway.set_current_city = lambda _cid: {"ret": 8600}
         dash._check_resource_thresholds_for_city(10254)
         assert opened_into == []
+    finally:
+        dash.destroy()
+
+
+
+def test_overview_tab_hides_profile_section_and_rename_dialog_previews_prefix():
+    """Tab Tổng quan không hiển thị khối Hồ Sơ Cấu Hình; hộp thoại Đổi Tên xem trước DT_01, DT_02..."""
+    dash = safe_dashboard()
+    try:
+        overview_tab = dash.nametowidget(dash.notebook.tabs()[0])
+
+        def _collect_texts(widget):
+            texts = []
+            try:
+                t = widget.cget("text")
+                if t:
+                    texts.append(str(t))
+            except Exception:
+                pass
+            for child in widget.winfo_children():
+                texts.extend(_collect_texts(child))
+            return texts
+
+        overview_texts = _collect_texts(overview_tab)
+        assert not any("Hồ Sơ Cấu Hình" in t for t in overview_texts)
+        assert not any("Lưu Cấu Hình Tổng" in t for t in overview_texts)
+        assert not any("Nạp Cấu Hình Tổng" in t for t in overview_texts)
+        # Tab Nội Chính vẫn còn Lưu / Load và profile_path_var nội bộ vẫn tồn tại
+        assert hasattr(dash, "profile_path_var")
+
+        dash.roster = dummy_roster()
+        dash.gateway = None
+        dash._open_rename_dialog()
+        rows = dash.ren_tree.get_children()
+        assert set(rows) == {"417506", "417513", "417520"}
+
+        dash.ren_prefix_var.set("DT_")
+        dash.ren_numbered_var.set(True)
+        dash._ren_select_all()
+        assert dash.ren_tree.item("417513", "values")[4] == "DT_01"
+        assert dash.ren_tree.item("417506", "values")[4] == "DT_02"
+        assert dash.ren_tree.item("417520", "values")[4] == "DT_03"
+        assert "DT_01" in dash.ren_example_var.get()
+
+        dash.ren_numbered_var.set(False)
+        dash._on_rename_pattern_changed()
+        assert dash.ren_tree.item("417506", "values")[4] == "DT_"
+        dash._rename_dialog.destroy()
     finally:
         dash.destroy()

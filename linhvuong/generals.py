@@ -1611,3 +1611,178 @@ def configure_equipment(
         f"bỏ qua bận {summary.skipped_busy}, lỗi {summary.failed}.",
     )
     return summary
+
+
+# ---------------------------------------------------------------------------
+# ĐỔI TÊN TƯỚNG (OPT.ashx?id=43)
+# ---------------------------------------------------------------------------
+
+RENAME_STATUS_BLOCKED = 35  # 0x23 trong character.js
+RENAME_MAX_WIDTH = 17  # Server yêu cầu > 0 và < 18 (chữ không phải ASCII tính 2)
+RENAME_ERROR_MESSAGES = {
+    **TROOP_ERROR_MESSAGES,
+    15: "Tên mới rỗng hoặc vượt giới hạn độ dài (< 18 ký tự; chữ Hán/có dấu tính 2)",
+}
+
+
+def sanitize_general_name(raw: str) -> str:
+    """Làm sạch tên tướng trước khi gửi lên server (bỏ khoảng trắng đầu/cuối, thay dấu nháy)."""
+    return (raw or "").strip().replace("'", "’").replace('"', "’")
+
+
+def general_name_width(name: str) -> int:
+    """Tính độ dài tên theo quy tắc máy chủ Linh Vương (ASCII = 1, non-ASCII = 2)."""
+    return sum(1 if ord(ch) < 128 else 2 for ch in name)
+
+
+def validate_general_name(name: str) -> tuple[bool, str]:
+    """Kiểm tra tên tướng hợp lệ theo giới hạn máy chủ (0 < width <= 17)."""
+    cleaned = sanitize_general_name(name)
+    if not cleaned:
+        return False, "Tên mới không được để trống."
+    width = general_name_width(cleaned)
+    if width > RENAME_MAX_WIDTH:
+        return False, f"Tên '{cleaned}' quá dài ({width}/{RENAME_MAX_WIDTH} đơn vị)."
+    return True, ""
+
+
+def format_numbered_general_name(prefix: str, number: int, pad_width: int = 2) -> str:
+    """Ghép tiền tố với số thứ tự có đệm số 0 phía trước (01, 02, ...)."""
+    return f"{prefix}{number:0{max(2, pad_width)}d}"
+
+
+def build_rename_plan(
+    generals: list[tuple[int, General]],
+    prefix_or_name: str,
+    numbered: bool = True,
+    start_index: int = 1,
+) -> list[tuple[int, General, str]]:
+    """Tạo danh sách (city_id, general, new_name) theo thứ tự hiển thị hiện tại."""
+    base_text = sanitize_general_name(prefix_or_name)
+    if not base_text or not generals:
+        return [(cid, gen, base_text) for cid, gen in generals]
+    if not numbered:
+        return [(cid, gen, base_text) for cid, gen in generals]
+    start = max(1, int(start_index))
+    max_num = start + len(generals) - 1
+    pad_width = max(2, len(str(max_num)))
+    return [
+        (cid, gen, format_numbered_general_name(base_text, start + idx, pad_width=pad_width))
+        for idx, (cid, gen) in enumerate(generals)
+    ]
+
+
+@dataclass
+class RenameSummary:
+    renamed: int = 0
+    skipped_same: int = 0
+    skipped_blocked: int = 0
+    invalid_name: int = 0
+    failed: int = 0
+    stopped: bool = False
+
+
+def rename_general(
+    gateway: GatewayClient,
+    city_id: int,
+    general_id: int,
+    new_name: str,
+) -> tuple[bool, int, str]:
+    """Đổi tên một Văn quan hoặc Võ tướng qua API OPT.ashx?id=43."""
+    cleaned = sanitize_general_name(new_name)
+    ok_valid, err_valid = validate_general_name(cleaned)
+    if not ok_valid:
+        return False, 15, err_valid
+
+    payload = {
+        "lCityID": str(int(city_id)),
+        "lGeneralID": str(int(general_id)),
+        "szNewName": cleaned,
+        "_": "",
+    }
+    resp = gateway.call("OPT.ashx", 43, payload) or {}
+    if not isinstance(resp, dict):
+        return False, -1, "Lỗi kết nối"
+    ret = int(resp.get("ret", -1))
+    if ret == 0:
+        return True, 0, "Thành công"
+    return False, ret, RENAME_ERROR_MESSAGES.get(ret, f"Mã lỗi {ret}")
+
+
+def rename_generals(
+    gateway: GatewayClient,
+    roster: Roster,
+    rename_items: list[tuple[int, str]],
+    stop_event: Optional[threading.Event] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> RenameSummary:
+    """Thực thi đổi tên hàng loạt cho các tướng theo danh sách (general_id, new_name)."""
+    summary = RenameSummary()
+    if not rename_items:
+        return summary
+
+    by_id: dict[int, tuple[int, str, General]] = {}
+    for base in roster.bases:
+        for gen in roster.generals_of(base.id):
+            if gen.id not in by_id:
+                by_id[gen.id] = (base.id, base.name, gen)
+
+    total = len(rename_items)
+    _emit_progress(on_progress, 0, total)
+    seen: set[int] = set()
+    for idx, (gid_raw, raw_new_name) in enumerate(rename_items, start=1):
+        if stop_event is not None and stop_event.is_set():
+            summary.stopped = True
+            _emit(on_log, "⏹️ Đã dừng tác vụ Đổi tên tướng theo yêu cầu.")
+            return summary
+
+        gid = int(gid_raw)
+        if gid in seen:
+            _emit_progress(on_progress, idx, total)
+            continue
+        seen.add(gid)
+
+        found = by_id.get(gid)
+        if found is None:
+            summary.failed += 1
+            _emit(on_log, f"   ❌ Không tìm thấy tướng ID {gid}.")
+            _emit_progress(on_progress, idx, total)
+            continue
+
+        base_id, base_name, gen = found
+        if gen.status == RENAME_STATUS_BLOCKED:
+            summary.skipped_blocked += 1
+            _emit(on_log, f"   ⚠️ [{base_name}] Bỏ qua {gen.name}: trạng thái không cho phép đổi tên ({gen.status}).")
+            _emit_progress(on_progress, idx, total)
+            continue
+
+        new_name = sanitize_general_name(raw_new_name)
+        ok_valid, err_valid = validate_general_name(new_name)
+        if not ok_valid:
+            summary.invalid_name += 1
+            _emit(on_log, f"   ❌ [{base_name}] {gen.name}: {err_valid}")
+            _emit_progress(on_progress, idx, total)
+            continue
+
+        if new_name == gen.name:
+            summary.skipped_same += 1
+            _emit(on_log, f"   ℹ️ [{base_name}] {gen.name}: tên mới trùng tên hiện tại, bỏ qua.")
+            _emit_progress(on_progress, idx, total)
+            continue
+
+        ok, _ret, msg = rename_general(gateway, base_id, gen.id, new_name)
+        if ok:
+            summary.renamed += 1
+            _emit(on_log, f"   ✅ [{base_name}] {gen.name} → {new_name}")
+        else:
+            summary.failed += 1
+            _emit(on_log, f"   ❌ [{base_name}] Đổi tên {gen.name} → {new_name} thất bại: {msg}")
+        _emit_progress(on_progress, idx, total)
+
+    _emit(
+        on_log,
+        f"✏️ Kết quả Đổi tên: thành công {summary.renamed}, trùng tên {summary.skipped_same}, "
+        f"không hợp lệ {summary.invalid_name}, khóa trạng thái {summary.skipped_blocked}, lỗi {summary.failed}.",
+    )
+    return summary

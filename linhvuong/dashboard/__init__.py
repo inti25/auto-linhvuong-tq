@@ -53,6 +53,7 @@ from .internal_aux import InternalAuxMixin
 from .nien_thu import NienThuMixin
 from .overview import OverviewMixin
 from .profile_sync import ProfileSyncMixin
+from .rename_dialog import RenameDialogMixin
 from .research import ResearchMixin
 from .runners import BaseTaskRunner, BinhManAutoRunner, BuildingAutoRunner, GoiDanAutoRunner, ResearchAutoRunner
 from .shared import (
@@ -129,6 +130,7 @@ class Dashboard(
     TacticianDialogMixin,
     EquipDialogMixin,
     ArmamentDialogMixin,
+    RenameDialogMixin,
     tk.Frame,
 ):
     """Cửa sổ Dashboard chính điều phối toàn bộ các phân hệ tự động hóa."""
@@ -843,6 +845,8 @@ class Dashboard(
                 self._on_tac_roster_updated()
             if hasattr(self, "_on_equip_roster_updated"):
                 self._on_equip_roster_updated()
+            if hasattr(self, "_on_rename_roster_updated"):
+                self._on_rename_roster_updated()
 
             today_str = time.strftime("%Y-%m-%d")
             if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():

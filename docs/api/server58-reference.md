@@ -430,6 +430,7 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `OPT.ashx?id=33` | `lGeneralID=21639, tid=10129` | `{"ret":0}` *(cấp ID mới `4880`)* |
 | `OPT.ashx?id=38` / `89` | `pos=10, gid=101, count=1, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=41` | `lAmount=50, tid=10129` | `{"ret":0}` |
+| `OPT.ashx?id=43` (Đổi tên tướng) | `lCityID=10129, lGeneralID=4880, szNewName=DT_01` | `{"ret":0}`; mã `15` nếu tên rỗng hoặc vượt giới hạn (`< 18`, ký tự không phải ASCII tính 2) |
 | `OPT.ashx?id=44` / `12` / `180` | `techid=1, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=46` / `47` / `58` | `lGeneralID=4880, ...` | `{"ret":0}` |
 | `OPT.ashx?id=56` (Lưu quân giới tướng) | `lGeneralID, lInfantryEID1..3, lCavalryEID1..3, lBowmanEID1..3, lMangonelEID` (cần đủ 10 ô; id `46` thực chất là Ban thưởng `lCityID, lGeneralID, lMoney`) | `{"ret":0}`; `42` thiếu quân giới khi tướng đã có lính, `71` thiếu quân giới chính ô 1 khi đã có lính, `20` sai căn cứ, `40` tướng bận. Ô 1: Bộ=Giáp(4), Kỵ=Ngựa(8), Cung=Cung(2); ô 2–3 nhận mọi loại trừ Xe(16). Chỉ ô 1 cần > 0 khi ô 2/3 > 0. |

@@ -37,6 +37,10 @@ _Avoid_: Độ trung thành, loyalty (khi nói tiếng Việt)
 Hành động dùng Vàng khôi phục Lòng trung thành của Văn quan hoặc Võ tướng lên mức tối đa (100).
 _Avoid_: Thưởng vàng, tăng trung thành, reward
 
+**Đổi Tên Tướng**:
+Hành động thay đổi tên hiển thị của **Võ tướng** hoặc **Văn quan** theo từng tướng hoặc hàng loạt theo tiền tố kèm số thứ tự (`01, 02, ...`).
+_Avoid_: Sửa tên lính, rename hero
+
 **Di trại**:
 Hành động dời Doanh trại dã ngoại từng bước trên bản đồ tọa độ về hướng mục tiêu trước khi xuất kích hoặc theo tọa độ chỉ định.
 _Avoid_: Dời trại, di chuyển trại, relocate

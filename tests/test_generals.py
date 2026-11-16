@@ -919,3 +919,68 @@ def test_configure_equipment_mayor_ret_301_falls_back_to_leftover_pass_without_r
     # 9201 chỉ bị thử đúng 1 lần ở lượt Nội chính, lượt 3 bỏ qua 9201 để mặc thẳng 9202
     assert attempts == [(201, 9201), (201, 9202)]
 
+
+
+def test_build_rename_plan_prefix_numbering_and_validation():
+    from linhvuong.generals import (
+        build_rename_plan,
+        general_name_width,
+        sanitize_general_name,
+        validate_general_name,
+    )
+
+    assert sanitize_general_name("  DT_'1\" ") == "DT_’1’"
+    assert general_name_width("DT_01") == 5
+    assert general_name_width("吴沛祖") == 6
+    assert validate_general_name("DT_01")[0] is True
+    assert validate_general_name("")[0] is False
+    assert validate_general_name("A" * 18)[0] is False
+
+    g1 = _make_gen(1, "A", "vo")
+    g2 = _make_gen(2, "B", "van")
+    plan = build_rename_plan([(100, g1), (100, g2)], "DT_", numbered=True, start_index=1)
+    assert [(g.id, n) for _, g, n in plan] == [(1, "DT_01"), (2, "DT_02")]
+
+    # Khi >= 100 tướng (hoặc start_index >= 99), tự động pad 3 chữ số
+    plan_100 = build_rename_plan([(100, g1), (100, g2)], "DT_", numbered=True, start_index=99)
+    assert [(g.id, n) for _, g, n in plan_100] == [(1, "DT_099"), (2, "DT_100")]
+
+    fixed = build_rename_plan([(100, g1)], "TàoTháo", numbered=False)
+    assert fixed[0][2] == "TàoTháo"
+
+
+def test_rename_generals_executes_and_handles_edge_cases():
+    from linhvuong.generals import RENAME_STATUS_BLOCKED, rename_generals
+
+    g1 = _make_gen(1, "Old1", "vo", status=16)  # Bận xuất chinh vẫn được đổi tên
+    g2 = _make_gen(2, "DT_02", "van", status=0)  # Trùng tên mới -> skip
+    g3 = _make_gen(3, "Blocked", "vo", status=RENAME_STATUS_BLOCKED)  # Bị khóa 35 -> skip
+    g4 = _make_gen(4, "TooLong", "vo", status=0)
+    g5 = _make_gen(5, "ServerErr", "vo", status=0)
+
+    roster = Roster(
+        cities=[_make_city(10129, "1")],
+        _generals={10129: [g1, g2, g3, g4, g5]},
+    )
+
+    def _handler(ep, op_id, body):
+        assert ep == "OPT.ashx" and op_id == 43
+        if body["lGeneralID"] == "5":
+            return {"ret": 15}
+        return {"ret": 0}
+
+    gw = FakeGateway(_handler)
+    logs: list[str] = []
+    summary = rename_generals(
+        gw,
+        roster,
+        [(1, "DT_01"), (2, "DT_02"), (3, "DT_03"), (4, "A" * 18), (5, "DT_05")],
+        on_log=logs.append,
+    )
+    assert summary.renamed == 1
+    assert summary.skipped_same == 1
+    assert summary.skipped_blocked == 1
+    assert summary.invalid_name == 1
+    assert summary.failed == 1
+    assert len(gw.calls) == 2
+    assert gw.calls[0][2] == {"lCityID": "10129", "lGeneralID": "1", "szNewName": "DT_01", "_": ""}

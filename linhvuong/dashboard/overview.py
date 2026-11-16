@@ -19,52 +19,49 @@ class OverviewMixin:
     """Quản lý Tab 1: Tổng quan, Ban thưởng toàn bộ và Luyện sĩ khí quân đội."""
 
     def _build_overview_tab(self, parent):
-        # Thanh Hồ Sơ Cấu Hình (Quản lý tập trung toàn bộ tính năng)
-        profile_frame = tk.Frame(parent, bg=BG)
-        profile_frame.pack(fill="x", pady=(2, 6))
+        # Giữ biến profile_path_var ở mức nội bộ cho ProfileSyncMixin (không hiển thị ở Tab Tổng quan)
+        if not hasattr(self, "profile_path_var"):
+            self.profile_path_var = tk.StringVar(value=self.default_profile_name)
 
-        tk.Label(profile_frame, text="📁 Hồ Sơ Cấu Hình:", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).pack(
-            side="left", padx=(4, 6)
-        )
-        self.profile_path_var = tk.StringVar(value=self.default_profile_name)
-        ttk.Label(profile_frame, textvariable=self.profile_path_var, style="Dark.TLabel", font=("Consolas", 10)).pack(
-            side="left", padx=(0, 12)
-        )
+        # Thanh nút thao tác Văn quan & Võ tướng
+        actions_frame = tk.Frame(parent, bg=BG)
+        actions_frame.pack(fill="x", pady=(2, 6))
 
-        ttk.Button(
-            profile_frame, text="💾 Lưu Cấu Hình Tổng", style="Action.TButton", command=self._save_unified_profile_dialog
-        ).pack(side="left", padx=3)
-        ttk.Button(
-            profile_frame, text="📂 Nạp Cấu Hình Tổng", style="Action.TButton", command=self._load_unified_profile_dialog
-        ).pack(side="left", padx=3)
         self.reward_all_btn = ttk.Button(
-            profile_frame,
+            actions_frame,
             text="🎁 Ban Thưởng Toàn Bộ",
             style="Success.TButton",
             command=self._on_reward_all_clicked,
         )
-        self.reward_all_btn.pack(side="left", padx=(8, 3))
+        self.reward_all_btn.pack(side="left", padx=(4, 3))
         self.tactician_btn = ttk.Button(
-            profile_frame,
+            actions_frame,
             text="🧠 Thiết Lập Mưu Sĩ",
             style="Action.TButton",
             command=self._open_tactician_dialog,
         )
         self.tactician_btn.pack(side="left", padx=3)
         self.equip_btn = ttk.Button(
-            profile_frame,
+            actions_frame,
             text="🛡️ Trang Bị Tướng",
             style="Action.TButton",
             command=self._open_equip_dialog,
         )
         self.equip_btn.pack(side="left", padx=3)
         self.armament_btn = ttk.Button(
-            profile_frame,
+            actions_frame,
             text="⚔️ Quân Giới Tướng",
             style="Action.TButton",
             command=self._open_armament_dialog,
         )
         self.armament_btn.pack(side="left", padx=3)
+        self.rename_btn = ttk.Button(
+            actions_frame,
+            text="✏️ Đổi Tên Tướng",
+            style="Action.TButton",
+            command=self._open_rename_dialog,
+        )
+        self.rename_btn.pack(side="left", padx=3)
 
         # Tầng trên: Thành & Doanh trại, Tướng đồn trú, Chi tiết biên chế
         top_body = tk.Frame(parent, bg=BG)
