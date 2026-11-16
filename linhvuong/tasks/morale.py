@@ -37,13 +37,13 @@ class MoraleTrainer:
         self.sleep_fn = sleep_fn or getattr(gateway, "_sleep", time.sleep)
 
     def get_city_generals_morale_info(self, city_id: int) -> dict[int, tuple[int, int]]:
-        """Lấy sĩ khí hiện tại và thời gian nâng dở (upgrading_time) cho tất cả tướng trong thành từ API 76.
+        """Lấy sĩ khí hiện tại và thời gian nâng dở (upgrading_time) cho tất cả tướng trong thành từ /api/city/pagemytroopslist.
 
         Trả về {general_id: (current_morale, upgrading_time)}.
         """
         result: dict[int, tuple[int, int]] = {}
         try:
-            resp = self.gateway.call("Common.ashx", 76, {"cid": str(city_id)}) or {}
+            resp = self.gateway.page_mytroops_list(city_id) or {}
             for entry in resp.get("list", []):
                 if len(entry) > 2 and isinstance(entry[2], list):
                     for g in entry[2]:

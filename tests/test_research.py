@@ -19,22 +19,31 @@ class FakeServer:
     def __init__(self, handlers=None):
         self.handlers = handlers or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
 
-    def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
-        self.calls.append((key, dict(data or {})))
+    def _dispatch(self, key, payload):
+        self.calls.append((key, dict(payload or {})))
         handler = self.handlers.get(key, {"ret": 0})
         if callable(handler):
-            return Resp(handler())
+            return Resp(handler(dict(payload or {})))
         if isinstance(handler, list):
             return Resp(handler.pop(0))
         return Resp(handler)
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        return self._dispatch(path, params)
+
+    def post(self, url, data=None, headers=None, timeout=None):
+        key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        return self._dispatch(key, data)
 
 
 def test_research_task_dispatches_first_eligible_tech():
     server = FakeServer(
         handlers={
-            "City.ashx?id=37": {"ret": 0, "tech": {}},  # rảnh, không có tech đang chạy
+            "City.ashx?id=37": {"ret": 0, "tech": {}},
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 5, "m_lgid": 6, "m_llevel": 17}]}},
             "Build.ashx?id=2": {
                 "ret": 0,
                 "list": [
@@ -42,11 +51,11 @@ def test_research_task_dispatches_first_eligible_tech():
                     {"id": 2, "level": 5},
                 ],
             },
-            "City.ashx?id=50": {"ret": 0},  # switch city
-            "OPT.ashx?id=44": {"ret": 0},   # bắt đầu nghiên cứu
+            "/api/city/current": {"ret": 0},
+            "OPT.ashx?id=44": {"ret": 0},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [
         TechPlan(tech_id=1, target_level=12, name="Làm thực"),
         TechPlan(tech_id=2, target_level=10, name="Rèn sắt"),
@@ -55,7 +64,6 @@ def test_research_task_dispatches_first_eligible_tech():
     out = task.run_once()
     assert out == "researching"
 
-    # Kiểm tra gọi OPT.ashx?id=44 với techid=1, tid=2001
     research_call = [d for k, d in server.calls if k == "OPT.ashx?id=44"][0]
     assert research_call["techid"] == "1"
     assert research_call["tid"] == "2001"
@@ -67,7 +75,7 @@ def test_research_task_busy_when_ongoing():
             "City.ashx?id=37": {"ret": 0, "tech": {"techid": 5, "time_left": 1200}},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [TechPlan(tech_id=1, target_level=10)]
     task = ResearchTask(gw, city_id=2001, plans=plans, auto_art_of_war=False)
     out = task.run_once()
@@ -81,7 +89,7 @@ def test_research_task_uses_art_of_war_when_busy():
             "OPT.ashx?id=180": {"ret": 0},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [TechPlan(tech_id=1, target_level=10)]
     task = ResearchTask(gw, city_id=2001, plans=plans, auto_art_of_war=True)
     out = task.run_once()
@@ -95,6 +103,7 @@ def test_research_task_all_completed():
     server = FakeServer(
         handlers={
             "City.ashx?id=37": {"ret": 0, "tech": {}},
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 5, "m_lgid": 6, "m_llevel": 17}]}},
             "Build.ashx?id=2": {
                 "ret": 0,
                 "list": [
@@ -103,7 +112,7 @@ def test_research_task_all_completed():
             },
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [TechPlan(tech_id=1, target_level=10)]
     task = ResearchTask(gw, city_id=2001, plans=plans)
     out = task.run_once()
@@ -116,7 +125,7 @@ def test_research_task_stops_on_captcha():
             "City.ashx?id=37": {"ret": 110},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     task = ResearchTask(gw, city_id=2001, plans=[])
     with pytest.raises(CaptchaRequired):
         task.run_once()
@@ -125,17 +134,16 @@ def test_research_task_stops_on_captcha():
 def test_research_task_real_server_format_and_university_detection():
     server = FakeServer(
         handlers={
-            # Format thật từ server: tech là mảng [tech_id, cur_level, time_left]
             "City.ashx?id=37": {"ret": 0, "tech": [0, 0, 0]},
-            # Tìm Viện Đại Học trong thành (gid=6, pid=5)
-            "City.ashx?id=5": {
+            "/api/building/list": {
                 "ret": 0,
-                "infos": [
-                    [1, 1, "官府", 20, 0, 0],
-                    [5, 6, "大学殿", 17, 0, 0],
-                ],
+                "data": {
+                    "items": [
+                        {"m_lpos": 1, "m_lgid": 1, "m_szname": "官府", "m_llevel": 20},
+                        {"m_lpos": 5, "m_lgid": 6, "m_szname": "大学殿", "m_llevel": 17},
+                    ]
+                },
             },
-            # Build.ashx?id=2 trả về mảng các mảng [tech_id, name, level, ...]
             "Build.ashx?id=2": {
                 "ret": 0,
                 "list": [
@@ -143,32 +151,28 @@ def test_research_task_real_server_format_and_university_detection():
                     [2, "冶炼技巧", 8, 6, 9, 3, 1, 2430],
                 ],
             },
-            "City.ashx?id=50": {"ret": 0},
+            "/api/city/current": {"ret": 0},
             "OPT.ashx?id=44": {"ret": 0},
         }
     )
-    gw = GatewayClient(57, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [
         TechPlan(tech_id=1, target_level=12, name="种植技巧 - làm thực"),
         TechPlan(tech_id=2, target_level=10, name="冶炼技巧 - rèn sắt"),
     ]
     task = ResearchTask(gw, city_id=15230, plans=plans, auto_art_of_war=False)
-    
-    # 1. Kiểm tra tìm Đại học điện
+
     univ_pid = task.get_university_pid()
     assert univ_pid == 5
 
-    # 2. Kiểm tra đọc cấp độ công nghệ từ mảng
     levels = task.get_current_tech_levels()
     assert levels[1] == 10
     assert levels[2] == 8
 
-    # 3. Kiểm tra kiểm tra trạng thái đang nghiên cứu
     is_busy, cur_tid = task.is_research_ongoing()
     assert is_busy is False
     assert cur_tid is None
 
-    # 4. Kiểm tra dispatch nghiên cứu Tech 1
     out = task.run_once()
     assert out == "researching"
 
@@ -181,13 +185,12 @@ def test_research_task_real_server_format_and_university_detection():
 def test_get_current_tech_levels_requires_city_switch():
     current_focused_city = None
 
-    def handle_city_50(data):
+    def handle_city_cur(data):
         nonlocal current_focused_city
-        current_focused_city = data.get("tid")
+        current_focused_city = data.get("cityTentId")
         return {"ret": 0}
 
     def handle_build_2(data):
-        # Server Linh Vương thật: nếu chưa switch tới tid tương ứng, trả về ret: 8
         if current_focused_city != data.get("tid"):
             return {"ret": 8}
         return {
@@ -198,20 +201,14 @@ def test_get_current_tech_levels_requires_city_switch():
             ],
         }
 
-    class CustomServer(FakeServer):
-        def post(self, url, data=None, headers=None, timeout=None):
-            key = url.split("/GateWay/")[1]
-            self.calls.append((key, dict(data or {})))
-            if key == "City.ashx?id=50":
-                return Resp(handle_city_50(dict(data or {})))
-            if key == "Build.ashx?id=2":
-                return Resp(handle_build_2(dict(data or {})))
-            if key == "City.ashx?id=5":
-                return Resp({"ret": 0, "infos": [[5, 6, "大学殿", 20]]})
-            return Resp({"ret": 0})
-
-    server = CustomServer()
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    server = FakeServer(
+        handlers={
+            "/api/city/current": handle_city_cur,
+            "Build.ashx?id=2": handle_build_2,
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 5, "m_lgid": 6, "m_llevel": 20}]}},
+        }
+    )
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     task = ResearchTask(gw, city_id=21936, plans=[])
 
     levels = task.get_current_tech_levels()
@@ -222,12 +219,12 @@ def test_research_task_handles_no_university():
     server = FakeServer(
         handlers={
             "City.ashx?id=37": {"ret": 0, "tech": {}},
-            "City.ashx?id=50": {"ret": 0},
-            "City.ashx?id=5": {"ret": 0, "infos": [[1, 1, "官府", 20]]},  # không có Đại Học
+            "/api/city/current": {"ret": 0},
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 1, "m_lgid": 1, "m_llevel": 20}]}},
             "Build.ashx?id=2": {"ret": 8},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     task = ResearchTask(gw, city_id=21915, plans=[TechPlan(tech_id=1, target_level=10)])
     assert task.get_university_pid() is None
     levels = task.get_current_tech_levels()
@@ -242,28 +239,21 @@ def test_research_task_skips_prerequisites_not_met_and_tries_next():
         techid = data.get("techid")
         calls_opt44.append(techid)
         if techid == "1":
-            return {"ret": 245}  # Tech 1 chưa đủ điều kiện tiên quyết
+            return {"ret": 245}
         if techid == "2":
-            return {"ret": 0}    # Tech 2 thành công
+            return {"ret": 0}
         return {"ret": 0}
 
-    class OptServer(FakeServer):
-        def post(self, url, data=None, headers=None, timeout=None):
-            key = url.split("/GateWay/")[1]
-            self.calls.append((key, dict(data or {})))
-            if key == "City.ashx?id=37":
-                return Resp({"ret": 0, "tech": {}})
-            if key == "City.ashx?id=50":
-                return Resp({"ret": 0})
-            if key == "City.ashx?id=5":
-                return Resp({"ret": 0, "infos": [[5, 6, "大学殿", 20]]})
-            if key == "Build.ashx?id=2":
-                return Resp({"ret": 0, "list": [[1, "Tech1", 5], [2, "Tech2", 3]]})
-            if key == "OPT.ashx?id=44":
-                return Resp(handle_opt44(dict(data or {})))
-            return Resp({"ret": 0})
-
-    gw = GatewayClient(53, OptServer(), sleep=lambda s: None)
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=37": {"ret": 0, "tech": {}},
+            "/api/city/current": {"ret": 0},
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 5, "m_lgid": 6, "m_llevel": 20}]}},
+            "Build.ashx?id=2": {"ret": 0, "list": [[1, "Tech1", 5], [2, "Tech2", 3]]},
+            "OPT.ashx?id=44": handle_opt44,
+        }
+    )
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [
         TechPlan(tech_id=1, target_level=10, name="Tech1"),
         TechPlan(tech_id=2, target_level=10, name="Tech2"),
@@ -271,7 +261,7 @@ def test_research_task_skips_prerequisites_not_met_and_tries_next():
     task = ResearchTask(gw, city_id=21936, plans=plans)
     out = task.run_once()
     assert out == "researching"
-    assert calls_opt44 == ["1", "2"]  # Tech 1 gặp 245, tự động bỏ qua và chuyển sang Tech 2 thành công
+    assert calls_opt44 == ["1", "2"]
 
 
 def test_research_task_even_research_ordering():
@@ -279,30 +269,27 @@ def test_research_task_even_research_ordering():
     calls_even = []
 
     def make_server(calls_list):
-        class EvenServer(FakeServer):
-            def post(self, url, data=None, headers=None, timeout=None):
-                key = url.split("/GateWay/")[1]
-                if key == "City.ashx?id=37":
-                    return Resp({"ret": 0, "tech": {}})
-                if key == "City.ashx?id=50":
-                    return Resp({"ret": 0})
-                if key == "City.ashx?id=5":
-                    return Resp({"ret": 0, "infos": [[5, 6, "大学殿", 20]]})
-                if key == "Build.ashx?id=2":
-                    return Resp({
-                        "ret": 0,
-                        "list": [
-                            [1, "Tech1", 7],
-                            [2, "Tech2", 2],
-                            [3, "Tech3", 4],
-                            [4, "Tech4", 2],
-                        ],
-                    })
-                if key == "OPT.ashx?id=44":
-                    calls_list.append(dict(data or {}).get("techid"))
-                    return Resp({"ret": 261})  # Giả lập fail để xem thứ tự duyệt hết
-                return Resp({"ret": 0})
-        return EvenServer()
+        def handle_opt44(data):
+            calls_list.append(data.get("techid"))
+            return {"ret": 261}
+
+        return FakeServer(
+            handlers={
+                "City.ashx?id=37": {"ret": 0, "tech": {}},
+                "/api/city/current": {"ret": 0},
+                "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 5, "m_lgid": 6, "m_llevel": 20}]}},
+                "Build.ashx?id=2": {
+                    "ret": 0,
+                    "list": [
+                        [1, "Tech1", 7],
+                        [2, "Tech2", 2],
+                        [3, "Tech3", 4],
+                        [4, "Tech4", 2],
+                    ],
+                },
+                "OPT.ashx?id=44": handle_opt44,
+            }
+        )
 
     plans = [
         TechPlan(tech_id=1, target_level=10, name="Tech1"),
@@ -311,18 +298,12 @@ def test_research_task_even_research_ordering():
         TechPlan(tech_id=4, target_level=10, name="Tech4"),
     ]
 
-    # 1. Khi even_research=False: Duyệt tuần tự theo bảng 1, 2, 3, 4
-    gw_default = GatewayClient(53, make_server(calls_default), sleep=lambda s: None)
+    gw_default = GatewayClient(58, make_server(calls_default), sleep=lambda s: None)
     task_default = ResearchTask(gw_default, city_id=21936, plans=plans, even_research=False)
     task_default.run_once()
     assert calls_default == ["1", "2", "3", "4"]
 
-    # 2. Khi even_research=True:
-    # Tech 2 (cấp 2) và Tech 4 (cấp 2) duyệt trước, giữ thứ tự 2 rồi tới 4.
-    # Tiếp theo Tech 3 (cấp 4).
-    # Cuối cùng Tech 1 (cấp 7).
-    # Thứ tự kỳ vọng: ["2", "4", "3", "1"]
-    gw_even = GatewayClient(53, make_server(calls_even), sleep=lambda s: None)
+    gw_even = GatewayClient(58, make_server(calls_even), sleep=lambda s: None)
     task_even = ResearchTask(gw_even, city_id=21936, plans=plans, even_research=True)
     task_even.run_once()
     assert calls_even == ["2", "4", "3", "1"]
@@ -332,19 +313,13 @@ def test_research_task_on_sync_data_callback():
     server = FakeServer(
         handlers={
             "City.ashx?id=37": {"ret": 0, "tech": {}},
-            "City.ashx?id=50": {"ret": 0},
-            "City.ashx?id=5": {"ret": 0, "infos": [[5, 6, "大学殿", 20]]},
-            "Build.ashx?id=2": {
-                "ret": 0,
-                "list": [
-                    [1, "Tech1", 5],
-                    [2, "Tech2", 3],
-                ],
-            },
+            "/api/city/current": {"ret": 0},
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 5, "m_lgid": 6, "m_llevel": 20}]}},
+            "Build.ashx?id=2": {"ret": 0, "list": [[1, "Tech1", 5], [2, "Tech2", 3]]},
             "OPT.ashx?id=44": {"ret": 0},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [TechPlan(tech_id=1, target_level=10)]
     synced_events = []
 
@@ -357,25 +332,19 @@ def test_research_task_on_sync_data_callback():
     assert len(synced_events) == 1
     assert synced_events[0][0] == 21936
     assert synced_events[0][1] == {1: 5, 2: 3}
-    assert synced_events[0][2] is None  # not busy
+    assert synced_events[0][2] is None
 
 
 def test_research_task_syncs_on_first_cycle_even_if_busy():
     server = FakeServer(
         handlers={
-            "City.ashx?id=37": {"ret": 0, "tech": [1, 5, 120]},  # đang nghiên cứu tech 1
-            "City.ashx?id=50": {"ret": 0},
-            "City.ashx?id=5": {"ret": 0, "infos": [[5, 6, "大学殿", 20]]},
-            "Build.ashx?id=2": {
-                "ret": 0,
-                "list": [
-                    [1, "Tech1", 5],
-                    [2, "Tech2", 3],
-                ],
-            },
+            "City.ashx?id=37": {"ret": 0, "tech": [1, 5, 120]},
+            "/api/city/current": {"ret": 0},
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 5, "m_lgid": 6, "m_llevel": 20}]}},
+            "Build.ashx?id=2": {"ret": 0, "list": [[1, "Tech1", 5], [2, "Tech2", 3]]},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [TechPlan(tech_id=2, target_level=10)]
     synced_events = []
 
@@ -388,35 +357,26 @@ def test_research_task_syncs_on_first_cycle_even_if_busy():
     assert len(synced_events) == 1
     assert synced_events[0][0] == 21936
     assert synced_events[0][1] == {1: 5, 2: 3}
-    assert synced_events[0][2] == (True, 1)  # is_busy=True, tech_id=1
+    assert synced_events[0][2] == (True, 1)
 
 
 def test_research_task_supports_thai_hoc_dien_gid_59():
     server = FakeServer(
         handlers={
             "City.ashx?id=37": {"ret": 0, "tech": {}},
-            "City.ashx?id=50": {"ret": 0},
-            # Thành có Thái Học Điện (gid=59) ở ô đất pid=7
-            "City.ashx?id=5": {"ret": 0, "infos": [[7, 59, "太学殿", 20]]},
-            "Build.ashx?id=2": {
-                "ret": 0,
-                "list": [
-                    [1, "Tech1", 5],
-                    [2, "Tech2", 3],
-                ],
-            },
+            "/api/city/current": {"ret": 0},
+            "/api/building/list": {"ret": 0, "data": {"items": [{"m_lpos": 7, "m_lgid": 59, "m_llevel": 20}]}},
+            "Build.ashx?id=2": {"ret": 0, "list": [[1, "Tech1", 5], [2, "Tech2", 3]]},
             "OPT.ashx?id=44": {"ret": 0},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [TechPlan(tech_id=1, target_level=10)]
     task = ResearchTask(gw, city_id=21936, plans=plans)
 
-    # 1. Nhận diện được Thái Học Điện (gid=59)
     univ_pid = task.get_university_pid()
     assert univ_pid == 7
 
-    # 2. Đọc cấp độ kỹ thuật qua Build.ashx?id=2 với gid=59
     levels = task.get_current_tech_levels()
     assert levels == {1: 5, 2: 3}
 
@@ -424,9 +384,3 @@ def test_research_task_supports_thai_hoc_dien_gid_59():
     assert len(build_calls) == 1
     assert build_calls[0]["pid"] == "7"
     assert build_calls[0]["gid"] == "59"
-
-
-
-
-
-

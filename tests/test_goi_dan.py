@@ -23,13 +23,40 @@ class FakeServer:
         self.map_views = map_views or {}
         self.handlers = handlers or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
+
+    def _lookup_handler(self, key):
+        aliases = {
+            "/api/city/list": "Common.ashx?id=29",
+            "/api/city/pageofficial": "Common.ashx?id=32",
+            "/api/city/pagemytroopslist": "Common.ashx?id=76",
+            "/api/city/pagearmament": "Common.ashx?id=27",
+            "/api/city/current": "City.ashx?id=50",
+        }
+        if key in self.handlers:
+            return self.handlers[key]
+        alias = aliases.get(key)
+        if alias and alias in self.handlers:
+            return self.handlers[alias]
+        return {"ret": 0}
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        p = dict(params or {})
+        self.calls.append((path, p))
+        if path == "/api/map/query":
+            return Resp(self.map_views.get(int(p["mid"]), {"npc_tent": []}))
+        handler = self._lookup_handler(path)
+        if callable(handler):
+            return Resp(handler())
+        if isinstance(handler, list):
+            return Resp(handler.pop(0))
+        return Resp(handler)
 
     def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
+        key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
         self.calls.append((key, dict(data or {})))
-        if key == "Map.ashx?id=6":
-            return Resp(self.map_views.get(int(data["mid"]), {"npc_tent": []}))
-        handler = self.handlers.get(key, {"ret": 0})
+        handler = self._lookup_handler(key)
         if callable(handler):
             return Resp(handler())
         if isinstance(handler, list):
@@ -64,8 +91,8 @@ def test_goi_dan_vong_linh_uses_item_268():
     assert out == "called_and_attacked"
 
     # Kiểm tra các API đã được gọi
-    api_names = [k for k, _ in server.calls if k != "Map.ashx?id=6"]
-    assert "City.ashx?id=50" in api_names
+    api_names = [k for k, _ in server.calls if k != "/api/map/query"]
+    assert "/api/city/current" in api_names
     assert "OPT.ashx?id=69" in api_names
     assert "OPT.ashx?id=53" in api_names
 
@@ -260,7 +287,7 @@ def test_goi_dan_idle_check_returns_generals_busy():
     assert out == "generals_busy"
     assert any("đang bận" in a for a in alerts)
     # Không phát sinh request gọi quái hay đánh
-    assert [k for k, _ in server.calls if k != "Common.ashx?id=32"] == []
+    assert [k for k, _ in server.calls if k != "/api/city/pageofficial"] == []
 
 
 def test_goi_dan_attacks_multiple_batches_for_more_than_3_generals():
@@ -650,14 +677,14 @@ def test_goi_dan_vong_linh_retries_scanning_with_delay_after_call():
             "OPT.ashx?id=53": {"ret": 0},
         }
     )
-    orig_post = server.post
+    orig_get = server.get
 
-    def custom_post(url, data=None, headers=None, timeout=None):
-        if "Map.ashx?id=6" in url:
+    def custom_get(url, params=None, headers=None, timeout=None):
+        if "/api/map/query" in url:
             return Resp(delayed_map_view())
-        return orig_post(url, data, headers, timeout)
+        return orig_get(url, params, headers, timeout)
 
-    server.post = custom_post
+    server.get = custom_get
 
     ctx, _ = ctx_for(server)
     task = GoiDan(

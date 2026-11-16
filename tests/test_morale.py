@@ -10,12 +10,20 @@ class FakeServer:
     def __init__(self, step_callback=None):
         self.calls = []
         self.step_callback = step_callback
+        self.cookies = {"uid": "95"}
+
+    def get(self, url, params=None, headers=None, proxies=None, timeout=None):
+        endpoint = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        self.calls.append((endpoint, params or {}))
+        if self.step_callback:
+            return self.step_callback(endpoint, params or {})
+        return MagicMock(status_code=200, json=lambda: {"ret": 0})
 
     def post(self, url, data=None, headers=None, proxies=None, timeout=None):
         endpoint = url.split("/")[-1]
         self.calls.append((endpoint, data or {}))
         if self.step_callback:
-            return self.step_callback(endpoint, data)
+            return self.step_callback(endpoint, data or {})
         return MagicMock(status_code=200, json=lambda: {"ret": 0})
 
 
@@ -134,7 +142,7 @@ def test_train_general_morale_waits_when_upgrading_in_progress():
 
     def mock_cb(endpoint, data):
         nonlocal api_76_call_count
-        if "Common.ashx" in endpoint and data.get("id") == "76" or "id=76" in endpoint or endpoint == "Common.ashx":
+        if endpoint == "/api/city/pagemytroopslist":
             # API 76
             api_76_call_count += 1
             if api_76_call_count == 1:
@@ -244,18 +252,16 @@ def test_train_multiple_generals_tick_scheduler_with_server_upgrading_time():
     opt_calls = []
 
     def mock_cb(endpoint, data):
-        if "Common.ashx" in endpoint and (data.get("id") == "76" or "id=76" in endpoint or endpoint == "Common.ashx"):
-            # Trả về danh sách tướng thành 21936
+        if endpoint == "/api/city/pagemytroopslist":
             generals_list = [
                 [gid, f"Gen_{gid}", 0, "", 0, 100, 0, 0, 0, d["morale"], d["up_t"], 500]
                 for gid, d in city_data.items()
             ]
-            # Giả lập thời gian đếm ngược máy chủ trôi qua mỗi lần query
             for d in city_data.values():
                 d["up_t"] = max(0, d["up_t"] - 1)
             return MagicMock(status_code=200, json=lambda: {
                 "ret": 0,
-                "list": [[21936, "Thành", generals_list]]
+                "data": {"ret": 0, "list": [[21936, "Thành", generals_list]]},
             })
         elif "OPT.ashx" in endpoint and (data.get("id") == "47" or "id=47" in endpoint or endpoint == "OPT.ashx"):
             gid = int(data.get("lGeneralID", 0))

@@ -33,11 +33,11 @@ class TaskContext:
 
 
 def inspect_general_statuses(gateway: GatewayClient, generals: list[int]) -> dict[int, int]:
-    """Đọc trạng thái thực tế của danh sách võ tướng từ Common.ashx?id=32."""
+    """Đọc trạng thái thực tế của danh sách võ tướng từ /api/city/pageofficial."""
     if not generals:
         return {}
     wanted = {int(g) for g in generals}
-    resp = gateway.call("Common.ashx", 32, {"type": "2", "_": ""}) or {}
+    resp = gateway.page_official(2) or {}
     if not resp or "list" not in resp:
         return {}
 

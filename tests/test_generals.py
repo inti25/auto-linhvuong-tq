@@ -61,10 +61,10 @@ def _make_gen(
 
 
 class FakeGateway:
-    """Fake GatewayClient ghi lại toàn bộ lệnh OPT.ashx & trả về phản hồi cấu hình trước."""
+    """Fake GatewayClient ghi lại toàn bộ lệnh OPT.ashx / Optimization.ashx & trả về phản hồi."""
 
     def __init__(self, handler=None):
-        self.calls: list[tuple[str, int, dict]] = []
+        self.calls: list[tuple[str, int | str, dict]] = []
         self._handler = handler
 
     def call(self, endpoint: str, op_id: int, payload: dict | None = None, **_kw):
@@ -74,11 +74,23 @@ class FakeGateway:
             return self._handler(endpoint, op_id, body)
         return {"ret": 0, "loyalty": 100}
 
+    def optimization(self, action: str, payload: dict | None = None, **_kw):
+        p = dict(payload or {})
+        body = {"lType": str(p.get("type", "0")), **p}
+        self.calls.append(("Optimization.ashx", action, body))
+        if self._handler:
+            if action == "equipment":
+                return self._handler("Common.ashx", 24, body)
+            return self._handler("Optimization.ashx", action, body)
+        return {"ret": 0, "list": []}
+
 
 def test_roster_parses_loyalty_special_status_and_tactician():
     """fetch_roster trích xuất đúng loyalty, special_status, tactician_id/name."""
-    city29_resp = {"ret": 0, "city": [[15230, "ThanhChinh"]]}
-    city7_resp = {"ret": 0, "infos": [[1, 15230, "ThanhChinh", 0, 100, 200, 0, 20, 1]]}
+    city_list_resp = {
+        "ret": 0,
+        "data": {"items": [{"m_ltype": 1, "m_lid": 15230, "m_szname": "ThanhChinh", "m_lx_pos": 100, "m_ly_pos": 200, "m_llevel": 20}]},
+    }
     civil_resp = {
         "ret": 0,
         "list": [
@@ -88,10 +100,9 @@ def test_roster_parses_loyalty_special_status_and_tactician():
                 100,
                 200,
                 [
-                    # id, name, _, _, special_status, status, level, loyalty, stamina, stamina_max
-                    [417513, "GiaCatLuong", 100, 100, 1, 0, 35, 92, 100, 100],  # Thái thú, loyalty 92
-                    [417514, "QuachGia", 100, 100, 2, 0, 30, 88, 100, 100],     # Mưu sĩ, loyalty 88
-                    [417515, "TuanUc", 100, 100, 0, 0, 25, 100, 100, 100],      # Rảnh rỗi
+                    [417513, "GiaCatLuong", 100, 100, 1, 0, 35, 92, 100, 100],
+                    [417514, "QuachGia", 100, 100, 2, 0, 30, 88, 100, 100],
+                    [417515, "TuanUc", 100, 100, 0, 0, 25, 100, 100, 100],
                 ],
             ]
         ],
@@ -105,7 +116,6 @@ def test_roster_parses_loyalty_special_status_and_tactician():
                 100,
                 200,
                 [
-                    # [4]: special_status, [5]: status, [6]: level, [7]: loyalty, [8]: stamina, [9]: stamina_max
                     [417506, "TrieuVan", 95, 100, 0, 0, 40, 85, 95, 100],
                 ],
             ]
@@ -118,7 +128,6 @@ def test_roster_parses_loyalty_special_status_and_tactician():
                 0,
                 "",
                 [
-                    # [0]: gid, [2]: tactician_id, [3]: tactician_name, [5..7]: army, [9]: morale, [10]: upgrading_time
                     [417506, "TrieuVan", 417514, "QuachGia", 0, 100, 200, 300, 0, 95, 0],
                 ],
             ]
@@ -126,20 +135,9 @@ def test_roster_parses_loyalty_special_status_and_tactician():
     }
 
     gw = MagicMock()
-
-    def _side_effect(endpoint, op_id, params=None, **_kw):
-        p = params or {}
-        if endpoint == "Common.ashx" and op_id == 29:
-            return city29_resp
-        if endpoint == "City.ashx" and op_id == 7:
-            return city7_resp
-        if endpoint == "Common.ashx" and op_id == 32:
-            return civil_resp if p.get("type") == "1" else martial_resp
-        if endpoint == "Common.ashx" and op_id == 76:
-            return detail_resp
-        return {"ret": 0}
-
-    gw.call.side_effect = _side_effect
+    gw.city_list.return_value = city_list_resp
+    gw.page_official.side_effect = lambda t: civil_resp if int(t) == 1 else martial_resp
+    gw.page_mytroops_list.return_value = detail_resp
     roster = fetch_roster(gw)
 
     by_id = {g.id: g for g in roster.generals_of(15230)}
@@ -792,3 +790,132 @@ def test_configure_equipment_smart_civil_mayor_tactician_idle_priority():
         (12, 4, 4004),  # Văn nhàn rỗi Lv.150 lấy 飞镰 (4202)
         (10, 4, 4003),  # Thái thú Lv.200 vét ô trống cuối cùng bằng 松风 (4201)
     ]
+
+
+def test_fetch_equipment_inventory_paginates_over_50_items():
+    """Tải đầy đủ nhiều trang từ Optimization.ashx?action=equipment khi kho vượt quá 50 món."""
+    page0 = [[5000 + i, 1, 1135, 100, 10, 10, 0, 10, 0, ""] for i in range(50)]
+    page1 = [[5050 + i, 1, 1135, 100, 10, 10, 0, 10, 0, ""] for i in range(5)]
+
+    def _paged_handler(_ep, _oid, body):
+        if body.get("lType") == "1":
+            p = int(body.get("page", 0))
+            return {
+                "ret": 0,
+                "list": page0 if p == 0 else page1,
+                "page": p,
+                "pageSize": 50,
+                "total": 55,
+                "revision": [111, 222],
+            }
+        return {"ret": 0, "list": [], "page": 0, "pageSize": 50, "total": 0, "revision": [1, 1]}
+
+    inv = fetch_equipment_inventory(FakeGateway(_paged_handler))
+    assert inv.count_free("vo", 1) == 55
+
+
+def test_configure_equipment_ret_301_skips_for_male_and_keeps_for_eligible_general():
+    """Khi OPT.ashx?id=58 trả ret=301 (đồ nữ/tướng Man), tướng nam bỏ qua sang món kế tiếp và giữ lại trong pool."""
+    from linhvuong.generals import EquipmentInventory, EquipmentItem, configure_equipment
+    from linhvuong.roster import City, General, Roster
+
+    attempts: list[tuple[int, int, int]] = []
+
+    def _handler(ep, oid, body):
+        assert (ep, oid) == ("OPT.ashx", 58)
+        gid = int(body["lGeneralID"])
+        eq_type = int(body["lEquipType"])
+        item_id = int(body["lEquipID"])
+        attempts.append((gid, eq_type, item_id))
+        if gid == 101 and item_id == 9101:
+            return {"ret": 301, "errMsg": "该装备仅限女性名(蛮)将使用"}
+        return {"ret": 0}
+
+    roster = Roster(
+        cities=[City(id=1, name="Thành chính")],
+        _generals={
+            1: [
+                General(id=101, name="Tào Tháo", role="vo", level=100, morale=100, stamina=100, stamina_max=100),
+                General(id=102, name="Chân Mật", role="vo", level=90, morale=100, stamina=100, stamina_max=100),
+            ]
+        },
+    )
+    inv = EquipmentInventory(
+        free_items={
+            ("vo", 1): [
+                EquipmentItem(item_id=9101, equip_type=1, item_type_id=1139, level=100),
+                EquipmentItem(item_id=9102, equip_type=1, item_type_id=1135, level=80),
+            ]
+        }
+    )
+
+    logs: list[str] = []
+    summary = configure_equipment(
+        FakeGateway(_handler),
+        roster,
+        [101, 102],
+        inventory=inv,
+        on_log=logs.append,
+    )
+
+    assert summary.failed == 0
+    assert summary.equipped == 2
+    assert summary.no_item_available == 6
+    assert inv.equipped_by_general[101][1].item_id == 9102
+    assert inv.equipped_by_general[102][1].item_id == 9101
+    assert inv.count_free("vo", 1) == 0
+    assert attempts == [(101, 1, 9101), (101, 1, 9102), (102, 1, 9101)]
+    assert any("thử món kế tiếp" in line for line in logs)
+
+
+def test_configure_equipment_mayor_ret_301_falls_back_to_leftover_pass_without_retrying():
+    """Thái thú gặp ret=301 ở lượt Nội chính sẽ không bị tính lỗi và được vét đồ khác ở lượt 3."""
+    from linhvuong.generals import EquipmentInventory, EquipmentItem, configure_equipment
+    from linhvuong.roster import City, General, Roster
+
+    attempts: list[tuple[int, int]] = []
+
+    def _handler(_ep, _oid, body):
+        gid = int(body["lGeneralID"])
+        item_id = int(body["lEquipID"])
+        attempts.append((gid, item_id))
+        if item_id == 9201:
+            return {"ret": 301, "errMsg": "该装备仅限女性名(蛮)将使用"}
+        return {"ret": 0}
+
+    roster = Roster(
+        cities=[City(id=1, name="Thành chính")],
+        _generals={
+            1: [
+                General(
+                    id=201,
+                    name="Tuân Úc",
+                    role="van",
+                    level=100,
+                    morale=100,
+                    stamina=100,
+                    stamina_max=100,
+                    special_status=1,
+                )
+            ]
+        },
+    )
+    inv = EquipmentInventory(
+        free_items={
+            ("van", 1): [
+                EquipmentItem(item_id=9201, equip_type=1, item_type_id=1239, level=100, politics=50),
+                EquipmentItem(item_id=9202, equip_type=1, item_type_id=1205, level=20, politics=0),
+            ]
+        }
+    )
+
+    summary = configure_equipment(FakeGateway(_handler), roster, [201], inventory=inv)
+
+    assert summary.failed == 0
+    assert summary.equipped == 1
+    assert summary.no_item_available == 3
+    assert inv.equipped_by_general[201][1].item_id == 9202
+    assert inv.count_free("van", 1) == 1  # 9201 vẫn được giữ lại trong kho
+    # 9201 chỉ bị thử đúng 1 lần ở lượt Nội chính, lượt 3 bỏ qua 9201 để mặc thẳng 9202
+    assert attempts == [(201, 9201), (201, 9202)]
+

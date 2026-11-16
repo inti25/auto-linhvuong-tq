@@ -18,16 +18,17 @@ class FakeResponse:
 
 
 class FakeGateway:
-    """Giả lập Map.ashx?id=6: mỗi mid -> payload; có thể kèm chuỗi status lỗi trước."""
+    """Giả lập /api/map/query: mỗi mid -> payload; có thể kèm chuỗi status lỗi trước."""
 
     def __init__(self, views=None, failures=None):
         self.views = views or {}
         self.failures = failures or {}  # mid -> list status codes trả trước
         self.requested = []
         self.sleeps = []
+        self.cookies = {"uid": "95"}
 
-    def post(self, url, data=None, headers=None, timeout=None):
-        mid = int(data["mid"])
+    def get(self, url, params=None, headers=None, timeout=None):
+        mid = int((params or {})["mid"])
         self.requested.append(mid)
         queue = self.failures.get(mid)
         if queue:
@@ -37,7 +38,7 @@ class FakeGateway:
 
 def make(views=None, failures=None, locks=None, step=7, workers=3):
     session = FakeGateway(views, failures)
-    client = GatewayClient(53, session, sleep=session.sleeps.append)
+    client = GatewayClient(58, session, sleep=session.sleeps.append)
     scanner = Scanner(client, locks or TargetLocks(), delay=0.0, step=step, workers=workers, sleep=lambda s: None)
     return scanner, session
 
@@ -111,10 +112,14 @@ def test_gives_up_on_a_point_after_max_retries_and_continues():
 
 def test_skips_targets_near_thien_thanh():
     mid0 = mid_from_coords(0, 0)
+    cmid_cap = mid_from_coords(2, 0)
+    # Server 58: citys[i][2]=size (4 = Thiên Thành), citys[i][3]=user_id (KHÔNG phải cmid),
+    # cmid thật nằm ở infos[n][4] (với tile type 71..74 và infos[n][5] == city_id).
     scanner, _ = make(
         {
             mid0: {
-                "citys": [[1, "Lạc Dương", 6, mid_from_coords(2, 0)]],
+                "citys": [[10129, "Lạc Dương", 4, 95, 0, 0, 1, ""]],
+                "infos": [[cmid_cap, 74, 0, 411, cmid_cap, 10129]],
                 "npc_tent": [npc_at(3, 0, 10, 7), npc_at(30, 0, 20, 7)],
             },
             mid_from_coords(30, 0): {"npc_tent": [npc_at(30, 0, 20, 7)]},

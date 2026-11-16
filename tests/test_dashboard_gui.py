@@ -818,13 +818,12 @@ def test_dashboard_fetch_city_techs_supports_thai_hoc_dien():
 
         def fake_call(path, api_id, payload):
             calls.append((path, api_id, payload))
-            if path == "City.ashx" and api_id == 5:
-                # Thành có Thái Học Điện (gid=59) ở ô đất pid=12
-                return {"ret": 0, "infos": [[12, 59, "太学殿", 20]]}
-            elif path == "Build.ashx" and api_id == 2:
+            if path == "Build.ashx" and api_id == 2:
                 return {"ret": 0, "list": [[1, "Tech1", 10], [2, "Tech2", 5]]}
             return {"ret": 0}
 
+        dash.gateway.set_current_city = lambda cid: {"ret": 0}
+        dash.gateway.building_list = lambda cid: {"ret": 0, "items": [{"m_lpos": 12, "m_lgid": 59, "m_szname": "太学殿", "m_llevel": 20}]}
         dash.gateway.call = fake_call
         dash._fetch_city_techs_thread(15230)
 
@@ -1296,23 +1295,19 @@ def test_dashboard_boost_status_time_parsing_and_cid():
         dash._loaded(r)
 
         calls = []
-        def fake_call(path, api_id, payload):
-            calls.append((path, api_id, payload))
-            # Giả lập phản hồi thật từ server S53: 2234:39:14 = 8,044,754 giây
-            if path == "Common.ashx" and api_id == 77:
-                return {
-                    "ret": 0,
-                    "list": [
-                        [15230, "ThanhChinh", 596952, 8044754, [], []]
-                    ]
-                }
-            return {}
+        def fake_page_building(city_id):
+            calls.append(("page_building", city_id))
+            return {
+                "ret": 0,
+                "plus_finish": 8044754,
+                "list": [[15230, "ThanhChinh", 738765, 2792887, [], []]],
+            }
 
-        dash.gateway.call = fake_call
+        dash.gateway.page_building = fake_page_building
+        dash.gateway.call = lambda *a, **kw: {}
         dash._check_and_update_boost_status(async_check=False)
 
-        # Kiểm tra payload phải có cid
-        assert any(c[0] == "Common.ashx" and c[1] == 77 and "cid" in c[2] for c in calls)
+        assert any(c == ("page_building", 15230) for c in calls)
         assert dash.aux_boost_time_lbl.cget("text") == "(Còn: 2234:39:14)"
         assert dash._boost_left_seconds == 8044754
 
@@ -2771,12 +2766,11 @@ def test_dashboard_building_speedup_checkbox_updates_running_task_live():
 
         def fake_call(ep, aid, data=None, **kw):
             calls.append((ep, aid, dict(data or {})))
-            if ep == "Common.ashx" and aid == 77:
-                return {"ret": 0, "list": [[15230, "NB", 0, "10:00:00", [[5, 3, 20, 1, "30:00:00"]], []]]}
-            if ep == "City.ashx" and aid == 5:
-                return {"ret": 0, "infos": [[5, 3, "Nhà Dân", 20, 0, 0]]}
             return {"ret": 0}
 
+        dash.gateway.page_building = lambda cid: {"ret": 0, "plus_finish": "10:00:00", "list": [[15230, "NB", 738765, 0, [[5, 3, 20, 1, "30:00:00"]], []]]}
+        dash.gateway.building_list = lambda cid: {"ret": 0, "items": [{"m_lpos": 5, "m_lgid": 3, "m_szname": "Nhà Dân", "m_llevel": 20}]}
+        dash.gateway.update_building = lambda cid, pid, gid, opt_type=1: {"ret": 0}
         dash.gateway.call = fake_call
         dash.after = lambda ms, fn=None, *a: fn(*a) if fn else None
         with patch.object(dash, "_schedule_periodic_boost_check"), patch.object(dash, "_check_and_update_boost_status"):
@@ -3312,27 +3306,29 @@ def test_equip_dialog_filters_sorting_and_quick_select():
         roster = Roster(cities=[c1, c2], camps=[], _generals={100: [vo_low, van_full, vo_high], 200: [van_b]})
         dash._loaded(roster)
 
-        def fake_gw_call(ep, oid, payload=None, **_kw):
+        def fake_opt(action, payload=None, **_kw):
             p = payload or {}
-            if ep == "Common.ashx" and oid == 24:
-                lt = str(p.get("lType"))
+            if action == "equipment":
+                lt = str(p.get("type"))
                 if lt == "1":
                     return {
                         "ret": 0,
                         "list": [
-                            [11, 1, 1135, 0, 0, 0, 0, 9, 0, ""],        # Mũ võ rảnh Lv.9
-                            [12, 1, 1220, 0, 0, 0, 0, 8, 3, "VanFull"],  # VanFull mặc đủ 4 món
+                            [11, 1, 1135, 0, 0, 0, 0, 9, 0, ""],
+                            [12, 1, 1220, 0, 0, 0, 0, 8, 3, "VanFull"],
                         ],
+                        "page": 0, "pageSize": 50, "total": 2, "revision": [1, 1],
                     }
                 if lt == "2":
-                    return {"ret": 0, "list": [[22, 1, 2217, 0, 0, 0, 0, 8, 3, "VanFull"]]}
+                    return {"ret": 0, "list": [[22, 1, 2217, 0, 0, 0, 0, 8, 3, "VanFull"]], "page": 0, "pageSize": 50, "total": 1, "revision": [1, 1]}
                 if lt == "3":
-                    return {"ret": 0, "list": [[32, 1, 3220, 0, 0, 0, 0, 8, 3, "VanFull"]]}
+                    return {"ret": 0, "list": [[32, 1, 3220, 0, 0, 0, 0, 8, 3, "VanFull"]], "page": 0, "pageSize": 50, "total": 1, "revision": [1, 1]}
                 if lt == "4":
-                    return {"ret": 0, "list": [[42, 1, 4212, 0, 0, 0, 0, 8, 3, "VanFull"]]}
-            return {"ret": 0}
+                    return {"ret": 0, "list": [[42, 1, 4212, 0, 0, 0, 0, 8, 3, "VanFull"]], "page": 0, "pageSize": 50, "total": 1, "revision": [1, 1]}
+            return {"ret": 0, "list": []}
 
-        dash.gateway.call = fake_gw_call
+        dash.gateway.optimization = fake_opt
+        dash.gateway.call = lambda *a, **kw: {"ret": 0}
         dash._open_equip_dialog()
 
         deadline = time.time() + 2.0
@@ -3386,25 +3382,30 @@ def test_equip_dialog_execution_assign_and_unequip():
 
         opt_calls = []
 
-        def fake_gw_call(ep, oid, payload=None, **_kw):
+        def fake_opt(action, payload=None, **_kw):
             p = dict(payload or {})
-            if ep == "Common.ashx" and oid == 24:
-                lt = str(p.get("lType"))
-                if lt == "1":
+            if action == "equipment":
+                if str(p.get("type")) == "1":
                     return {
                         "ret": 0,
                         "list": [
-                            [501, 1, 1135, 0, 0, 0, 0, 12, 2, "VoLow"],  # VoLow đang giữ mũ xịn Lv.12
-                            [502, 1, 1104, 0, 0, 0, 0, 1, 0, ""],        # Mũ võ Lv.1 rảnh
-                            [503, 1, 1220, 0, 0, 0, 0, 6, 0, ""],        # Mũ văn Lv.6 rảnh
+                            [501, 1, 1135, 0, 0, 0, 0, 12, 2, "VoLow"],
+                            [502, 1, 1104, 0, 0, 0, 0, 1, 0, ""],
+                            [503, 1, 1220, 0, 0, 0, 0, 6, 0, ""],
                         ],
+                        "page": 0, "pageSize": 50, "total": 3, "revision": [1, 1],
                     }
-                return {"ret": 0, "list": []}
+                return {"ret": 0, "list": [], "page": 0, "pageSize": 50, "total": 0, "revision": [1, 1]}
+            return {"ret": 0}
+
+        def fake_gw_call(ep, oid, payload=None, **_kw):
+            p = dict(payload or {})
             if ep == "OPT.ashx" and oid == 58:
                 opt_calls.append((int(p["lGeneralID"]), int(p["lEquipType"]), int(p["lEquipID"])))
                 return {"ret": 0}
             return {"ret": 0}
 
+        dash.gateway.optimization = fake_opt
         dash.gateway.call = fake_gw_call
         dash._open_equip_dialog()
         deadline = time.time() + 2.0
@@ -3442,10 +3443,10 @@ def test_equip_dialog_execution_assign_and_unequip():
             "linhvuong.dashboard.messagebox.showinfo"
         ) as mock_unequip_info:
             # Lần gọi fetch_equipment_inventory mới nhất sẽ thấy đang mặc 501, 502, 503
-            def fake_gw_worn(ep, oid, payload=None, **_kw):
+            def fake_opt_worn(action, payload=None, **_kw):
                 p = dict(payload or {})
-                if ep == "Common.ashx" and oid == 24:
-                    if str(p.get("lType")) == "1":
+                if action == "equipment":
+                    if str(p.get("type")) == "1":
                         return {
                             "ret": 0,
                             "list": [
@@ -3453,13 +3454,19 @@ def test_equip_dialog_execution_assign_and_unequip():
                                 [502, 1, 1104, 0, 0, 0, 0, 1, 2, "VoLow"],
                                 [503, 1, 1220, 0, 0, 0, 0, 6, 3, "VanHigh"],
                             ],
+                            "page": 0, "pageSize": 50, "total": 3, "revision": [1, 1],
                         }
-                    return {"ret": 0, "list": []}
+                    return {"ret": 0, "list": [], "page": 0, "pageSize": 50, "total": 0, "revision": [1, 1]}
+                return {"ret": 0}
+
+            def fake_gw_worn(ep, oid, payload=None, **_kw):
+                p = dict(payload or {})
                 if ep == "OPT.ashx" and oid == 58:
                     opt_calls.append((int(p["lGeneralID"]), int(p["lEquipType"]), int(p["lEquipID"])))
                     return {"ret": 0}
                 return {"ret": 0}
 
+            dash.gateway.optimization = fake_opt_worn
             dash.gateway.call = fake_gw_worn
             dash._start_equip_action(EQUIP_MODE_UNEQUIP)
             deadline = time.time() + 2.0

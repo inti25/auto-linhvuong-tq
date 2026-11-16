@@ -11,7 +11,7 @@ from .coords import MAP_MAX, MAP_MIN, coords_from_mid, mid_from_coords
 from .gateway import GatewayClient
 from .locks import LockReason, TargetLocks
 
-THIEN_THANH_MIN_LEVEL = 5
+THIEN_THANH_MIN_LEVEL = 4
 
 MAN_NAMES = {
     1: "Uy Quốc",
@@ -159,11 +159,34 @@ class Scanner:
         citys = data.get("citys", [])
         if not citys:
             return
+        # Server 58: citys = [city_id, name, size, user_id, ...], cmid nằm ở infos[n][4] (type 71..74, infos[n][5] == city_id)
+        city_cmid_map: dict[int, int] = {}
+        for info in data.get("infos", []) or []:
+            if isinstance(info, (list, tuple)) and len(info) >= 6:
+                try:
+                    tile_type = int(info[1])
+                    if 71 <= tile_type <= 74:
+                        cid_val = int(info[5])
+                        cmid_val = int(info[4] or info[0])
+                        if cid_val > 0 and cmid_val > 0 and cid_val not in city_cmid_map:
+                            city_cmid_map[cid_val] = cmid_val
+                except (ValueError, TypeError):
+                    continue
+
         now = time.monotonic() if self.capitals_cache_ttl > 0 else 0.0
         new_cached: list[tuple[int, tuple[int, int]]] = []
         for city in citys:
-            if int(city[2]) >= THIEN_THANH_MIN_LEVEL:
-                cmid = int(city[3])
+            if not isinstance(city, (list, tuple)) or len(city) < 3:
+                continue
+            try:
+                city_id = int(city[0])
+                size_or_lvl = int(city[2])
+            except (ValueError, TypeError):
+                continue
+            if size_or_lvl >= THIEN_THANH_MIN_LEVEL:
+                cmid = city_cmid_map.get(city_id, 0)
+                if cmid <= 0:
+                    continue
                 coords = coords_from_mid(cmid)
                 capitals[cmid] = coords
                 if self.capitals_cache_ttl > 0:

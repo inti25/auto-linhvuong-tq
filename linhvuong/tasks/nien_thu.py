@@ -14,7 +14,6 @@ from ..world_chat import (
     STATE_VI_NAMES,
     NienThuAnnouncement,
     WorldChatClient,
-    parse_city_chat_config,
 )
 from .base import (
     RET_CAPTCHA_REQUIRED,
@@ -283,31 +282,21 @@ class NienThuTask:
 
     def _fetch_announced_state_id(self) -> Optional[int]:
         try:
-            url = f"http://sg{self.ctx.gateway.server_id}.dipan.com/city"
-            resp = self.ctx.gateway.session.get(
-                url,
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=8,
-            )
-            html_text = getattr(resp, "text", "") or ""
-            creds = parse_city_chat_config(html_text)
-            if not creds:
-                return None
-            ann = self.chat_client_factory().fetch_latest_nien_thu(creds, timeout=3.0)
+            ann = self.chat_client_factory().fetch_latest_nien_thu(self.ctx.gateway)
             if not ann:
                 return None
-            ann_key = (ann.state_id, ann.server_time)
+            ann_key = (ann.state_id, ann.source_id, ann.server_time)
             if ann_key != self._last_ann_key:
                 self._last_ann_key = ann_key
                 vi_name = STATE_VI_NAMES.get(ann.state_id, ann.state_name)
                 self._notify(
-                    f"📢 Kênh thế giới: Niên Thú xuất hiện tại {vi_name} ({ann.state_name}, ID={ann.state_id}) lúc {ann.server_time or '?'}"
+                    f"📢 Kênh thông báo: Niên Thú xuất hiện tại {vi_name} ({ann.state_name}, ID={ann.state_id}) lúc {ann.server_time or '?'}"
                 )
                 if self.on_announcement:
                     self.on_announcement(ann)
             return ann.state_id
         except Exception as exc:
-            self._notify(f"⚠️ Không đọc được kênh thế giới ({exc}), chuyển sang quét 16 Châu...")
+            self._notify(f"⚠️ Không đọc được thông báo hệ thống ({exc}), chuyển sang quét 16 Châu...")
             return None
 
     def _pick_idle_general(self) -> Optional[int]:

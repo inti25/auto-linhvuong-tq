@@ -54,7 +54,7 @@ Hành động sử dụng đạo cụ (Lệnh bài tăng tốc / Vàng) để gi
 _Avoid_: Speedup, cắn bùa tăng tốc
 
 **DS kiến trúc** (Đại Sư Kiến Trúc / Kích hoạt kiến trúc):
-Đặc quyền đạo cụ mở rộng hàng đợi thi công từ 1 công trình mặc định lên tối đa 3 công trình xây dựng cùng lúc (`OPT.ashx?id=69, type=3`), đồng thời tăng 20% tốc độ xây dựng. Thời hạn hiệu lực được kiểm tra qua trường `plus_finish` từ `Common.ashx?id=77`.
+Đặc quyền đạo cụ mở rộng hàng đợi thi công từ 1 công trình mặc định lên tối đa 3 công trình xây dựng cùng lúc (`OPT.ashx?id=69, type=3`), đồng thời tăng 20% tốc độ xây dựng. Thời hạn hiệu lực được kiểm tra qua trường `plus_finish` của trang hàng đợi xây dựng (`/api/city/pagebuilding`).
 _Avoid_: Boost 20%, kích hoạt bonus
 
 **Chuyển quân giới**:
@@ -89,7 +89,11 @@ _Avoid_: Đánh ải, càn quét
 Chế độ tự động quét và tấn công Man quanh Thành hoặc Doanh trại lưu động.
 
 **Thiên Thành**:
-Thành cấp 5 hoặc 6; vùng phụ cận quanh nó bị loại khỏi phạm vi quét đánh Man.
+Thành kích thước cấp 4 (4×4 trên bản đồ Server 58+); vùng phụ cận quanh nó bị loại khỏi phạm vi quét đánh Man.
+
+**Kênh Thông Báo Hệ Thống**:
+Luồng tin báo toàn máy chủ (ví dụ thông báo Niên Thú xuất hiện) đọc qua nhật ký thông báo hệ thống (`/api/notify/history`) trên Server 58+, thay thế cho Kênh Thế Giới Flash/XMLSocket trước đây.
+_Avoid_: WorldChat XMLSocket, SGWebIM
 
 **Mid**:
 Mã số định danh một ô trên bản đồ thế giới, tương ứng một tọa độ (x, y).
@@ -236,7 +240,7 @@ Các gói lễ bao sự kiện đặc biệt mở qua `OPT.ashx?id=69` với `ty
 _Avoid_: Rương 69, special chest, gói quà đặc biệt
 
 **Mở Rương Hàng Loạt**:
-Tiện ích do người chơi chủ động kích hoạt để mở liên tiếp một số lượng lớn Rương Đạo Cụ hoặc Lễ Bao Đặc Biệt theo số lượt chỉ định bằng đa luồng (tối đa 5 luồng song song), tự động chuyển ngữ cảnh Thành (`City.ashx?id=50`) đối với các loại rương cộng vật phẩm trực tiếp vào thành trì và tự động dừng ngay khi hết rương trong túi đồ (mã lỗi 10014) hoặc phát sinh Captcha (mã lỗi 110).
+Tiện ích do người chơi chủ động kích hoạt để mở liên tiếp một số lượng lớn Rương Đạo Cụ hoặc Lễ Bao Đặc Biệt theo số lượt chỉ định. Đối với các rương hỗ trợ mở theo lô (`bulkAllowed`), hệ thống mở theo từng đợt tối đa 99 rương qua tác vụ bất đồng bộ (`bulk-start`/`bulk-status`); các rương ngoại lệ (như Ngự Tứ Bảo Hạp ID 53 hoặc Lễ Bao Đặc Biệt qua `OPT.ashx?id=69`) tiếp tục mở đơn luồng/đa luồng sau khi chuyển ngữ cảnh Thành (`/api/city/current`), tự động dừng khi hết rương hoặc gặp Captcha.
 _Avoid_: Spam mở rương, auto cắn rương thủ công, batch chest opener
 
 **Chu Kỳ Lặp**:
@@ -408,7 +412,7 @@ Hoạt động tầm phỏng và khám phá báu vật, danh tướng định k�
 _Avoid_: Đào bảo, quay thưởng, explore
 
 **Tự Động Trang Bị** (`Auto-Equip Generals`):
-Cơ chế truy vấn kho đồ đạc và trang bị đang mặc của toàn bộ tướng qua `Common.ashx?id=24` (`lType` ∈ {`1: Mũ`, `2: Vũ khí`, `3: Giáp`, `4: Thú cưỡi`}) và tự động phân bổ hoặc tháo trang bị qua `OPT.ashx?id=58` (`lCityTentID`, `lGeneralID`, `lEquipType`, `lEquipID`; với `lEquipID=0` là tháo đồ). Mã loại `item_type_id = XYZZ` (`item[2]`) quy định ô trang bị ở `X` (`1..4`) và phân hệ ở `Y` (`Y=1` cho **Võ tướng**, `Y=2` cho **Văn quan**). Hệ thống chỉ thao tác trên tướng rảnh (`status == 0`), tách riêng từng hệ và hỗ trợ tùy chọn **Đổi trang bị** (tháo về kho chia lại từ đầu) và **Tháo trang bị**. Với **Võ tướng**, ưu tiên theo cấp độ giảm dần (`Cao → Thấp`) và ghép trang bị theo bậc/phẩm chất giảm dần (`(-level, -item_type_id, item_id)`). Với **Văn quan**, phân bổ thông minh theo 3 tầng ưu tiên (**Thái thú** → **Mưu sĩ đang biên chế** → **Quan văn nhàn rỗi**, trong mỗi tầng xếp theo cấp độ giảm dần `Cao → Thấp`): **Thái thú** ưu tiên chọn trang bị có chỉ số **Nội chính** (`item[6]`) cao nhất trước, nhường trang bị thuần Trí mưu/Mị lực (`Nội chính = 0`) cho **Mưu sĩ đang biên chế** và **Quan văn nhàn rỗi**, sau đó mới vét đồ còn dư trong kho vào các ô còn trống của Thái thú.
+Cơ chế truy vấn đầy đủ kho đồ đạc và trang bị đang mặc của toàn bộ tướng theo từng trang (`Optimization.ashx?action=equipment`, hỗ trợ trên 50 món) và tự động phân bổ hoặc tháo trang bị qua `OPT.ashx?id=58` (`lCityTentID`, `lGeneralID`, `lEquipType`, `lEquipID`; với `lEquipID=0` là tháo đồ). Mã loại `item_type_id = XYZZ` (`item[2]`) quy định ô trang bị ở `X` (`1..4`) và phân hệ ở `Y` (`Y=1` cho **Võ tướng**, `Y=2` cho **Văn quan**). Hệ thống chỉ thao tác trên tướng rảnh (`status == 0`), tách riêng từng hệ và hỗ trợ tùy chọn **Đổi trang bị** (tháo về kho chia lại từ đầu) và **Tháo trang bị**. Với **Võ tướng**, ưu tiên theo cấp độ giảm dần (`Cao → Thấp`) và ghép trang bị theo bậc/phẩm chất giảm dần (`(-level, -item_type_id, item_id)`). Với **Văn quan**, phân bổ thông minh theo 3 tầng ưu tiên (**Thái thú** → **Mưu sĩ đang biên chế** → **Quan văn nhàn rỗi**, trong mỗi tầng xếp theo cấp độ giảm dần `Cao → Thấp`): **Thái thú** ưu tiên chọn trang bị có chỉ số **Nội chính** (`item[6]`) cao nhất trước, nhường trang bị thuần Trí mưu/Mị lực (`Nội chính = 0`) cho **Mưu sĩ đang biên chế** và **Quan văn nhàn rỗi**, sau đó mới vét đồ còn dư trong kho vào các ô còn trống của Thái thú.
 _Avoid_: Mặc đồ ngẫu nhiên, auto-gear chung hệ, đồng bộ đồ mù quáng
 
 

@@ -518,8 +518,8 @@ class BuildingAutoRunner(BaseTaskRunner):
                     )
                 ]
                 if len(tasks_needing_c77) > 1:
-                    shared_resp = tasks_needing_c77[0].gateway.call(
-                        "Common.ashx", 77, {"cid": str(tasks_needing_c77[0].city_id), "_": ""}
+                    shared_resp = tasks_needing_c77[0].gateway.page_building(
+                        tasks_needing_c77[0].city_id
                     ) or {}
                     if shared_resp.get("ret", 0) in (110, 73):
                         raise CaptchaRequired()
@@ -5638,14 +5638,15 @@ class Dashboard(tk.Frame):
                         if b:
                             cname = b.name
 
-                    # 1. Gọi City.ashx?id=20 lấy tài nguyên hiện tại
-                    resp = self.gateway.call("City.ashx", 20, {"tid": str(cid), "_": ""}) or {}
-                    money = int(resp.get("money", resp.get("gold", 0)))
-                    wood = int(resp.get("wood", 0))
-                    iron = int(resp.get("iron", 0))
-                    stone = int(resp.get("stone", 0))
-                    food = int(resp.get("food", 0))
-                    max_storage = int(resp.get("max_storage", resp.get("storage", 1000000)))
+                    # 1. Lấy tài nguyên (/api/resource/info) & vàng (/api/city/info) trên Server 58+
+                    res_data = self.gateway.resource_info(cid) or {}
+                    city_data = self.gateway.city_info(cid) or {}
+                    money = int(city_data.get("m_lmoney_balance", city_data.get("money", 0)))
+                    wood = int(res_data.get("m_lwood_balance", res_data.get("wood", 0)))
+                    iron = int(res_data.get("m_liron_balance", res_data.get("iron", 0)))
+                    stone = int(res_data.get("m_lstone_balance", res_data.get("stone", 0)))
+                    food = int(res_data.get("m_lfood_balance", res_data.get("food", 0)))
+                    max_storage = int(res_data.get("m_lmax_storage", res_data.get("max_storage", 1000000)))
                     if max_storage <= 0:
                         max_storage = 1000000
 
@@ -6005,7 +6006,7 @@ class Dashboard(tk.Frame):
                 return
             try:
                 city_id = getattr(self, "_current_bld_city_id", 0) or 0
-                resp = self.gateway.call("Common.ashx", 77, {"cid": str(city_id), "_": ""}) or {}
+                resp = self.gateway.page_building(city_id) or {}
                 remaining = parse_boost_remaining_time(resp, city_id)
                 self._update_boost_countdown_ui(remaining)
 
@@ -6937,8 +6938,17 @@ class Dashboard(tk.Frame):
 
     def _fetch_city_buildings_thread(self, city_id: int):
         try:
-            resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
-            buildings = resp.get("infos") or resp.get("buildings") or resp.get("build", [])
+            resp = self.gateway.building_list(city_id) or {}
+            raw_items = resp.get("items") or resp.get("infos") or []
+            buildings = []
+            for b in raw_items:
+                if isinstance(b, dict):
+                    buildings.append({
+                        "pid": int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0)),
+                        "gid": int(b.get("m_lgid") or b.get("gid", 0)),
+                        "level": int(b.get("m_llevel") if b.get("m_llevel") is not None else b.get("level", 0)),
+                        "name": str(b.get("m_szname") or b.get("name") or ""),
+                    })
             try:
                 self.after(0, self._update_city_buildings_ui, buildings, city_id)
             except Exception:
@@ -7422,23 +7432,21 @@ class Dashboard(tk.Frame):
 
     def _fetch_city_techs_thread(self, city_id: int):
         try:
-            # 1. Chuyển focus thành thị về city_id (bắt buộc trên server game thật)
-            self.gateway.call("City.ashx", 50, {"tid": str(city_id), "_": ""})
+            # 1. Chuyển focus thành thị về city_id qua /api/city/current
+            self.gateway.set_current_city(city_id)
 
-            # 2. Tìm Đại Học Điện (gid=6) hoặc Thái Học Điện (gid=59) trong thành này
-            resp_bld = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
-            b_list = resp_bld.get("infos") or resp_bld.get("buildings") or []
+            # 2. Tìm Đại Học Điện (gid=6) hoặc Thái Học Điện (gid=59) qua /api/building/list
+            resp_bld = self.gateway.building_list(city_id) or {}
+            b_list = resp_bld.get("items") or resp_bld.get("infos") or []
             univ_pid = None
             univ_gid = 6
             for b in b_list:
-                if isinstance(b, (list, tuple)) and len(b) >= 2 and int(b[1]) in (6, 59):
-                    univ_pid = int(b[0])
-                    univ_gid = int(b[1])
-                    break
-                elif isinstance(b, dict) and int(b.get("gid", 0)) in (6, 59):
-                    univ_pid = int(b.get("pid", 0))
-                    univ_gid = int(b.get("gid", 0))
-                    break
+                if isinstance(b, dict):
+                    bgid = int(b.get("m_lgid") or b.get("gid") or 0)
+                    if bgid in (6, 59):
+                        univ_pid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
+                        univ_gid = bgid
+                        break
 
             # Nếu thành hiện tại không có Viện Đại Học / Thái Học Điện, tự động tìm thành có
             if univ_pid is None:
@@ -7446,9 +7454,9 @@ class Dashboard(tk.Frame):
                 for c in (self.roster.cities if self.roster.cities else []):
                     if c.id == city_id:
                         continue
-                    r = self.gateway.call("City.ashx", 5, {"tid": str(c.id), "_": ""}) or {}
-                    for b in r.get("infos") or []:
-                        if len(b) >= 2 and int(b[1]) in (6, 59):
+                    r = self.gateway.building_list(c.id) or {}
+                    for b in r.get("items") or r.get("infos") or []:
+                        if isinstance(b, dict) and int(b.get("m_lgid") or b.get("gid") or 0) in (6, 59):
                             found_city = c
                             break
                     if found_city:

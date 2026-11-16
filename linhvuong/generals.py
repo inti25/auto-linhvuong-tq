@@ -29,6 +29,11 @@ EQUIP_SLOT_NAMES: dict[int, str] = {1: "Mũ", 2: "Vũ khí", 3: "Giáp", 4: "Th�
 EQUIP_MODE_ASSIGN = "assign"
 EQUIP_MODE_UNEQUIP = "unequip"
 VALID_EQUIP_MODES = (EQUIP_MODE_ASSIGN, EQUIP_MODE_UNEQUIP)
+RET_EQUIP_FEMALE_OR_BARBARIAN_ONLY = 301
+EQUIP_ERROR_MESSAGES = {
+    **TROOP_ERROR_MESSAGES,
+    RET_EQUIP_FEMALE_OR_BARBARIAN_ONLY: "Trang bị chỉ dành cho nữ danh tướng hoặc tướng Man",
+}
 
 ITEM_NAME_MAPPING: dict[int, str] = {
     # Mũ Võ (11xx)
@@ -897,19 +902,67 @@ def _parse_inventory_rows_for_type(
     return free_by_role, equipped_map, free_quantities
 
 
+def _fetch_all_equipment_rows(
+    gateway: GatewayClient, equip_type: int
+) -> Optional[list[Any]]:
+    """Tải toàn bộ các trang trang bị của một lType qua Optimization.ashx?action=equipment (Server 58+)."""
+    all_rows: list[Any] = []
+    page = 0
+    rev1, rev2 = 0, 0
+    restarted_on_rev = False
+
+    while True:
+        data = gateway.optimization(
+            "equipment",
+            {
+                "kind": "1",
+                "type": str(equip_type),
+                "target": "0",
+                "page": str(page),
+                "pageSize": "50",
+                "revision1": str(rev1),
+                "revision2": str(rev2),
+            },
+        )
+        if not isinstance(data, dict):
+            return None
+        ret = int(data.get("ret", -1))
+        if ret == 8102 and not restarted_on_rev:
+            restarted_on_rev = True
+            all_rows.clear()
+            page = 0
+            rev1, rev2 = 0, 0
+            continue
+        if ret != 0:
+            return None
+
+        rows = data.get("list")
+        if not isinstance(rows, list):
+            return None
+        all_rows.extend(rows)
+
+        rev = data.get("revision")
+        if isinstance(rev, list) and len(rev) >= 2:
+            rev1, rev2 = int(rev[0]), int(rev[1])
+
+        total = int(data.get("total", len(all_rows)))
+        page_size = max(1, int(data.get("pageSize", 50)))
+        if not rows or (page + 1) * page_size >= total:
+            break
+        page += 1
+
+    return all_rows
+
+
 def fetch_equipment_inventory(gateway: GatewayClient) -> EquipmentInventory:
-    """Truy vấn toàn bộ kho đồ và trang bị đang mặc của tướng từ Common.ashx?id=24."""
+    """Truy vấn toàn bộ kho đồ và trang bị đang mặc của tướng từ Optimization.ashx?action=equipment."""
     free_items: dict[tuple[str, int], list[EquipmentItem]] = {}
     equipped_by_general: dict[int, dict[int, EquipmentItem]] = {}
     error_count = 0
 
     for equip_type in EQUIP_TYPES:
-        data = gateway.call("Common.ashx", 24, {"lType": str(equip_type), "_": ""})
-        if not isinstance(data, dict) or int(data.get("ret", -1)) != 0:
-            error_count += 1
-            continue
-        rows = data.get("list") or []
-        if not isinstance(rows, list):
+        rows = _fetch_all_equipment_rows(gateway, equip_type)
+        if rows is None:
             error_count += 1
             continue
 
@@ -921,7 +974,9 @@ def fetch_equipment_inventory(gateway: GatewayClient) -> EquipmentInventory:
             equipped_by_general.setdefault(gid, {})[equip_type] = eq_item
 
     if error_count == len(EQUIP_TYPES):
-        raise RuntimeError("Không thể tải dữ liệu trang bị từ máy chủ (Common.ashx?id=24).")
+        raise RuntimeError(
+            "Không thể tải dữ liệu trang bị từ máy chủ (Optimization.ashx?action=equipment)."
+        )
 
     return EquipmentInventory(free_items=free_items, equipped_by_general=equipped_by_general)
 
@@ -934,16 +989,9 @@ def _refresh_free_slot_from_server(
     prev_quantity: int = 0,
     expected_unequipped_general_ids: Optional[set[int]] = None,
 ) -> bool:
-    """Làm mới kho đồ rảnh và trạng thái mặc của một equip_type từ Common.ashx?id=24.
-
-    Trả về False và giữ nguyên trạng thái bộ nhớ nếu server mock tĩnh vẫn giữ nguyên
-    món vừa tiêu thụ hoặc tướng vừa tháo.
-    """
-    data = gateway.call("Common.ashx", 24, {"lType": str(equip_type), "_": ""})
-    if not isinstance(data, dict) or int(data.get("ret", -1)) != 0:
-        return False
-    rows = data.get("list")
-    if not isinstance(rows, list):
+    """Làm mới kho đồ rảnh và trạng thái mặc của một equip_type từ Optimization.ashx?action=equipment."""
+    rows = _fetch_all_equipment_rows(gateway, equip_type)
+    if rows is None:
         return False
 
     free_by_role, equipped_map, free_quantities = _parse_inventory_rows_for_type(equip_type, rows)
@@ -987,7 +1035,8 @@ def equip_general_item(
     ret = int(resp.get("ret", -1)) if isinstance(resp, dict) else -1
     if ret == 0:
         return True, 0, "OK"
-    return False, ret, TROOP_ERROR_MESSAGES.get(ret, f"Mã lỗi {ret}")
+    server_msg = str(resp.get("errMsg") or "").strip() if isinstance(resp, dict) else ""
+    return False, ret, EQUIP_ERROR_MESSAGES.get(ret) or server_msg or f"Mã lỗi {ret}"
 
 
 def _unequip_selected_generals(
@@ -1062,10 +1111,15 @@ def _equip_single_slot(
     current_item: Optional[EquipmentItem],
     on_log: Optional[Callable[[str], None]],
     role_note: str = "",
-) -> bool:
-    """Thực hiện mặc/nâng cấp một ứng viên vào ô trang bị và đồng bộ kho/server."""
+) -> str:
+    """Thực hiện mặc/nâng cấp một ứng viên vào ô trang bị và đồng bộ kho/server.
+
+    Trả về ``"equipped"`` nếu thành công, ``"restricted"`` nếu máy chủ từ chối
+    theo điều kiện giới/tộc tướng (``ret=301``, giữ lại trong ``pool``), hoặc
+    ``"failed"`` cho các lỗi khác.
+    """
     slot_name = EQUIP_SLOT_NAMES[equip_type]
-    ok, _ret, msg = equip_general_item(gateway, city_id, gen.id, equip_type, candidate.item_id)
+    ok, ret, msg = equip_general_item(gateway, city_id, gen.id, equip_type, candidate.item_id)
     if ok:
         for idx, item in enumerate(pool):
             if item is candidate or item.item_id == candidate.item_id:
@@ -1098,7 +1152,15 @@ def _equip_single_slot(
                 consumed_item_id=candidate.item_id,
                 prev_quantity=candidate.quantity,
             )
-        return True
+        return "equipped"
+
+    if ret == RET_EQUIP_FEMALE_OR_BARBARIAN_ONLY:
+        _emit(
+            on_log,
+            f"   ⏭️ [{city_name}] {gen.name}{role_note} bỏ qua {slot_name} "
+            f"({candidate.short_label}): {msg} — thử món kế tiếp",
+        )
+        return "restricted"
 
     summary.failed += 1
     pool[:] = [it for it in pool if it.item_id != candidate.item_id]
@@ -1106,7 +1168,82 @@ def _equip_single_slot(
         on_log,
         f"   ❌ [{city_name}] {gen.name}{role_note} mặc {slot_name} ({candidate.short_label}) thất bại: {msg}",
     )
-    return False
+    return "failed"
+
+
+def _is_standard_upgrade(candidate: EquipmentItem, current_item: EquipmentItem) -> bool:
+    return (candidate.level, candidate.item_type_id) > (current_item.level, current_item.item_type_id)
+
+
+def _is_mayor_upgrade(candidate: EquipmentItem, current_item: EquipmentItem) -> bool:
+    return (candidate.politics, candidate.level, candidate.item_type_id) > (
+        current_item.politics,
+        current_item.level,
+        current_item.item_type_id,
+    )
+
+
+def _equip_best_candidate(
+    gateway: GatewayClient,
+    inventory: EquipmentInventory,
+    summary: EquipSummary,
+    city_id: int,
+    city_name: str,
+    gen: General,
+    equip_type: int,
+    pool: list[EquipmentItem],
+    candidates: list[EquipmentItem],
+    current_item: Optional[EquipmentItem],
+    is_upgrade: Callable[[EquipmentItem, EquipmentItem], bool],
+    on_log: Optional[Callable[[str], None]],
+    role_note: str = "",
+    count_empty_slot: bool = True,
+    restricted_ids: Optional[set[int]] = None,
+) -> str:
+    """Thử mặc ứng viên tốt nhất cho một ô; nếu gặp ret=301 thì thử món kế tiếp."""
+
+    def _finish_without_equip() -> str:
+        if count_empty_slot:
+            if current_item is None:
+                summary.no_item_available += 1
+                return "empty"
+            summary.skipped_optimal += 1
+            return "optimal"
+        if current_item is not None and current_item.politics > 0:
+            summary.skipped_optimal += 1
+            return "optimal"
+        return "unresolved"
+
+    eligible = [it for it in candidates if restricted_ids is None or it.item_id not in restricted_ids]
+    if not eligible:
+        return _finish_without_equip()
+
+    upgradable = [it for it in eligible if current_item is None or is_upgrade(it, current_item)]
+    if not upgradable:
+        summary.skipped_optimal += 1
+        return "optimal"
+
+    for candidate in upgradable:
+        status = _equip_single_slot(
+            gateway,
+            inventory,
+            summary,
+            city_id,
+            city_name,
+            gen,
+            equip_type,
+            pool,
+            candidate,
+            current_item,
+            on_log,
+            role_note=role_note,
+        )
+        if status in ("equipped", "failed"):
+            return status
+        if restricted_ids is not None:
+            restricted_ids.add(candidate.item_id)
+
+    return _finish_without_equip()
 
 
 def _assign_standard_targets(
@@ -1138,21 +1275,7 @@ def _assign_standard_targets(
             pool.sort(key=lambda it: it.sort_key)
             current_item = inventory.equipped_by_general.get(gen.id, {}).get(equip_type)
 
-            if not pool:
-                if current_item is None:
-                    summary.no_item_available += 1
-                else:
-                    summary.skipped_optimal += 1
-                continue
-
-            candidate = pool[0]
-            if current_item is not None and (
-                (candidate.level, candidate.item_type_id) <= (current_item.level, current_item.item_type_id)
-            ):
-                summary.skipped_optimal += 1
-                continue
-
-            _equip_single_slot(
+            _equip_best_candidate(
                 gateway,
                 inventory,
                 summary,
@@ -1161,8 +1284,9 @@ def _assign_standard_targets(
                 gen,
                 equip_type,
                 pool,
-                candidate,
+                pool,
                 current_item,
+                _is_standard_upgrade,
                 on_log,
                 role_note=role_note,
             )
@@ -1201,6 +1325,7 @@ def _assign_civil_generals(
             idle_civil_targets.append(target)
 
     mayor_resolved_slots: set[tuple[int, int]] = set()
+    restricted_by_mayor_slot: dict[tuple[int, int], set[int]] = {}
 
     # Lượt 1: Thái thú ưu tiên đồ tăng Nội chính (politics > 0); nhường đồ politics == 0 cho Mưu sĩ
     if mayor_targets:
@@ -1226,23 +1351,8 @@ def _assign_civil_generals(
                     (it for it in pool if it.politics > 0),
                     key=lambda it: it.mayor_sort_key,
                 )
-
-                if not pol_candidates:
-                    if current_item is not None and current_item.politics > 0:
-                        summary.skipped_optimal += 1
-                        mayor_resolved_slots.add((gen.id, equip_type))
-                    continue
-
-                candidate = pol_candidates[0]
-                mayor_resolved_slots.add((gen.id, equip_type))
-                if current_item is not None and (
-                    (candidate.politics, candidate.level, candidate.item_type_id)
-                    <= (current_item.politics, current_item.level, current_item.item_type_id)
-                ):
-                    summary.skipped_optimal += 1
-                    continue
-
-                _equip_single_slot(
+                restricted_ids = restricted_by_mayor_slot.setdefault((gen.id, equip_type), set())
+                status = _equip_best_candidate(
                     gateway,
                     inventory,
                     summary,
@@ -1251,11 +1361,16 @@ def _assign_civil_generals(
                     gen,
                     equip_type,
                     pool,
-                    candidate,
+                    pol_candidates,
                     current_item,
+                    _is_mayor_upgrade,
                     on_log,
                     role_note=" [Thái thú]",
+                    count_empty_slot=False,
+                    restricted_ids=restricted_ids,
                 )
+                if status in ("equipped", "optimal", "failed"):
+                    mayor_resolved_slots.add((gen.id, equip_type))
 
     # Lượt 2: Mưu sĩ đang biên chế rồi mới đến Quan văn nhàn rỗi
     if tactician_targets:
@@ -1324,22 +1439,7 @@ def _assign_civil_generals(
                 pool.sort(key=lambda it: it.sort_key)
                 current_item = inventory.equipped_by_general.get(gen.id, {}).get(equip_type)
 
-                if not pool:
-                    if current_item is None:
-                        summary.no_item_available += 1
-                    else:
-                        summary.skipped_optimal += 1
-                    continue
-
-                candidate = pool[0]
-                if current_item is not None and (
-                    (candidate.politics, candidate.level, candidate.item_type_id)
-                    <= (current_item.politics, current_item.level, current_item.item_type_id)
-                ):
-                    summary.skipped_optimal += 1
-                    continue
-
-                _equip_single_slot(
+                _equip_best_candidate(
                     gateway,
                     inventory,
                     summary,
@@ -1348,10 +1448,12 @@ def _assign_civil_generals(
                     gen,
                     equip_type,
                     pool,
-                    candidate,
+                    pool,
                     current_item,
+                    _is_mayor_upgrade,
                     on_log,
                     role_note=" [Thái thú]",
+                    restricted_ids=restricted_by_mayor_slot.get((gen.id, equip_type)),
                 )
 
             processed += 1

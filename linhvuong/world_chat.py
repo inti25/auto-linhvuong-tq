@@ -1,11 +1,9 @@
-"""Kết nối kênh chat thế giới (XMLSocket `scs:scp`) và đọc thông báo Niên Thú."""
+"""Đọc thông báo hệ thống (Niên Thú xuất hiện) từ `/api/notify/history` trên Server 58+."""
 
 from dataclasses import dataclass
-import html
+from datetime import datetime, timezone
 import re
-import socket
-from typing import Callable, Optional
-
+from typing import Any, Optional
 
 STATE_NAMES: dict[int, str] = {
     1: "凉州",
@@ -48,88 +46,47 @@ STATE_VI_NAMES: dict[int, str] = {
 }
 
 _NIEN_THU_MSG_RE = re.compile(r"年兽已在(.+?)附近出现[^'\"}]*")
-_TIME_ATTR_RE = re.compile(r"\btime=(['\"])([^'\"]+)\1")
-_MSG_TAG_RE = re.compile(r"<msg>(.*?)</msg>", re.DOTALL)
-_SGWEBIM_RE = re.compile(r"SGWebIM\.swf\?([^\s\"'<>]+)")
-_SCS_RE = re.compile(r"\bscs=([^&\s\"'<>]+)")
-_SCP_RE = re.compile(r"\bscp=(\d+)")
-
-
-@dataclass(frozen=True)
-class ChatCredentials:
-    """Thông tin kết nối XMLSocket của kênh chat thế giới từ `/city`."""
-
-    host: str
-    port: int
-    char_id: str
-    id2: str
-    uid: str
-    name: str
-    uname: str
 
 
 @dataclass(frozen=True)
 class NienThuAnnouncement:
-    """Thông báo Niên Thú xuất hiện đọc từ kênh thế giới."""
+    """Thông báo Niên Thú xuất hiện đọc từ `/api/notify/history`."""
 
     state_id: int
     state_name: str
     server_time: str
     raw_message: str
+    source_id: int = 0
 
 
-def parse_city_chat_config(page_html: str) -> Optional[ChatCredentials]:
-    """Trích xuất host/port chat và tham số `SGWebIM.swf` từ HTML trang `/city`."""
-    if not page_html:
+def parse_nien_thu_announcement(
+    text_or_item: Any,
+    *,
+    server_time: str = "",
+    source_id: int = 0,
+) -> Optional[NienThuAnnouncement]:
+    """Phân tích một thông báo từ `/api/notify/history` (dict hoặc chuỗi text)."""
+    if isinstance(text_or_item, dict):
+        text = str(text_or_item.get("text") or "")
+        if not source_id:
+            try:
+                source_id = int(text_or_item.get("sourceId") or text_or_item.get("cursor") or 0)
+            except (ValueError, TypeError):
+                source_id = 0
+        if not server_time:
+            created_ms = text_or_item.get("createdAt")
+            if created_ms:
+                try:
+                    dt = datetime.fromtimestamp(float(created_ms) / 1000.0, tz=timezone.utc)
+                    server_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except (ValueError, TypeError, OSError):
+                    server_time = str(created_ms)
+    else:
+        text = str(text_or_item or "")
+
+    if not text:
         return None
-    normalized = html.unescape(page_html)
-    scs_m = _SCS_RE.search(normalized)
-    scp_m = _SCP_RE.search(normalized)
-    swf_m = _SGWEBIM_RE.search(normalized)
-    if not (scs_m and scp_m and swf_m):
-        return None
-
-    params: dict[str, str] = {}
-    for pair in swf_m.group(1).split("&"):
-        if "=" in pair:
-            k, v = pair.split("=", 1)
-            params[k] = v
-
-    char_id = params.get("id", "").strip()
-    id2 = params.get("id2", "").strip()
-    uid = params.get("uid", "").strip()
-    if not (char_id and id2 and uid):
-        return None
-
-    return ChatCredentials(
-        host=scs_m.group(1).strip(),
-        port=int(scp_m.group(1)),
-        char_id=char_id,
-        id2=id2,
-        uid=uid,
-        name=params.get("n", ""),
-        uname=params.get("un", ""),
-    )
-
-
-def build_chat_packet(tp: str, creds: ChatCredentials) -> bytes:
-    """Đóng gói XMLSocket frame chuẩn `SGWebIM.swf` (`<root len='... ' ...></root>\\0`)."""
-    inner = (
-        f"tp='{tp}' id='{creds.char_id}' id2='{creds.id2}' uid='{creds.uid}'>"
-        f"<name>{creds.name}</name><uname>{creds.uname}</uname>"
-    )
-    total = len(inner.encode("utf-8")) + 29
-    padded = str(total).ljust(8, " ")
-    return f"<root len='{padded}' {inner}</root>\x00".encode("utf-8")
-
-
-def parse_nien_thu_announcement(frame: str) -> Optional[NienThuAnnouncement]:
-    """Phân tích một XML frame từ chat server; trả về `NienThuAnnouncement` nếu khớp Niên Thú."""
-    if not frame:
-        return None
-    msg_m = _MSG_TAG_RE.search(frame)
-    body = msg_m.group(1) if msg_m else frame
-    match = _NIEN_THU_MSG_RE.search(body)
+    match = _NIEN_THU_MSG_RE.search(text)
     if not match:
         return None
 
@@ -138,60 +95,32 @@ def parse_nien_thu_announcement(frame: str) -> Optional[NienThuAnnouncement]:
     if state_id is None:
         return None
 
-    time_m = _TIME_ATTR_RE.search(frame)
-    server_time = time_m.group(2).strip() if time_m else ""
     return NienThuAnnouncement(
         state_id=state_id,
         state_name=state_name,
         server_time=server_time,
         raw_message=match.group(0).strip(),
+        source_id=source_id,
     )
 
 
-def _default_socket_factory(host: str, port: int, timeout: float):
-    return socket.create_connection((host, port), timeout=timeout)
-
-
 class WorldChatClient:
-    """Client đọc thông báo hệ thống trên kênh chat thế giới (XMLSocket)."""
+    """Client đọc thông báo Niên Thú từ API `/api/notify/history` của Server 58+."""
 
-    def __init__(self, socket_factory: Optional[Callable[[str, int, float], socket.socket]] = None):
-        self._socket_factory = socket_factory or _default_socket_factory
+    def fetch_latest_nien_thu(self, gateway: Any) -> Optional[NienThuAnnouncement]:
+        """Lấy thông báo Niên Thú mới nhất từ `/api/notify/history`."""
+        resp = gateway.notify_history() if hasattr(gateway, "notify_history") else None
+        if not isinstance(resp, dict) or int(resp.get("ret", -1)) != 0:
+            return None
+        items = resp.get("items") or []
+        if not isinstance(items, list):
+            return None
 
-    def fetch_latest_nien_thu(
-        self, creds: ChatCredentials, timeout: float = 3.0
-    ) -> Optional[NienThuAnnouncement]:
-        """Kết nối socket chat, gửi `login` + `reqamsg` và lấy thông báo Niên Thú mới nhất."""
-        sock = self._socket_factory(creds.host, creds.port, timeout)
         latest: Optional[NienThuAnnouncement] = None
-        buf = bytearray()
-        try:
-            sock.settimeout(timeout)
-            sock.sendall(build_chat_packet("login", creds))
-            sock.sendall(build_chat_packet("reqamsg", creds))
-
-            while True:
-                try:
-                    chunk = sock.recv(4096)
-                except socket.timeout:
-                    break
-                if not chunk:
-                    break
-                buf.extend(chunk)
-                while b"\x00" in buf:
-                    idx = buf.index(0)
-                    raw_frame = bytes(buf[:idx]).decode("utf-8", errors="replace")
-                    del buf[: idx + 1]
-                    ann = parse_nien_thu_announcement(raw_frame)
-                    if ann is not None and (
-                        latest is None or ann.server_time >= latest.server_time
-                    ):
-                        latest = ann
-                    if "tp='newsmsg'" in raw_frame or 'tp="newsmsg"' in raw_frame:
-                        sock.settimeout(min(timeout, 0.3))
-        finally:
-            try:
-                sock.close()
-            except Exception:
-                pass
+        for item in items:
+            ann = parse_nien_thu_announcement(item)
+            if ann is None:
+                continue
+            if latest is None or (ann.source_id, ann.server_time) >= (latest.source_id, latest.server_time):
+                latest = ann
         return latest

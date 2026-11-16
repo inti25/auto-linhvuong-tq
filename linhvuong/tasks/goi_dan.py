@@ -152,23 +152,12 @@ class GoiDan:
 
     def call_target(self) -> tuple[Optional[Target], Optional[str]]:
         """Kích hoạt API gọi quái theo đúng chế độ đã cấu hình, xoay vòng qua target_types."""
-        # Chuyển focus thành nếu có city_id
+        # Chuyển focus thành qua /api/city/current
         if self.city_id:
-            resp_move = self.ctx.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""}) or {}
+            resp_move = self.ctx.gateway.set_current_city(self.city_id) or {}
             ret_move = resp_move.get("ret", RET_OK)
             if ret_move == 110 or ret_move == RET_CAPTCHA_REQUIRED:
                 raise CaptchaRequired()
-        else:
-            # Tương thích với test mock cũ
-            resp_move = self.ctx.gateway.call("City.ashx", 50, {}) or {}
-            ret_move = resp_move.get("ret", RET_OK)
-            if ret_move == 110 or ret_move == RET_CAPTCHA_REQUIRED:
-                raise CaptchaRequired()
-            if "new_target_id" in resp_move:
-                x, y = coords_from_mid(int(resp_move["new_target_mid"]))
-                return Target(x, y, int(resp_move["new_target_id"]), int(resp_move.get("new_target_type", self.target_type))), None
-            if ret_move != RET_OK:
-                return None, f"call_failed:{ret_move}"
 
         total_types = len(self.target_types)
         last_ret = RET_OK

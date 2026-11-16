@@ -30,16 +30,64 @@ class FakeServer:
     def __init__(self, handlers=None):
         self.handlers = handlers or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
+
+    def _resolve(self, key):
+        aliases = {
+            "/api/city/pagebuilding": "Common.ashx?id=77",
+            "/api/building/list": "City.ashx?id=5",
+            "/api/city/info": "City.ashx?id=6",
+            "/api/resource/info": "City.ashx?id=20",
+            "/api/city/current": "City.ashx?id=50",
+            "/api/building/update": "OPT.ashx?id=65",
+        }
+        handler = self.handlers.get(key)
+        if handler is None and key in aliases:
+            handler = self.handlers.get(aliases[key])
+        if handler is None:
+            raw = {"ret": 0}
+        elif callable(handler):
+            raw = handler()
+        elif isinstance(handler, list):
+            raw = handler.pop(0)
+        else:
+            raw = handler
+        if not isinstance(raw, dict):
+            return raw
+
+        # Chuẩn hóa mock data sang format REST Server 58
+        if key == "/api/building/list" and "items" not in raw:
+            src = raw.get("infos") or raw.get("buildings") or raw.get("build") or []
+            items = []
+            for b in src:
+                if isinstance(b, dict):
+                    items.append({
+                        "m_lpos": b.get("m_lpos", b.get("pid", 0)),
+                        "m_lgid": b.get("m_lgid", b.get("gid", 0)),
+                        "m_llevel": b.get("m_llevel", b.get("level", 0)),
+                        "m_szname": b.get("m_szname", b.get("name", "")),
+                    })
+                elif isinstance(b, (list, tuple)) and len(b) >= 4:
+                    items.append({"m_lpos": b[0], "m_lgid": b[1], "m_szname": b[2], "m_llevel": b[3]})
+            return {**raw, "items": items}
+        if key == "/api/city/info" and isinstance(raw.get("data"), dict):
+            d = dict(raw["data"])
+            if "morale" in d and "m_lmorale_current" not in d:
+                d["m_lmorale_current"] = d["morale"]
+            if "anger" in d and "m_lmorale_complaint" not in d:
+                d["m_lmorale_complaint"] = d["anger"]
+            return {**raw, "data": d}
+        return raw
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        self.calls.append((path, dict(params or {})))
+        return Resp(self._resolve(path))
 
     def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
+        key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
         self.calls.append((key, dict(data or {})))
-        handler = self.handlers.get(key, {"ret": 0})
-        if callable(handler):
-            return Resp(handler())
-        if isinstance(handler, list):
-            return Resp(handler.pop(0))
-        return Resp(handler)
+        return Resp(self._resolve(key))
 
 
 def test_building_task_upgrades_first_eligible_building():
@@ -66,12 +114,12 @@ def test_building_task_upgrades_first_eligible_building():
     out = task.run_once()
     assert out == "upgrading"
 
-    # Kiểm tra gọi OPT.ashx?id=65 với pid=1, gid=1, type=1
-    upgrade_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
-    assert upgrade_call["pid"] == "1"
+    # Kiểm tra gọi /api/building/update với posId=1, gid=1, type=1, cityTentId=101
+    upgrade_call = [d for k, d in server.calls if k == "/api/building/update"][0]
+    assert upgrade_call["posId"] == "1"
     assert upgrade_call["gid"] == "1"
     assert upgrade_call["type"] == "1"
-    assert upgrade_call["tid"] == "101"
+    assert upgrade_call["cityTentId"] == "101"
 
 
 def test_building_task_busy_when_slots_full():
@@ -161,11 +209,11 @@ def test_building_task_real_server_format_and_upgrade():
     out = task.run_once()
     assert out == "upgrading"
 
-    # Kiểm tra gọi OPT.ashx?id=65 với pid=17, gid=9, tid=101
-    upgrade_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
-    assert upgrade_call["pid"] == "17"
+    # Kiểm tra gọi /api/building/update với posId=17, gid=9, cityTentId=101
+    upgrade_call = [d for k, d in server.calls if k == "/api/building/update"][0]
+    assert upgrade_call["posId"] == "17"
     assert upgrade_call["gid"] == "9"
-    assert upgrade_call["tid"] == "101"
+    assert upgrade_call["cityTentId"] == "101"
 
 
 def test_building_task_real_server_slot_busy():
@@ -211,9 +259,9 @@ def test_building_task_upgrades_up_to_3_slots():
     out = task.run_once()
     assert out == "upgrading"
 
-    upgrade_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    upgrade_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(upgrade_calls) == 3
-    called_pids = [c["pid"] for c in upgrade_calls]
+    called_pids = [c["posId"] for c in upgrade_calls]
     assert called_pids == ["1", "2", "3"]
 
 
@@ -248,9 +296,9 @@ def test_building_task_skips_busy_pids_and_uses_remaining_slots():
     assert out == "upgrading"
 
     # Slot bận = 1, max_slots = 3 -> còn 2 slot trống -> gửi pid 1 và pid 3
-    upgrade_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    upgrade_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(upgrade_calls) == 2
-    called_pids = [c["pid"] for c in upgrade_calls]
+    called_pids = [c["posId"] for c in upgrade_calls]
     assert called_pids == ["1", "3"]
 
 
@@ -276,12 +324,12 @@ def test_building_task_downgrades_when_cur_lvl_greater_than_target():
     out = task.run_once()
     assert out == "upgrading"
 
-    # Kiểm tra gọi OPT.ashx?id=65 với pid=2, gid=3, type="2" (hạ cấp)
-    opt_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
-    assert opt_call["pid"] == "2"
+    # Kiểm tra gọi /api/building/update với posId=2, gid=3, type="2" (hạ cấp)
+    opt_call = [d for k, d in server.calls if k == "/api/building/update"][0]
+    assert opt_call["posId"] == "2"
     assert opt_call["gid"] == "3"
     assert opt_call["type"] == "2"
-    assert opt_call["tid"] == "101"
+    assert opt_call["cityTentId"] == "101"
 
 
 def test_building_task_demolish_to_zero_freely():
@@ -306,11 +354,11 @@ def test_building_task_demolish_to_zero_freely():
     out = task.run_once()
     assert out == "upgrading"
 
-    opt_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
-    assert opt_call["pid"] == "1"
+    opt_call = [d for k, d in server.calls if k == "/api/building/update"][0]
+    assert opt_call["posId"] == "1"
     assert opt_call["gid"] == "1"
     assert opt_call["type"] == "2"
-    assert opt_call["tid"] == "101"
+    assert opt_call["cityTentId"] == "101"
 
 
 def test_building_task_downgrade_with_auto_speedup():
@@ -390,12 +438,12 @@ def test_process_speedup_already_below_target_hours():
 
 
 def test_process_speedup_max_10_iterations_cap():
-    # Thời gian thi công cực lớn: bị chặn lại ở tối đa 10 lần như ZBuild
+    # Thời gian thi công cực lớn: bị chặn lại ở tối đa 10 lần như ZBuild (gid=4 Kho có hỗ trợ tăng tốc)
     server = FakeServer(
         handlers={
             "Common.ashx?id=77": {
                 "ret": 0,
-                "list": [[101, "NB", 0, 0, [[1, 1, 20, 1, 10_000_000]], []]],
+                "list": [[101, "NB", 0, 0, [[1, 4, 20, 1, 10_000_000]], []]],
             },
             "OPT.ashx?id=69": {"ret": 0},
         }
@@ -483,13 +531,13 @@ def test_building_task_mixed_upgrade_and_downgrade_priority_order():
     out = task.run_once()
     assert out == "upgrading"
 
-    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    opt_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(opt_calls) == 2
     # Item 1: pid=1, type="1"
-    assert opt_calls[0]["pid"] == "1"
+    assert opt_calls[0]["posId"] == "1"
     assert opt_calls[0]["type"] == "1"
     # Item 2: pid=2, type="2"
-    assert opt_calls[1]["pid"] == "2"
+    assert opt_calls[1]["posId"] == "2"
     assert opt_calls[1]["type"] == "2"
 
 
@@ -522,18 +570,18 @@ def test_building_task_auto_opens_box_on_insufficient_resources_and_retries_succ
     out = task.run_once()
     assert out == "upgrading"
 
-    # Kiểm tra gọi City.ashx?id=50 với tid=101
-    switch_calls = [d for k, d in server.calls if k == "City.ashx?id=50"]
+    # Kiểm tra gọi /api/city/current với cityTentId=101
+    switch_calls = [d for k, d in server.calls if k == "/api/city/current"]
     assert len(switch_calls) == 1
-    assert switch_calls[0]["tid"] == "101"
+    assert switch_calls[0]["cityTentId"] == "101"
 
     # Kiểm tra gọi Common.ashx?id=48 mở Dân Sinh Bảo Đỉnh (lBoxID=24)
     box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
     assert len(box_calls) == 1
     assert box_calls[0]["lBoxID"] == "24"
 
-    # Kiểm tra gọi OPT.ashx?id=65 2 lần (lần 1 bị 32, lần 2 thành công)
-    upgrade_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    # Kiểm tra gọi /api/building/update 2 lần (lần 1 bị 32, lần 2 thành công)
+    upgrade_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(upgrade_calls) == 2
 
 
@@ -681,10 +729,10 @@ def test_building_task_skips_error_261_and_upgrades_next_eligible():
     assert any("Đang nâng cấp slot 2" in m for m in logs)
 
     # Kiểm tra server nhận 2 cuộc gọi OPT.ashx?id=65 (pid 1 rồi tới pid 2)
-    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    opt_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(opt_calls) == 2
-    assert opt_calls[0]["pid"] == "1"
-    assert opt_calls[1]["pid"] == "2"
+    assert opt_calls[0]["posId"] == "1"
+    assert opt_calls[1]["posId"] == "2"
 
 
 def test_building_task_skips_multiple_261_and_fills_available_slots():
@@ -723,9 +771,9 @@ def test_building_task_skips_multiple_261_and_fills_available_slots():
     out = task.run_once()
     assert out == "upgrading"
 
-    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    opt_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(opt_calls) == 4
-    assert [c["pid"] for c in opt_calls] == ["1", "2", "3", "4"]
+    assert [c["posId"] for c in opt_calls] == ["1", "2", "3", "4"]
 
 
 def test_building_task_all_blocked_by_261_returns_blocked():
@@ -807,7 +855,7 @@ def test_building_task_deferred_queue_tests_errors_261_and_245_last():
     res1 = task.run_once()
     assert res1 == "upgrading"
     assert task.deferred_pids == {1, 2}
-    calls_cycle1 = [d["pid"] for k, d in server.calls if k == "OPT.ashx?id=65"]
+    calls_cycle1 = [d["posId"] for k, d in server.calls if k == "/api/building/update"]
     assert calls_cycle1 == ["1", "2", "3"]
 
     # Vòng lặp 2: (pid 3 đã lên cấp 10 tức là đã xong)
@@ -816,7 +864,7 @@ def test_building_task_deferred_queue_tests_errors_261_and_245_last():
 
     res2 = task.run_once()
     assert res2 == "upgrading"
-    calls_cycle2 = [d["pid"] for k, d in server.calls if k == "OPT.ashx?id=65"]
+    calls_cycle2 = [d["posId"] for k, d in server.calls if k == "/api/building/update"]
     # Kỳ vọng: pid 4 (bình thường) được duyệt trước tiên, sau đó mới tới pid 1 (hoãn)
     assert calls_cycle2 == ["4", "1"]
     # pid 1 nâng cấp thành công nên được gỡ khỏi deferred_pids, pid 4 bị 261 nên vào deferred_pids
@@ -873,7 +921,7 @@ def test_building_task_even_upgrade_ordering():
     gw_default = GatewayClient(57, server_default, sleep=lambda s: None)
     task_default = BuildingTask(gw_default, city_id=101, plans=plans, max_slots=5, even_upgrade=False)
     task_default.run_once()
-    calls_default = [d["pid"] for k, d in server_default.calls if k == "OPT.ashx?id=65"]
+    calls_default = [d["posId"] for k, d in server_default.calls if k == "/api/building/update"]
     assert calls_default == ["1", "2", "3", "4", "5"]
 
     # 2. Khi even_upgrade=True:
@@ -892,7 +940,7 @@ def test_building_task_even_upgrade_ordering():
     gw_even = GatewayClient(57, server_even, sleep=lambda s: None)
     task_even = BuildingTask(gw_even, city_id=101, plans=plans, max_slots=5, even_upgrade=True)
     task_even.run_once()
-    calls_even = [d["pid"] for k, d in server_even.calls if k == "OPT.ashx?id=65"]
+    calls_even = [d["posId"] for k, d in server_even.calls if k == "/api/building/update"]
     assert calls_even == ["2", "5", "3", "1", "4"]
 
 
@@ -1018,8 +1066,8 @@ def test_building_task_upgrades_lowest_level_of_same_type_first():
 
     # Mặc định theo quy hoạch nhóm (ADR-0016), ô có cấp thấp hơn (pid=12, level 3)
     # phải được nâng trước pid=11 (level 7)
-    upgrade_call = [d for k, d in server.calls if k == "OPT.ashx?id=65"][0]
-    assert upgrade_call["pid"] == "12"
+    upgrade_call = [d for k, d in server.calls if k == "/api/building/update"][0]
+    assert upgrade_call["posId"] == "12"
     assert upgrade_call["gid"] == "3"
 
 
@@ -1027,7 +1075,7 @@ def test_building_task_skips_resource_starved_building_and_builds_next_eligible(
     def opt_handler():
         call = server.calls[-1]
         data = call[1]
-        if data.get("pid") == "1":
+        if data.get("posId") == "1":
             return {"ret": 32}
         return {"ret": 0}
 
@@ -1064,10 +1112,10 @@ def test_building_task_skips_resource_starved_building_and_builds_next_eligible(
     res = task.run_once()
     assert res == "upgrading"
 
-    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    opt_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(opt_calls) == 2
-    assert opt_calls[0]["pid"] == "1"
-    assert opt_calls[1]["pid"] == "2"
+    assert opt_calls[0]["posId"] == "1"
+    assert opt_calls[1]["posId"] == "2"
 
     box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
     assert len(box_calls) == 0
@@ -1082,7 +1130,7 @@ def test_building_task_opens_one_box_when_all_starved_then_retries_from_top_in_p
         data = call[1]
         if not box_opened:
             return {"ret": 32}
-        if data.get("pid") == "1":
+        if data.get("posId") == "1":
             return {"ret": 0}
         return {"ret": 32}
 
@@ -1129,44 +1177,46 @@ def test_building_task_opens_one_box_when_all_starved_then_retries_from_top_in_p
     assert len(box_calls) == 1
     assert box_calls[0]["lBoxID"] == "24"
 
-    opt_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    opt_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(opt_calls) == 3
-    assert opt_calls[0]["pid"] == "1"
-    assert opt_calls[1]["pid"] == "2"
-    assert opt_calls[2]["pid"] == "1"
+    assert opt_calls[0]["posId"] == "1"
+    assert opt_calls[1]["posId"] == "2"
+    assert opt_calls[2]["posId"] == "1"
 
 
 def test_building_task_does_not_activate_boost_when_already_active():
     BuildingTask._last_boost_act_time = 0.0
     server = FakeServer(
         handlers={
-            "Common.ashx?id=77": {
+            "/api/city/pagebuilding": {
                 "ret": 0,
-                # Real Linh Vương server format: [city_id, name, val2, val3, [upgrades], [techs]]
-                # val3 is DS kiến trúc (remaining seconds > 0, e.g. "2234:39:14")
-                "list": [[101, "NB", 596952, "2234:39:14", [], []]],
+                "data": {
+                    "ret": 0,
+                    "plus_finish": "2234:39:14",
+                    "list": [[101, "NB", 738765, 2792887, [], []]],
+                },
             },
-            "City.ashx?id=5": {
+            "/api/building/list": {
                 "ret": 0,
-                "buildings": [{"pid": 1, "gid": 1, "level": 10}],
+                "items": [{"m_lpos": 1, "m_lgid": 1, "m_llevel": 10}],
             },
-            "OPT.ashx?id=65": {"ret": 0},
+            "/api/building/update": {"ret": 0},
             "OPT.ashx?id=69": {"ret": 0},
         }
     )
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     plans = [BuildingPlan(pid=1, gid=1, target_level=12, name="Quan Phủ")]
     task = BuildingTask(
         gw,
         city_id=101,
         plans=plans,
         auto_comfort=False,
-        auto_boost=True,  # Bật DS kiến trúc
+        auto_boost=True,
     )
     res = task.run_once()
     assert res == "upgrading"
 
-    # Khi DS kiến trúc còn hạn ("2234:39:14" > 0), tuyệt đối KHÔNG gọi kích hoạt OPT.ashx?id=69 (type=3)
+    # Khi plus_finish còn hạn ("2234:39:14" > 0), tuyệt đối KHÔNG gọi kích hoạt OPT.ashx?id=69 (type=3)
     boost_calls = [d for k, d in server.calls if k == "OPT.ashx?id=69" and d.get("type") == "3"]
     assert len(boost_calls) == 0, f"DS kiến trúc đang còn hạn nhưng lại bị kích hoạt! Calls: {boost_calls}"
 
@@ -1174,33 +1224,22 @@ def test_building_task_does_not_activate_boost_when_already_active():
 def test_parse_boost_remaining_time_various_formats():
     from linhvuong.tasks.building import parse_boost_remaining_time
 
-    # 1. String HH:MM:SS (e.g. user screenshot 2234:39:14)
-    resp = {"ret": 0, "list": [[101, "NB", 0, "2234:39:14", []]]}
-    assert parse_boost_remaining_time(resp, 101) == 2234 * 3600 + 39 * 60 + 14
+    # 1. String HH:MM:SS từ plus_finish root
+    assert parse_boost_remaining_time({"ret": 0, "plus_finish": "2234:39:14", "list": []}, 101) == 2234 * 3600 + 39 * 60 + 14
 
     # 2. String MM:SS
-    resp = {"ret": 0, "list": [[101, "NB", 0, "39:14", []]]}
-    assert parse_boost_remaining_time(resp, 101) == 39 * 60 + 14
+    assert parse_boost_remaining_time({"ret": 0, "plus_finish": "39:14"}, 101) == 39 * 60 + 14
 
     # 3. Numeric integer seconds
-    resp = {"ret": 0, "list": [[101, "NB", 0, 3600, []]]}
-    assert parse_boost_remaining_time(resp, 101) == 3600
+    assert parse_boost_remaining_time({"ret": 0, "plus_finish": 3600}, 101) == 3600
 
-    # 4. Fallback to val2 (20% speedup) if val3 is 0
-    resp = {"ret": 0, "list": [[101, "NB", 1800, 0, []]]}
-    assert parse_boost_remaining_time(resp, 101) == 1800
+    # 4. Server 58: list[i][2] là map_id (vd 738765), list[i][3] là timestamp khác — KHÔNG được đọc nhầm là plus_finish!
+    resp_map_id = {"ret": 0, "plus_finish": 0, "list": [[10129, "inca", 738765, 2792887, [], []]]}
+    assert parse_boost_remaining_time(resp_map_id, 10129) == 0
 
-    # 5. Dict list
-    resp = {"ret": 0, "list": [{"cid": 101, "val3": "10:20:30"}]}
-    assert parse_boost_remaining_time(resp, 101) == 10 * 3600 + 20 * 60 + 30
-
-    # 6. Target city not in list (e.g. camp ID), fallback to first city
-    resp = {"ret": 0, "list": [[101, "NB", 0, 7200, []]]}
-    assert parse_boost_remaining_time(resp, 999) == 7200
-
-    # 7. Expired cases
-    assert parse_boost_remaining_time({"ret": 0, "list": [[101, "NB", 0, 0, []]]}, 101) == 0
-    assert parse_boost_remaining_time({"ret": 0, "list": [[101, "NB", "0", "00:00:00", []]]}, 101) == 0
+    # 5. Expired / missing cases
+    assert parse_boost_remaining_time({"ret": 0, "plus_finish": 0}, 101) == 0
+    assert parse_boost_remaining_time({"ret": 0, "plus_finish": "00:00:00"}, 101) == 0
     assert parse_boost_remaining_time({"ret": 0, "list": []}, 101) == 0
     assert parse_boost_remaining_time({}, 101) == 0
 
@@ -1295,7 +1334,7 @@ def test_building_task_caches_c77_within_cycle():
     gw = GatewayClient(53, server, sleep=lambda s: None)
     task = BuildingTask(gw, city_id=101, plans=[], auto_comfort=False, auto_boost=True)
     task.run_once()
-    c77_calls = [c for c in server.calls if c[0] == "Common.ashx?id=77"]
+    c77_calls = [c for c in server.calls if c[0] == "/api/city/pagebuilding"]
     # Cả check_and_activate_boost và get_active_upgrade_slots cùng chia sẻ 1 lần gọi
     assert len(c77_calls) == 1
 
@@ -1357,7 +1396,7 @@ def test_building_task_does_not_build_when_slot_check_fails():
 
     out = task.run_once()
     assert out == "slots_read_failed"
-    assert [d for k, d in server.calls if k == "OPT.ashx?id=65"] == []
+    assert [d for k, d in server.calls if k == "/api/building/update"] == []
 
 
 def test_building_task_shared_c77_miss_requeries_own_city_before_fallback():
@@ -1367,36 +1406,47 @@ def test_building_task_shared_c77_miss_requeries_own_city_before_fallback():
     class _PerCityServer:
         def __init__(self):
             self.calls = []
+            self.cookies = {"uid": "95"}
 
-        def post(self, url, data=None, headers=None, timeout=None):
-            key = url.split("/GateWay/")[1]
-            self.calls.append((key, dict(data or {})))
-            if key == "Common.ashx?id=77":
-                cid = int((data or {}).get("cid", 0))
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/city/pagebuilding":
+                cid = int(p.get("cityTentId", 0))
                 if cid == 101:
-                    return Resp({"ret": 0, "list": [[101, "C1", 0, 1000, [], []]]})
+                    return Resp({"ret": 0, "data": {"ret": 0, "plus_finish": 1000, "list": [[101, "C1", 738765, 1000, [], []]]}})
                 return Resp({
                     "ret": 0,
-                    "list": [[102, "C2", 0, 1000, [[1, 1, 5, 1, 120], [2, 2, 5, 1, 240], [3, 3, 5, 1, 360]], []]],
+                    "data": {
+                        "ret": 0,
+                        "plus_finish": 1000,
+                        "list": [[102, "C2", 738765, 1000, [[1, 1, 5, 1, 120], [2, 2, 5, 1, 240], [3, 3, 5, 1, 360]], []]],
+                    },
                 })
+            if path == "/api/building/list":
+                return Resp({"ret": 0, "data": {"items": [{"m_lpos": 4, "m_lgid": 4, "m_szname": "Kho", "m_llevel": 5}]}})
+            return Resp({"ret": 0})
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((key, dict(data or {})))
             if key == "Build.ashx?id=2":
                 return Resp({"ret": 8})
-            if key == "City.ashx?id=5":
-                return Resp({"ret": 0, "infos": [[4, 4, "Kho", 5, 0, 0]]})
             return Resp({"ret": 0})
 
     server = _PerCityServer()
-    gw = GatewayClient(57, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     t1 = BuildingTask(gw, city_id=101, plans=[], max_slots=3, auto_comfort=False, auto_boost=False)
     t2 = BuildingTask(gw, city_id=102, plans=[BuildingPlan(pid=4, gid=4, target_level=10)], max_slots=3, auto_comfort=False, auto_boost=False)
 
-    shared = gw.call("Common.ashx", 77, {"cid": "101", "_": ""})
+    shared = gw.page_building(101)
     t1.set_c77_cache(shared)
     t2.set_c77_cache(shared)
 
     assert t1.run_once() == "all_buildings_completed"
     assert t2.run_once() == "slots_busy"
-    assert [d for k, d in server.calls if k == "OPT.ashx?id=65" and str(d.get("tid")) == "102"] == []
+    assert [d for k, d in server.calls if k == "/api/building/update" and str(d.get("cityTentId")) == "102"] == []
 
 
 def test_building_task_rechecks_slots_and_stops_on_unexpected_opt65_failure_when_full():
@@ -1431,7 +1481,7 @@ def test_building_task_rechecks_slots_and_stops_on_unexpected_opt65_failure_when
 
     out = task.run_once()
     assert out == "slots_busy"
-    opt65_calls = [d for k, d in server.calls if k == "OPT.ashx?id=65"]
+    opt65_calls = [d for k, d in server.calls if k == "/api/building/update"]
     assert len(opt65_calls) == 1
 
 
@@ -1446,14 +1496,14 @@ def test_chest_catalog_and_resource_box_constants():
 
 def test_open_single_chest_api48_with_and_without_city_switch():
     # 1. Rương cần chuyển thành (Dân Sinh Bảo Nang -> id=1)
-    server = FakeServer(handlers={"City.ashx?id=50": {"ret": 0}, "Common.ashx?id=48": {"ret": 0}})
-    gw = GatewayClient(57, server, sleep=lambda s: None)
+    server = FakeServer(handlers={"/api/city/current": {"ret": 0}, "Common.ashx?id=48": {"ret": 0}})
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     assert chest_needs_city_switch("民生之囊 - Dân Sinh Bảo Nang") is True
 
     ok, ret, _msg = open_single_chest(gw, "民生之囊 - Dân Sinh Bảo Nang", city_id=101)
     assert (ok, ret) == (True, 0)
-    assert [k for k, _ in server.calls] == ["City.ashx?id=50", "Common.ashx?id=48"]
-    assert server.calls[0][1]["tid"] == "101"
+    assert [k for k, _ in server.calls] == ["/api/city/current", "Common.ashx?id=48"]
+    assert server.calls[0][1]["cityTentId"] == "101"
     assert server.calls[1][1]["lBoxID"] == "1"
 
     # 2. Từ chối mở rương cần chuyển thành nếu city_id là Doanh trại (<= 0) hoặc None
@@ -1474,7 +1524,7 @@ def test_open_single_chest_api48_with_and_without_city_switch():
 
 def test_open_single_chest_special_gift_pack_api69():
     server = FakeServer(handlers={"OPT.ashx?id=69": {"ret": 0}})
-    gw = GatewayClient(57, server, sleep=lambda s: None)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
 
     chest = "金碧辉煌礼包 - Kim Bích Huy Hoàng Lễ Bao"
     assert chest_needs_city_switch(chest) is False
@@ -1488,18 +1538,28 @@ def test_open_single_chest_special_gift_pack_api69():
     assert payload["paytype"] == "1"
 
 
-def test_run_batch_open_chest_multithreaded_success():
-    lock = threading.Lock()
+def test_run_batch_open_chest_bulk_api_success():
+    """Trên Server 58+, các rương thuộc bulkAllowed dùng Optimization.ashx?action=bulk-start + bulk-status."""
     recorded_calls = []
 
-    class _ThreadSafeServer:
+    class _BulkServer:
         def post(self, url, data=None, headers=None, timeout=None):
-            key = url.split("/GateWay/")[1]
-            with lock:
-                recorded_calls.append((key, dict(data or {})))
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1]
+            recorded_calls.append((key, dict(data or {})))
+            if key == "Optimization.ashx?action=capabilities":
+                return Resp({"ret": 0, "bulkEnabled": True, "bulkMax": 99, "bulkAllowed": [5]})
+            if key == "Optimization.ashx?action=bulk-start":
+                return Resp({
+                    "ret": 0,
+                    "requestId": (data or {})["requestId"],
+                    "boxId": 5,
+                    "planned": 10,
+                    "completed": 10,
+                    "state": 1,
+                })
             return Resp({"ret": 0})
 
-    gw = GatewayClient(57, _ThreadSafeServer(), sleep=lambda s: None)
+    gw = GatewayClient(58, _BulkServer(), sleep=lambda s: None)
     logs = []
     progress_events = []
 
@@ -1513,50 +1573,50 @@ def test_run_batch_open_chest_multithreaded_success():
     )
 
     assert summary["success_count"] == 10
-    assert summary["failed_count"] == 0
     assert summary["completed"] == 10
-    assert summary["total"] == 10
     assert summary["aborted_reason"] is None
-    assert len(recorded_calls) == 10
+    bulk_calls = [d for k, d in recorded_calls if k == "Optimization.ashx?action=bulk-start"]
+    assert len(bulk_calls) == 1
+    assert bulk_calls[0]["boxId"] == "5"
+    assert bulk_calls[0]["limit"] == "10"
     assert progress_events[-1] == (10, 10, 100.0)
-    for idx in range(1, 11):
-        assert any(f"Lượt {idx}/10" in line for line in logs)
 
 
-def test_run_batch_open_chest_aborts_on_10014_out_of_stock():
-    lock = threading.Lock()
-    call_counter = {"n": 0}
+def test_run_batch_open_chest_bulk_aborts_on_8108_out_of_stock():
+    chest_name = "神武之囊 - Thần Vũ Bảo Nang"
+    box_id = int(CHEST_MAPPING[chest_name])
 
-    class _OutOfStockServer:
+    class _OutServer:
         def post(self, url, data=None, headers=None, timeout=None):
-            with lock:
-                call_counter["n"] += 1
-                idx = call_counter["n"]
-            if idx <= 2:
-                return Resp({"ret": 0})
-            return Resp({"ret": 10014})
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1]
+            if key == "Optimization.ashx?action=capabilities":
+                return Resp({"ret": 0, "bulkEnabled": True, "bulkMax": 99, "bulkAllowed": [box_id]})
+            if key == "Optimization.ashx?action=bulk-start":
+                return Resp({"ret": 8108, "errMsg": "没有可用宝箱或配套钥匙。"})
+            return Resp({"ret": 0})
 
-    gw = GatewayClient(57, _OutOfStockServer(), sleep=lambda s: None)
+    gw = GatewayClient(58, _OutServer(), sleep=lambda s: None)
     logs = []
     summary = run_batch_open_chest(
         gateway=gw,
-        chest_name="神武之囊 - Thần Vũ Bảo Nang",
+        chest_name=chest_name,
         times=30,
-        max_workers=5,
         on_log=logs.append,
     )
-
     assert summary["aborted_reason"] == "out_of_stock"
-    assert summary["completed"] < 30
-    assert any("10014" in m for m in logs)
+    assert summary["last_ret"] == 8108
+    assert summary["completed"] == 0
 
 
-def test_run_batch_open_chest_aborts_on_110_captcha():
+def test_run_batch_open_chest_fallback_single_when_bulk_disabled_and_aborts_on_captcha():
     class _CaptchaServer:
         def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1]
+            if key == "Optimization.ashx?action=capabilities":
+                return Resp({"ret": 0, "bulkEnabled": False, "bulkAllowed": []})
             return Resp({"ret": 110})
 
-    gw = GatewayClient(57, _CaptchaServer(), sleep=lambda s: None)
+    gw = GatewayClient(58, _CaptchaServer(), sleep=lambda s: None)
     stop_ev = threading.Event()
     logs = []
     summary = run_batch_open_chest(
@@ -1571,5 +1631,55 @@ def test_run_batch_open_chest_aborts_on_110_captcha():
     assert summary["aborted_reason"] == "captcha"
     assert stop_ev.is_set() is True
     assert any("Captcha" in m for m in logs)
+
+
+def test_process_speedup_skips_non_speeduppable_buildings_and_avoids_ret_1_spam():
+    """Quan Phủ (1), Thành Tường (2), Cung Điện (54), Bích Lũy (55) và công trình NPC (22..53) không hỗ trợ tăng tốc;
+    process_speedup phải bỏ qua chúng để tránh gọi OPT.ashx?id=69 gây lỗi ret=1 lặp lại, trong khi vẫn tăng tốc công trình hợp lệ.
+    """
+    server = FakeServer(
+        handlers={
+            "/api/city/pagebuilding": {
+                "ret": 0,
+                "data": {
+                    "ret": 0,
+                    "plus_finish": 1000,
+                    "list": [
+                        [
+                            10129,
+                            "1",
+                            738765,
+                            2792887,
+                            [
+                                [8, 1, 9, 1, 7200],   # Quan Phủ (gid=1) -> không tăng tốc
+                                [0, 2, 5, 1, 7200],   # Thành Tường (gid=2) -> không tăng tốc
+                                [2, 54, 1, 1, 7200],  # Cung Điện (gid=54) -> không tăng tốc
+                                [3, 55, 1, 1, 7200],  # Bích Lũy (gid=55) -> không tăng tốc
+                                [4, 22, 1, 1, 7200],  # Công trình NPC (gid=22..53) -> không tăng tốc
+                                [9, 3, 6, 1, 7200],   # Dân Phòng (gid=3) -> hợp lệ, giảm 50% (7200 -> 3600 <= 3600)
+                            ],
+                            [],
+                        ]
+                    ],
+                },
+            },
+            "OPT.ashx?id=69": lambda: {"ret": 0}
+            if server.calls[-1][1].get("param1") == "9"
+            else {"ret": 1, "errMsg": "操作失败，请稍后再试"},
+        }
+    )
+    gw = GatewayClient(58, server, sleep=lambda s: None)
+    logs: list[str] = []
+    task = BuildingTask(gw, city_id=10129, plans=[], auto_speedup=True, speedup_hours=1.0, paytype=2, notify=logs.append)
+
+    speedup_count = task.process_speedup()
+    assert speedup_count == 1
+
+    calls = [d for k, d in server.calls if k == "OPT.ashx?id=69" and d.get("type") == "1"]
+    assert len(calls) == 1
+    assert calls[0]["param1"] == "9"
+    assert calls[0]["param2"] == "10129"
+    assert not any("Tăng tốc thất bại" in line for line in logs)
+
 
 

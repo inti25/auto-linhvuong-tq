@@ -19,16 +19,24 @@ class FakeServer:
     def __init__(self, handlers=None):
         self.handlers = handlers or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
 
-    def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
-        self.calls.append((key, dict(data or {})))
+    def _dispatch(self, key, params_or_data):
+        self.calls.append((key, dict(params_or_data or {})))
         handler = self.handlers.get(key, {"ret": 0})
         if callable(handler):
             return Resp(handler())
         if isinstance(handler, list):
             return Resp(handler.pop(0))
         return Resp(handler)
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        return self._dispatch(path, params)
+
+    def post(self, url, data=None, headers=None, timeout=None):
+        key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        return self._dispatch(key, data)
 
 
 def test_logistics_transfers_army_when_sufficient():
@@ -80,7 +88,7 @@ def test_logistics_skips_when_insufficient_army():
 def test_logistics_auto_comfort_for_monitored_cities():
     server = FakeServer(
         handlers={
-            "City.ashx?id=6": {"ret": 0, "data": {"morale": 75, "anger": 2}},
+            "/api/city/info": {"ret": 0, "data": {"m_lmorale_current": 75, "m_lmorale_complaint": 2}},
             "OPT.ashx?id=4": {"ret": 0},
         }
     )

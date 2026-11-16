@@ -187,44 +187,41 @@ def fetch_roster(
     camps_map = {}
 
     if include_cities:
-        # 1. Lấy danh sách Thành chính từ Common.ashx?id=29
-        resp = gateway.call("Common.ashx", 29, {}) or {}
-        for c in resp.get("city", []):
-            cid = int(c[0])
-            cities_map[cid] = City(id=cid, name=str(c[1]), type="Thành")
+        # 1. Lấy danh sách Thành và Doanh trại từ /api/city/list (Server 58+)
+        resp = gateway.city_list() or {}
+        data_block = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+        items = data_block.get("items", []) if isinstance(data_block, dict) else []
+        for c in items:
+            if not isinstance(c, dict):
+                continue
+            cid = int(c.get("m_lid", 0))
+            if cid == 0:
+                continue
+            cname = str(c.get("m_szname", ""))
+            cx = int(c.get("m_lx_pos", 0))
+            cy = int(c.get("m_ly_pos", 0))
+            clevel = int(c.get("m_llevel", 0))
+            ctype_val = int(c.get("m_ltype", 1))
+            # m_ltype 1..4 là Thành trì; giá trị khác (hoặc cid < 0) là Doanh trại
+            is_camp = cid < 0 or ctype_val not in (1, 2, 3, 4)
+            if is_camp:
+                camps_map[cid] = City(
+                    id=cid, name=cname, type="Doanh trại", pos_x=cx, pos_y=cy, level=clevel
+                )
+            else:
+                cities_map[cid] = City(
+                    id=cid, name=cname, type="Thành", pos_x=cx, pos_y=cy, level=clevel
+                )
         roster.cities = list(cities_map.values())
 
-        # 2. Bổ sung Doanh trại và tọa độ từ City.ashx?id=7 nếu có
-        resp_c7 = gateway.call("City.ashx", 7, {"_": ""}) or {}
-        infos = resp_c7.get("infos") or resp_c7.get("citys", [])
-        if isinstance(infos, list):
-            for item in infos:
-                if isinstance(item, list) and len(item) > 7:
-                    cid = int(item[1])
-                    cname = str(item[2])
-                    cx = int(item[4])
-                    cy = int(item[5])
-                    clevel = int(item[7])
-                    ctype_val = int(item[8]) if len(item) > 8 else 1
-                    is_camp = ctype_val not in (1, 2, 3, 4)
-                    if is_camp:
-                        camps_map[cid] = City(
-                            id=cid, name=cname, type="Doanh trại", pos_x=cx, pos_y=cy, level=clevel
-                        )
-                    elif cid in cities_map:
-                        cities_map[cid] = City(
-                            id=cid, name=cname, type="Thành", pos_x=cx, pos_y=cy, level=clevel
-                        )
-            roster.cities = list(cities_map.values())
-
-    # 3. Quét danh sách Văn quan (type=1, tùy chọn) và Võ tướng (type=2) từ Common.ashx?id=32
+    # 2. Quét danh sách Văn quan (heroType=1, tùy chọn) và Võ tướng (heroType=2) từ /api/city/pageofficial
     raw_generals_by_cid: dict[int, list[tuple[int, list]]] = {}
     martial_cids: set[int] = set()
     city_ids = set(cities_map.keys())
     types_to_fetch = (1, 2) if include_civil else (2,)
 
     for type_ in types_to_fetch:
-        resp = gateway.call("Common.ashx", 32, {"type": str(type_)}) or {}
+        resp = gateway.page_official(type_) or {}
         for entry in resp.get("list", []):
             cid = int(entry[0])
             cname = str(entry[1])
@@ -250,8 +247,7 @@ def fetch_roster(
             for g in g_entries:
                 raw_generals_by_cid.setdefault(cid, []).append((type_, g))
 
-    # 4. Lấy thông tin chi tiết biên chế, sĩ khí đội quân và thời gian nâng sĩ khí (API 76)
-    # Bao gồm cả Thành và Doanh trại (đặc biệt là các căn cứ có võ tướng)
+    # 3. Lấy thông tin chi tiết biên chế, sĩ khí đội quân và thời gian nâng sĩ khí (/api/city/pagemytroopslist)
     morale_map = {}
     upgrading_map = {}
     tactician_map: dict[int, tuple[int, str]] = {}
@@ -263,7 +259,7 @@ def fetch_roster(
         bases_to_query = [b for b in all_bases if not martial_cids or b.id in martial_cids or b.is_camp]
 
     for base in bases_to_query:
-        resp = gateway.call("Common.ashx", 76, {"cid": str(base.id)}) or {}
+        resp = gateway.page_mytroops_list(base.id) or {}
         for entry in resp.get("list", []):
             if len(entry) > 2 and isinstance(entry[2], list):
                 for g in entry[2]:

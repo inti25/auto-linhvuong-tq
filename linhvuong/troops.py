@@ -76,8 +76,8 @@ class ArmyProvisioner:
         self.sleep_fn = sleep_fn
 
     def check_recruits(self, city_id: int) -> Optional[int]:
-        """Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API Common.ashx?id=27."""
-        resp = self.gateway.call("Common.ashx", 27, {"_": ""}) or {}
+        """Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API /api/city/pagearmament."""
+        resp = self.gateway.page_armament() or {}
         if resp.get("ret") == 0:
             for city_data in resp.get("list", []):
                 if isinstance(city_data, list) and len(city_data) > 2:

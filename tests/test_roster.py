@@ -1,19 +1,72 @@
 from linhvuong.gateway import GatewayClient
 from linhvuong.roster import fetch_roster
 
-# Payload thật ghi lại từ server 57 (rút gọn)
-CITIES = {"ret": 0, "city": [[15230, "NB", 3561, 0, 880, 300, 0, -1180, 24, 0, 0],
-                             [15237, "ThienNam", 0, 210, 410, 0, 0, -175, 12, 0, 0]]}
-CIVIL = {"ret": 0, "list": [
-    [15230, "NB", 193, 202, [[417513, "匡昊毅", "", 1, 1, 0, 84, 100, 980, 980, 104, 16, 120, 840, 73]]],
-    [-1085, "Go", 196, 203, [[417514, "邢澎法", "", 1, 0, 0, 1, 100, 110, 110, 10, 13, 10, 10, 0]]],
-    [15237, "ThienNam", 230, 244, [[417521, "成籁彩", "", 1, 1, 0, 41, 100, 510, 510, 54, 14, 64, 410, 30]]],
-]}
-MARTIAL = {"ret": 0, "list": [
-    [15230, "NB", 193, 202, [[417506, "廉复卢", "", 2, 0, 0, 3, 97, 230, 230, 12, 11, 29, 30, 3]]],
-    [15237, "ThienNam", 230, 244, []],
-]}
-ARMY = {"ret": 0, "list": [[15230, "NB", [[417506, "廉复卢", 0, "", 0, 102, 95, 102, 0, 100, 0, 501]]]]}
+# Payload chuẩn Server 58 (/api/city/list, /api/city/pageofficial, /api/city/pagemytroopslist)
+CITY_LIST = {
+    "ret": 0,
+    "data": {
+        "items": [
+            {
+                "m_ltype": 1,
+                "m_lid": 15230,
+                "m_szname": "NB",
+                "m_lmap_id": 738765,
+                "m_lx_pos": 193,
+                "m_ly_pos": 202,
+                "m_lowner_cityid": 0,
+                "m_llevel": 4,
+            },
+            {
+                "m_ltype": 1,
+                "m_lid": 15237,
+                "m_szname": "ThienNam",
+                "m_lmap_id": 738800,
+                "m_lx_pos": 230,
+                "m_ly_pos": 244,
+                "m_lowner_cityid": 0,
+                "m_llevel": 2,
+            },
+            {
+                "m_ltype": 5,
+                "m_lid": -1085,
+                "m_szname": "Go",
+                "m_lmap_id": 738900,
+                "m_lx_pos": 196,
+                "m_ly_pos": 203,
+                "m_lowner_cityid": 15230,
+                "m_llevel": 1,
+            },
+        ]
+    },
+}
+CIVIL = {
+    "ret": 0,
+    "data": {
+        "ret": 0,
+        "list": [
+            [15230, "NB", 193, 202, [[417513, "匡昊毅", "", 1, 1, 0, 84, 100, 980, 980, 104, 16, 120, 840, 73]]],
+            [-1085, "Go", 196, 203, [[417514, "邢澎法", "", 1, 0, 0, 1, 100, 110, 110, 10, 13, 10, 10, 0]]],
+            [15237, "ThienNam", 230, 244, [[417521, "成籁彩", "", 1, 1, 0, 41, 100, 510, 510, 54, 14, 64, 410, 30]]],
+        ],
+    },
+}
+MARTIAL = {
+    "ret": 0,
+    "data": {
+        "ret": 0,
+        "list": [
+            [15230, "NB", 193, 202, [[417506, "廉复卢", "", 2, 0, 0, 3, 97, 230, 230, 12, 11, 29, 30, 3]]],
+            [15237, "ThienNam", 230, 244, []],
+        ],
+    },
+}
+ARMY = {
+    "ret": 0,
+    "data": {
+        "ret": 0,
+        "list": [[15230, "NB", [[417506, "廉复卢", 0, "", 0, 102, 95, 102, 0, 100, 0, 501]]]],
+    },
+}
 
 
 class Resp:
@@ -29,21 +82,23 @@ class Resp:
 class FakeSession:
     def __init__(self):
         self.calls = []
+        self.cookies = {"uid": "95"}
 
-    def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
-        self.calls.append((key, dict(data)))
-        if key == "Common.ashx?id=29":
-            return Resp(CITIES)
-        if key == "Common.ashx?id=32":
-            return Resp(CIVIL if data["type"] == "1" else MARTIAL)
-        if key == "Common.ashx?id=76":
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        p = dict(params or {})
+        self.calls.append((path, p))
+        if path == "/api/city/list":
+            return Resp(CITY_LIST)
+        if path == "/api/city/pageofficial":
+            return Resp(CIVIL if int(p.get("heroType", 2)) == 1 else MARTIAL)
+        if path == "/api/city/pagemytroopslist":
             return Resp(ARMY)
         return Resp(None)
 
 
 def roster():
-    return fetch_roster(GatewayClient(57, FakeSession(), sleep=lambda s: None))
+    return fetch_roster(GatewayClient(58, FakeSession(), sleep=lambda s: None))
 
 
 def test_lists_cities_in_server_order():
@@ -114,37 +169,51 @@ def test_camps_are_tracked_with_generals():
 
 def test_martial_generals_in_camps_have_army_composition():
     class CampSession(FakeSession):
-        def post(self, url, data=None, headers=None, timeout=None):
-            key = url.split("/GateWay/")[1]
-            self.calls.append((key, dict(data or {})))
-            if key == "Common.ashx?id=29":
-                return Resp({"ret": 0, "city": [[15230, "NB"]]})
-            if key == "City.ashx?id=7":
-                return Resp({"ret": 0, "infos": [
-                    [1, 15230, "NB", 0, 100, 100, 0, 3, 1],
-                    [2, -3035, "TienTuyen", 0, 105, 105, 15230, 1, 5], # Doanh trại
-                ]})
-            if key == "Common.ashx?id=32":
-                t = (data or {}).get("type")
-                if t == "1":
-                    return Resp({"ret": 0, "list": []})
-                return Resp({"ret": 0, "list": [
-                    [-3035, "TienTuyen", 105, 105, [
-                        [97376, "席定韩", "", 2, 0, 0, 5, 100, 150, 150, 17, 14, 19, 50, 0]
-                    ]]
-                ]})
-            if key == "Common.ashx?id=76":
-                cid = (data or {}).get("cid")
-                if cid == "-3035":
-                    return Resp({"ret": 0, "list": [
-                        [-3035, "TienTuyen", [
-                            [97376, "席定韩", 0, "", 0, 0, 1500, 0, 0, 100, 0, 501]
-                        ]]
-                    ]})
-                return Resp({"ret": 0, "list": []})
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/city/list":
+                return Resp({
+                    "ret": 0,
+                    "data": {
+                        "items": [
+                            {"m_ltype": 1, "m_lid": 15230, "m_szname": "NB", "m_lx_pos": 100, "m_ly_pos": 100, "m_llevel": 3},
+                            {"m_ltype": 5, "m_lid": -3035, "m_szname": "TienTuyen", "m_lx_pos": 105, "m_ly_pos": 105, "m_llevel": 1},
+                        ]
+                    },
+                })
+            if path == "/api/city/pageofficial":
+                if int(p.get("heroType", 2)) == 1:
+                    return Resp({"ret": 0, "data": {"ret": 0, "list": []}})
+                return Resp({
+                    "ret": 0,
+                    "data": {
+                        "ret": 0,
+                        "list": [
+                            [-3035, "TienTuyen", 105, 105, [
+                                [97376, "席定韩", "", 2, 0, 0, 5, 100, 150, 150, 17, 14, 19, 50, 0]
+                            ]]
+                        ],
+                    },
+                })
+            if path == "/api/city/pagemytroopslist":
+                if str(p.get("cityTentId")) == "-3035":
+                    return Resp({
+                        "ret": 0,
+                        "data": {
+                            "ret": 0,
+                            "list": [
+                                [-3035, "TienTuyen", [
+                                    [97376, "席定韩", 0, "", 0, 0, 1500, 0, 0, 100, 0, 501]
+                                ]]
+                            ],
+                        },
+                    })
+                return Resp({"ret": 0, "data": {"ret": 0, "list": []}})
             return Resp(None)
 
-    gw = GatewayClient(53, CampSession(), sleep=lambda s: None)
+    gw = GatewayClient(58, CampSession(), sleep=lambda s: None)
     r = fetch_roster(gw)
     army = r.army_of(97376)
     assert army is not None, "Army of martial general in camp should not be None"
@@ -161,11 +230,10 @@ def test_martial_generals_in_camps_have_army_composition():
 
 def test_fetch_roster_only_queries_specified_base_ids():
     session = FakeSession()
-    gw = GatewayClient(57, session, sleep=lambda s: None)
+    gw = GatewayClient(58, session, sleep=lambda s: None)
     r = fetch_roster(gw, only_base_ids=[15230])
-    c76_calls = [c for c in session.calls if c[0] == "Common.ashx?id=76"]
-    assert len(c76_calls) == 1
-    assert c76_calls[0][1]["cid"] == "15230"
+    troop_calls = [c for c in session.calls if c[0] == "/api/city/pagemytroopslist"]
+    assert len(troop_calls) == 1
+    assert str(troop_calls[0][1]["cityTentId"]) == "15230"
     gens = r.generals_of(15230)
     assert len(gens) > 0
-

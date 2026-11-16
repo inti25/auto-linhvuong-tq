@@ -160,42 +160,23 @@ class WeaponCrafter:
         if cached is not None:
             return cached
 
-        resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
+        resp = self.gateway.building_list(city_id) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
-        # Định dạng danh sách công trình từ City.ashx?id=5:
-        # Máy chủ Linh Vương trả về 'infos': [[pid, gid, name, level, status, finish_time], ...]
-        # Hoặc fallback sang 'buildings', 'list', 'build'
-        buildings = (
-            resp.get("infos")
-            or resp.get("buildings")
-            or resp.get("list")
-            or resp.get("build")
-            or []
-        )
+        buildings = resp.get("items") or resp.get("infos") or []
         pairs: list[tuple[int, int]] = []
         matched: Optional[tuple[int, int]] = None
         for b in buildings:
-            if isinstance(b, dict):
-                gid = int(b.get("gid", 0))
-                pid = int(b.get("pid", 0))
-                if pid > 0 and gid > 0:
-                    pairs.append((pid, gid))
-                    if matched is None and gid in allowed_gids:
-                        matched = (pid, gid)
-            elif isinstance(b, (list, tuple)) and len(b) >= 2:
-                try:
-                    # Cấu trúc list từ 'infos': [pid, gid, ...]
-                    pid = int(b[0])
-                    gid = int(b[1])
-                    if pid > 0 and gid > 0:
-                        pairs.append((pid, gid))
-                        if matched is None and gid in allowed_gids:
-                            matched = (pid, gid)
-                except (ValueError, TypeError):
-                    continue
+            if not isinstance(b, dict):
+                continue
+            gid = int(b.get("m_lgid") or b.get("gid") or 0)
+            pid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
+            if gid > 0:
+                pairs.append((pid, gid))
+                if matched is None and gid in allowed_gids:
+                    matched = (pid, gid)
 
         if self.workshop_cache_ttl > 0 and pairs:
             self._city_workshops_cache[city_id] = (time.monotonic(), pairs)
@@ -225,9 +206,9 @@ class WeaponCrafter:
 
         w_name = get_weapon_name(weapon_id)
 
-        # 1. Chuyển tiêu điểm thành phố qua City.ashx?id=50 (có thể bỏ qua nếu đã focus trong cùng chu kỳ)
+        # 1. Chuyển tiêu điểm thành phố qua /api/city/current
         if switch_city:
-            self.gateway.call("City.ashx", 50, {"tid": str(city_id), "_": ""})
+            self.gateway.set_current_city(city_id)
 
         # 2. Tìm vị trí ô đất và mã xưởng phù hợp trong thành
         plot_id, workshop_gid = self.find_workshop(city_id, weapon_id)
@@ -238,9 +219,9 @@ class WeaponCrafter:
                 notify(err_msg)
             return False, -2, err_msg
 
-        # 3. Kích hoạt ngữ cảnh công xưởng qua build.ashx?id=2 trước khi gửi lệnh chế tạo
+        # 3. Kích hoạt ngữ cảnh công xưởng qua Build.ashx?id=2 trước khi gửi lệnh chế tạo
         self.gateway.call(
-            "build.ashx",
+            "Build.ashx",
             2,
             {
                 "gid": str(workshop_gid),

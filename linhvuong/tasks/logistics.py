@@ -89,14 +89,13 @@ class LogisticsTask:
 
     def comfort_city_if_needed(self, city_id: int) -> bool:
         """Kiểm tra và An Dân nếu sĩ khí thành tụt xuống dưới 90%."""
-        resp = self.gateway.call("City.ashx", 6, {"tid": str(city_id), "_": ""}) or {}
-        ret = resp.get("ret", RET_OK)
+        data = self.gateway.city_info(city_id) or {}
+        ret = data.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
-        data = resp.get("data", {})
-        morale = int(data.get("morale", 100))
-        anger = int(data.get("anger", 0))
+        morale = int(data.get("m_lmorale_current", data.get("morale", 100)))
+        anger = int(data.get("m_lmorale_complaint", data.get("anger", 0)))
 
         if morale < 90 or anger > 0:
             self.notify(f"🕊️ Sĩ khí Thành {city_id} tụt ({morale}%), tiến hành An Dân...")

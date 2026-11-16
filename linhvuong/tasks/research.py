@@ -124,26 +124,18 @@ class ResearchTask:
         if use_cache and self._cached_univ_info is not None:
             return self._cached_univ_info
 
-        resp = self.gateway.call("City.ashx", 5, {"tid": str(self.city_id), "_": ""}) or {}
+        resp = self.gateway.building_list(self.city_id) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
-        buildings = resp.get("infos") or resp.get("buildings") or resp.get("build") or []
+        buildings = resp.get("items") or resp.get("infos") or []
         for b in buildings:
-            if isinstance(b, (list, tuple)) and len(b) >= 2:
-                try:
-                    gid = int(b[1])
-                    if gid in (6, 59):
-                        info = (int(b[0]), gid)
-                        self._cached_univ_info = info
-                        return info
-                except (ValueError, TypeError):
-                    pass
-            elif isinstance(b, dict):
-                gid = int(b.get("gid", 0))
+            if isinstance(b, dict):
+                gid = int(b.get("m_lgid") or b.get("gid") or 0)
                 if gid in (6, 59):
-                    info = (int(b.get("pid", 0)), gid)
+                    pid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
+                    info = (pid, gid)
                     self._cached_univ_info = info
                     return info
         return None, 6
@@ -156,7 +148,7 @@ class ResearchTask:
     def get_current_tech_levels(self) -> dict[int, int]:
         """Lấy cấp độ hiện tại của 29 kỹ thuật tại viện Đại Học / Thái Học Điện qua Build.ashx?id=2."""
         # Chuyển focus thành thị trước khi đọc kiến trúc (bắt buộc trên server game thật)
-        self.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""})
+        self.gateway.set_current_city(self.city_id)
 
         univ_pid, univ_gid = self.get_university_info()
         if univ_pid is None:

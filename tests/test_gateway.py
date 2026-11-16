@@ -138,3 +138,31 @@ def test_gateway_relogin_recent_skips_duplicate_relogin():
     assert res is not None
     assert res.get("ret") == 0
     assert len(session.calls) == 2
+
+
+def test_gateway_parses_http_400_json_and_resolves_uid_and_rest():
+    class _RestSession:
+        def __init__(self):
+            self.cookies = {"uid": "95"}
+            self.get_calls = []
+            self.post_calls = []
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            self.get_calls.append((url, dict(params or {})))
+            return MockRawResponse('{"ret": 0, "data": {"items": [{"m_lid": 10129}]}}')
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            self.post_calls.append((url, dict(data or {})))
+            return MockRawResponse('{"ret": 8105, "errMsg": "请求参数不一致或无效"}', status_code=400)
+
+    sess = _RestSession()
+    gw = GatewayClient(58, sess, sleep=lambda s: None)
+    assert gw.get_user_id() == 95
+
+    cl = gw.city_list()
+    assert cl["data"]["items"][0]["m_lid"] == 10129
+    assert sess.get_calls[0][1]["userId"] == 95
+
+    err = gw.optimization("bulk-start", {"boxId": "1"})
+    assert err == {"ret": 8105, "errMsg": "请求参数不一致或无效"}
+    assert "Optimization.ashx?action=bulk-start" in sess.post_calls[0][0]

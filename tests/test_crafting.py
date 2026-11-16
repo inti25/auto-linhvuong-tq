@@ -55,75 +55,58 @@ def test_get_required_workshop_gids():
 
 
 def test_find_workshop_plot_and_find_workshop():
-    """Kiểm tra tìm vị trí ô đất (pid) và gid của công xưởng từ City.ashx?id=5 (cả dạng infos list và dict)."""
+    """Kiểm tra tìm vị trí ô đất (pid) và gid của công xưởng từ /api/building/list."""
     fake_gw = MagicMock()
-    # Dạng infos thực tế từ server Linh Vương: [pid, gid, name, level, status, finish_time]
-    fake_gw.call.return_value = {
+    fake_gw.building_list.return_value = {
         "ret": 0,
-        "size": 4,
-        "infos": [
-            [1, 1, "Quan Phủ", 20, 0, 0],
-            [28, 13, "Xưởng Binh Khí", 25, 0, 0],
-            [29, 67, "Phòng Cụ Ty", 24, 0, 0],
-            [19, 15, "Xưởng Ngựa", 18, 0, 0],
+        "items": [
+            {"m_lpos": 1, "m_lgid": 1, "m_szname": "Quan Phủ", "m_llevel": 20},
+            {"m_lpos": 28, "m_lgid": 13, "m_szname": "Xưởng Binh Khí", "m_llevel": 25},
+            {"m_lpos": 29, "m_lgid": 67, "m_szname": "Phòng Cụ Ty", "m_llevel": 24},
+            {"m_lpos": 19, "m_lgid": 15, "m_szname": "Xưởng Ngựa", "m_llevel": 18},
         ],
     }
 
     crafter = WeaponCrafter(fake_gw)
 
-    # Tìm xưởng binh khí (Thấu giáp thương) -> ô 28, gid 13
     assert crafter.find_workshop(1001, 101) == (28, 13)
     assert crafter.find_workshop_plot(1001, 101) == 28
 
-    # Tìm xưởng khôi giáp (Ngư lân giáp, gid=67) -> ô 29, gid 67
     assert crafter.find_workshop(1001, 301) == (29, 67)
     assert crafter.find_workshop_plot(1001, 301) == 29
 
-    # Tìm xưởng ngựa (Tuyệt địa mã) -> ô 19, gid 15
     assert crafter.find_workshop(1001, 401) == (19, 15)
     assert crafter.find_workshop_plot(1001, 401) == 19
 
-    # Kiểm tra tương thích ngược với định dạng dict trong key "list"
-    fake_gw.call.return_value = {
+    fake_gw.building_list.return_value = {
         "ret": 0,
-        "list": [
-            {"pid": 12, "gid": 13, "level": 15},
-        ],
+        "items": [{"pid": 12, "gid": 13, "level": 15}],
     }
     assert crafter.find_workshop(1001, 101) == (12, 13)
     assert crafter.find_workshop_plot(1001, 101) == 12
 
-    # Thành không có xưởng phù hợp
-    fake_gw.call.return_value = {
+    fake_gw.building_list.return_value = {
         "ret": 0,
-        "infos": [[1, 1, "Quan Phủ", 20, 0, 0]],
+        "items": [{"m_lpos": 1, "m_lgid": 1, "m_szname": "Quan Phủ", "m_llevel": 20}],
     }
     assert crafter.find_workshop(1001, 101) == (None, None)
     assert crafter.find_workshop_plot(1001, 101) is None
 
 
 def test_craft_once_success():
-    """Kiểm tra quy trình chế tạo quân giới thành công qua build.ashx?id=2 và OPT.ashx?id=38."""
+    """Kiểm tra quy trình chế tạo quân giới thành công qua Build.ashx?id=2 và OPT.ashx?id=38."""
     calls = []
 
     def mock_call(path, aid, payload, **kwargs):
         calls.append((path, aid, payload))
-        if path == "City.ashx" and aid == 5:
-            return {
-                "ret": 0,
-                "infos": [
-                    [28, 13, "Xưởng Binh Khí", 25, 0, 0],
-                ],
-            }
-        elif path == "City.ashx" and aid == 50:
-            return {"ret": 0}
-        elif path == "build.ashx" and aid == 2:
-            return {"ret": 0}
-        elif path == "OPT.ashx" and aid == 38:
-            return {"ret": 0}
         return {"ret": 0}
 
     fake_gw = MagicMock()
+    fake_gw.building_list.return_value = {
+        "ret": 0,
+        "items": [{"m_lpos": 28, "m_lgid": 13, "m_szname": "Xưởng Binh Khí", "m_llevel": 25}],
+    }
+    fake_gw.set_current_city.return_value = {"ret": 0}
     fake_gw.call.side_effect = mock_call
 
     crafter = WeaponCrafter(fake_gw)
@@ -139,9 +122,9 @@ def test_craft_once_success():
     assert ret == 0
     assert "Đã đặt lệnh chế tạo thành công: 500x 'Thấu giáp thương' (Xưởng ô 28)" in msg
     assert len(log_messages) == 1
+    fake_gw.set_current_city.assert_called_once_with(15230)
 
-    # Kiểm tra gọi build.ashx?id=2 kích hoạt context xưởng
-    build2_calls = [c for c in calls if c[0] == "build.ashx" and c[1] == 2]
+    build2_calls = [c for c in calls if c[0] == "Build.ashx" and c[1] == 2]
     assert len(build2_calls) == 1
     b = build2_calls[0][2]
     assert b["gid"] == "13"
@@ -149,7 +132,6 @@ def test_craft_once_success():
     assert b["tab"] == "0"
     assert b["tid"] == "15230"
 
-    # Kiểm tra gọi OPT.ashx?id=38
     opt38_calls = [c for c in calls if c[0] == "OPT.ashx" and c[1] == 38]
     assert len(opt38_calls) == 1
     p = opt38_calls[0][2]
@@ -164,12 +146,14 @@ def test_craft_once_success():
 def test_craft_once_insufficient_resources():
     """Kiểm tra xử lý an toàn khi thiếu tài nguyên chế tạo (ret=32)."""
     fake_gw = MagicMock()
+    fake_gw.building_list.return_value = {
+        "ret": 0,
+        "items": [{"m_lpos": 28, "m_lgid": 13, "m_szname": "Xưởng Binh Khí", "m_llevel": 10}],
+    }
 
     def mock_call(path, aid, payload, **kwargs):
-        if path == "City.ashx" and aid == 5:
-            return {"ret": 0, "infos": [[28, 13, "Xưởng Binh Khí", 10, 0, 0]]}
         if path == "OPT.ashx" and aid == 38:
-            return {"ret": 32}  # Mã lỗi thiếu tài nguyên
+            return {"ret": 32}
         return {"ret": 0}
 
     fake_gw.call.side_effect = mock_call
@@ -184,7 +168,10 @@ def test_craft_once_insufficient_resources():
 def test_craft_once_missing_workshop():
     """Kiểm tra cảnh báo khi thành chưa có xưởng phù hợp."""
     fake_gw = MagicMock()
-    fake_gw.call.return_value = {"ret": 0, "infos": [[1, 1, "Quan Phủ", 20, 0, 0]]}
+    fake_gw.building_list.return_value = {
+        "ret": 0,
+        "items": [{"m_lpos": 1, "m_lgid": 1, "m_szname": "Quan Phủ", "m_llevel": 20}],
+    }
     crafter = WeaponCrafter(fake_gw)
 
     success, ret, msg = crafter.craft_once(city_id=15230, weapon_id=301, amount=1000)
@@ -196,7 +183,7 @@ def test_craft_once_missing_workshop():
 def test_craft_once_captcha():
     """Kiểm tra ngoại lệ CaptchaRequired khi máy chủ yêu cầu xác thực."""
     fake_gw = MagicMock()
-    fake_gw.call.return_value = {"ret": 110}
+    fake_gw.building_list.return_value = {"ret": 110}
     crafter = WeaponCrafter(fake_gw)
 
     with pytest.raises(CaptchaRequired):

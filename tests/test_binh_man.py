@@ -23,13 +23,40 @@ class FakeServer:
         self.map_views = map_views or {}
         self.handlers = handlers or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
+
+    def _lookup_handler(self, key):
+        aliases = {
+            "/api/city/list": "Common.ashx?id=29",
+            "/api/city/pageofficial": "Common.ashx?id=32",
+            "/api/city/pagemytroopslist": "Common.ashx?id=76",
+            "/api/city/pagearmament": "Common.ashx?id=27",
+            "/api/city/current": "City.ashx?id=50",
+        }
+        if key in self.handlers:
+            return self.handlers[key]
+        alias = aliases.get(key)
+        if alias and alias in self.handlers:
+            return self.handlers[alias]
+        return {"ret": 0}
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        p = dict(params or {})
+        self.calls.append((path, p))
+        if path == "/api/map/query":
+            return Resp(self.map_views.get(int(p["mid"]), {"npc_tent": []}))
+        handler = self._lookup_handler(path)
+        if callable(handler):
+            return Resp(handler())
+        if isinstance(handler, list):
+            return Resp(handler.pop(0))
+        return Resp(handler)
 
     def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
+        key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
         self.calls.append((key, dict(data or {})))
-        if key == "Map.ashx?id=6":
-            return Resp(self.map_views.get(int(data["mid"]), {"npc_tent": []}))
-        handler = self.handlers.get(key, {"ret": 0})
+        handler = self._lookup_handler(key)
         if callable(handler):
             return Resp(handler())
         if isinstance(handler, list):
@@ -1019,9 +1046,9 @@ def test_binh_man_recover_in_city_does_not_recruit_when_army_already_sufficient(
     # Khi quân số đã đủ 20000 kỵ, recover_in_city không được nhét thêm 20000 kỵ hay gọi chiêu mộ id=41
     server = FakeServer(
         handlers={
-            "Common.ashx?id=29": {"ret": 0, "city": [[1001, "ThienCo", 0, 0, 0, 0, 0, 0, 0, 0, 0]]},
-            "Common.ashx?id=32": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]},
-            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 100, 0]]]]},
+            "/api/city/list": {"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}},
+            "/api/city/pageofficial": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]}},
+            "/api/city/pagemytroopslist": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 100, 0]]]]}},
             "OPT.ashx?id=31": {"ret": 0},
             "OPT.ashx?id=41": {"ret": 0},
             "OPT.ashx?id=6": {"ret": 0},
@@ -1054,9 +1081,9 @@ def test_binh_man_recover_in_city_refills_only_missing_troops():
     # Khi tướng đang có 15000 kỵ và target là 20000 kỵ, chỉ bổ sung đúng 5000 kỵ
     server = FakeServer(
         handlers={
-            "Common.ashx?id=29": {"ret": 0, "city": [[1001, "ThienCo", 0, 0, 0, 0, 0, 0, 0, 0, 0]]},
-            "Common.ashx?id=32": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]},
-            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 100, 0]]]]},
+            "/api/city/list": {"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}},
+            "/api/city/pageofficial": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]}},
+            "/api/city/pagemytroopslist": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 100, 0]]]]}},
             "OPT.ashx?id=31": {"ret": 0},
             "OPT.ashx?id=41": {"ret": 0},
             "OPT.ashx?id=6": {"ret": 0},

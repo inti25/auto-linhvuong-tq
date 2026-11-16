@@ -26,25 +26,35 @@ class Resp:
 
 
 class FakeServer:
-    """Giả lập Gateway: định tuyến theo endpoint?id và ghi lại các lời gọi."""
+    """Giả lập Gateway Server 58: hỗ trợ /api/* (GET/POST) và /GateWay/*."""
 
     def __init__(self, map_views=None, handlers=None):
         self.map_views = map_views or {}
-        self.handlers = handlers or {}  # "OPT.ashx?id=53" -> list/callable
+        self.handlers = handlers or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        p = dict(params or {})
+        self.calls.append((path, p))
+        if path == "/api/map/query":
+            return Resp(self.map_views.get(int(p["mid"]), {"npc_tent": []}))
+        handler = self.handlers.get(path, {"ret": 0})
+        if isinstance(handler, list):
+            return Resp(handler.pop(0))
+        return Resp(handler)
 
     def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
-        self.calls.append((key, dict(data)))
-        if key == "Map.ashx?id=6":
-            return Resp(self.map_views.get(int(data["mid"]), {"npc_tent": []}))
+        key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        self.calls.append((key, dict(data or {})))
         handler = self.handlers.get(key, {"ret": 0})
         if isinstance(handler, list):
             return Resp(handler.pop(0))
         return Resp(handler)
 
     def keys(self):
-        return [k for k, _ in self.calls if k != "Map.ashx?id=6"]
+        return [k for k, _ in self.calls if k != "/api/map/query"]
 
 
 def ctx_for(server, locks=None):
@@ -117,30 +127,51 @@ def test_goi_dan_attacks_existing_vong_linh_without_calling():
 
 
 def test_goi_dan_calls_then_attacks_new_target():
+    # Lần quét 1 (tìm quái có sẵn) -> rỗng; lần quét 2 (sau khi gọi bằng OPT.ashx?id=69) -> thấy 900 ở (4,4)
+    scan_calls = [0]
+
+    def map_handler(params):
+        scan_calls[0] += 1
+        if int(params["mid"]) == mid_from_coords(0, 0) and scan_calls[0] >= 2:
+            return {"npc_tent": [man(4, 4, 900, 301)]}
+        return {"npc_tent": []}
+
     server = FakeServer(
         handlers={
-            "City.ashx?id=50": {
-                "ret": 0,
-                "new_target_id": 900,
-                "new_target_mid": mid_from_coords(4, 4),
-                "new_target_type": 301,
-            }
-        }
+            "/api/map/query": map_handler,
+            "OPT.ashx?id=69": {"ret": 0},
+        },
     )
+    # Gắn map_views handler động cho /api/map/query
+    orig_get = server.get
+
+    def custom_get(url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        p = dict(params or {})
+        server.calls.append((path, p))
+        if path == "/api/map/query":
+            return Resp(map_handler(p))
+        return Resp(server.handlers.get(path, {"ret": 0}))
+
+    server.get = custom_get
     ctx, _ = ctx_for(server)
-    out = GoiDan(ctx, generals=[3], origin=(0, 0), radius=5).run_once()
+    out = GoiDan(ctx, generals=[3], origin=(0, 0), radius=5, city_id=10129, sleep_fn=lambda s: None).run_once()
     assert out == "called_and_attacked"
-    assert server.keys() == ["City.ashx?id=50", "OPT.ashx?id=53"]
-    assert server.calls[-1][1]["target_id"] == "900"
+    keys = server.keys()
+    assert "/api/city/current" in keys
+    assert "OPT.ashx?id=69" in keys
+    assert "OPT.ashx?id=53" in keys
+    opt53_calls = [d for k, d in server.calls if k == "OPT.ashx?id=53"]
+    assert opt53_calls[0]["target_id"] == "900"
     assert ctx.locks.is_locked(900)
 
 
 def test_goi_dan_reports_call_failure_without_attacking():
-    server = FakeServer(handlers={"City.ashx?id=50": {"ret": 39}})
+    server = FakeServer(handlers={"OPT.ashx?id=69": {"ret": 39}})
     ctx, _ = ctx_for(server)
-    out = GoiDan(ctx, generals=[3], origin=(0, 0), radius=5).run_once()
+    out = GoiDan(ctx, generals=[3], origin=(0, 0), radius=5, city_id=10129).run_once()
     assert out == "call_failed:39"
-    assert server.keys() == ["City.ashx?id=50"]
+    assert server.keys() == ["/api/city/pageofficial", "/api/city/current", "OPT.ashx?id=69"]
 
 
 def test_thao_phat_starts_campaign_and_attacks():

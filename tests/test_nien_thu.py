@@ -1,7 +1,6 @@
-"""Tests for Niên Thú event automation (Seams 1-4)."""
+"""Tests for Niên Thú event automation on Server 58+."""
 
 from datetime import datetime
-import socket
 import time
 
 import pytest
@@ -25,47 +24,10 @@ from linhvuong.tasks.nien_thu import (
 from linhvuong.world_chat import (
     STATE_IDS,
     STATE_NAMES,
-    ChatCredentials,
     NienThuAnnouncement,
     WorldChatClient,
-    build_chat_packet,
-    parse_city_chat_config,
     parse_nien_thu_announcement,
 )
-
-
-def test_parse_city_chat_config_extracts_host_port_and_credentials():
-    html = """
-    <script src="http://res.sg.dipan.com/Global.js?v=1&scs=122.224.159.50&scp=7902&x=1"></script>
-    <embed src="http://res.sg.dipan.com/SGWebIM.swf?id=4954&amp;id2=abc%2B123%3D&amp;uid=137&amp;n=Quilia&amp;un=%E3%80%8ASIM%E3%80%8B&amp;sid=131072&amp;markid=7" />
-    """
-    cfg = parse_city_chat_config(html)
-    assert cfg == ChatCredentials(
-        host="122.224.159.50",
-        port=7902,
-        char_id="4954",
-        id2="abc%2B123%3D",
-        uid="137",
-        name="Quilia",
-        uname="%E3%80%8ASIM%E3%80%8B",
-    )
-
-
-def test_build_chat_packet_calculates_exact_utf8_len_and_null_terminator():
-    creds = ChatCredentials(
-        host="122.224.159.50",
-        port=7902,
-        char_id="4954",
-        id2="XYZ",
-        uid="137",
-        name="Quilia",
-        uname="《SIM》",
-    )
-    pkt = build_chat_packet("login", creds)
-    assert pkt.endswith(b"\x00")
-    assert pkt.startswith(b"<root len='")
-    declared_len = int(pkt[11:19].decode("ascii").strip())
-    assert declared_len == len(pkt)
 
 
 def test_parse_nien_thu_announcement_maps_all_16_states():
@@ -74,77 +36,41 @@ def test_parse_nien_thu_announcement_maps_all_16_states():
     assert STATE_IDS["凉州"] == 1
     assert STATE_IDS["西域"] == 16
 
-    frame = (
-        "<root tp='newsmsg' time='2026-11-14 09:00:00' id='0' req='1'>"
-        "<name>管理员</name><title>0</title>"
-        "<msg>{type:2,msg:'年兽已在徐州附近出现，请各位勇士速速前往挑战！',param:'',title:'',color:'',uid:0,size:18}</msg>"
-        "</root>"
-    )
-    ann = parse_nien_thu_announcement(frame)
-    assert ann == NienThuAnnouncement(
-        state_id=13,
-        state_name="徐州",
-        server_time="2026-11-14 09:00:00",
-        raw_message="年兽已在徐州附近出现，请各位勇士速速前往挑战！",
-    )
+    item = {
+        "kind": "notice",
+        "text": "年兽已在徐州附近出现，请各位勇士速速前往挑战！",
+        "sourceId": 1776,
+        "createdAt": 1794805570913,
+    }
+    ann = parse_nien_thu_announcement(item)
+    assert ann is not None
+    assert ann.state_id == 13
+    assert ann.state_name == "徐州"
+    assert ann.source_id == 1776
+    assert "年兽已在徐州附近出现" in ann.raw_message
 
 
 def test_parse_nien_thu_announcement_ignores_unrelated_system_messages():
-    frame = (
-        "<root tp='newsmsg' time='2026-11-14 09:05:00' id='0' req='1'>"
-        "<msg>{type:2,msg:'恭喜玩家抽中神将！'}</msg></root>"
-    )
-    assert parse_nien_thu_announcement(frame) is None
+    item = {"kind": "notice", "text": "恭喜玩家 张志文 通过游历探索获得：名将【陈泰】", "sourceId": 1776}
+    assert parse_nien_thu_announcement(item) is None
 
 
-class _FakeSocket:
-    def __init__(self, incoming_frames: list[bytes]):
-        self.sent: list[bytes] = []
-        self._buf = b"".join(incoming_frames)
-        self.closed = False
-
-    def settimeout(self, t: float):
-        pass
-
-    def sendall(self, data: bytes):
-        self.sent.append(data)
-
-    def recv(self, size: int) -> bytes:
-        if not self._buf:
-            raise socket.timeout("no more frames")
-        chunk = self._buf[:size]
-        self._buf = self._buf[size:]
-        return chunk
-
-    def close(self):
-        self.closed = True
-
-
-def test_world_chat_client_fetches_latest_nien_thu_announcement():
-    frames = [
-        b"<root tp='login' ret='0' />\x00",
-        (
-            "<root tp='newsmsg' time='2026-11-14 08:00:00' id='0' req='1'>"
-            "<msg>{type:2,msg:'年兽已在鲜卑附近出现，请各位勇士速速前往挑战！'}</msg></root>\x00"
-        ).encode("utf-8"),
-        (
-            "<root tp='newsmsg' time='2026-11-14 09:00:00' id='0' req='1'>"
-            "<msg>{type:2,msg:'年兽已在徐州附近出现，请各位勇士速速前往挑战！'}</msg></root>\x00"
-        ).encode("utf-8"),
-    ]
-    fake_sock = _FakeSocket(frames)
-    creds = ChatCredentials("122.224.159.50", 7902, "4954", "XYZ", "137", "Quilia", "SIM")
-
-    client = WorldChatClient(socket_factory=lambda host, port, timeout: fake_sock)
-    ann = client.fetch_latest_nien_thu(creds)
+def test_world_chat_client_fetches_latest_nien_thu_from_notify_history():
+    history_payload = {
+        "ret": 0,
+        "items": [
+            {"kind": "notice", "text": "年兽已在鲜卑附近出现，请各位勇士速速前往挑战！", "sourceId": 100, "createdAt": 1794800000000},
+            {"kind": "notice", "text": "恭喜玩家 张志文 获得白金礼盒", "sourceId": 101, "createdAt": 1794800100000},
+            {"kind": "notice", "text": "年兽已在徐州附近出现，请各位勇士速速前往挑战！", "sourceId": 102, "createdAt": 1794800200000},
+        ],
+    }
+    gw = GatewayClient(58, _FullFakeServer(lambda ep, d: history_payload), sleep=lambda s: None)
+    ann = WorldChatClient().fetch_latest_nien_thu(gw)
 
     assert ann is not None
     assert ann.state_id == 13
     assert ann.state_name == "徐州"
-    assert ann.server_time == "2026-11-14 09:00:00"
-    assert b"tp='login'" in fake_sock.sent[0]
-    assert b"tp='reqamsg'" in fake_sock.sent[1]
-    assert fake_sock.closed is True
+    assert ann.source_id == 102
 
 
 
@@ -256,25 +182,21 @@ def test_attack_nien_thu_and_speedup_send_exact_endpoints():
 
 
 
-class _HttpGetResp:
-    status_code = 200
-
-    def __init__(self, text: str):
-        self.text = text
-
-
 class _FullFakeServer(_FakeServer):
-    def __init__(self, handler, city_html: str = ""):
+    def __init__(self, handler, cookies=None):
         super().__init__(handler)
-        self.city_html = city_html
+        self.cookies = cookies or {"uid": "95"}
 
-    def get(self, url, headers=None, timeout=None):
-        return _HttpGetResp(self.city_html)
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        p = dict(params or {})
+        self.calls.append((path, p))
+        return _Resp(self.handler(path, p))
 
 
-def _make_ctx(handler, city_html: str = ""):
-    server = _FullFakeServer(handler, city_html=city_html)
-    gw = GatewayClient(53, server, sleep=lambda s: None)
+def _make_ctx(handler):
+    server = _FullFakeServer(handler)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
     locks = TargetLocks()
     logs: list[str] = []
     ctx = TaskContext(
@@ -291,7 +213,7 @@ class _FakeChatClient:
         self._ann = ann
         self.called = 0
 
-    def fetch_latest_nien_thu(self, creds, timeout: float = 3.0):
+    def fetch_latest_nien_thu(self, gateway):
         self.called += 1
         return self._ann
 
@@ -322,10 +244,6 @@ def test_nien_thu_task_stops_immediately_when_stop_on_jade_finds_5001():
 
 
 def test_nien_thu_task_uses_world_chat_picks_idle_general_and_caps_speedup():
-    city_html = (
-        "scs=122.224.159.50&scp=7902&"
-        "SGWebIM.swf?id=4954&amp;id2=XYZ&amp;uid=137&amp;n=Quilia&amp;un=SIM"
-    )
     exp_calls = [0]
 
     def handler(ep, data):
@@ -334,7 +252,6 @@ def test_nien_thu_task_uses_world_chat_picks_idle_general_and_caps_speedup():
             return {"ret": 0, "list": [[3101, 712, 0, "年兽"]]}
         if ep == "Common.ashx?id=127":
             exp_calls[0] += 1
-            # 1st check before attack -> idle; after attack -> marching 300s -> after 1 speedup -> 45s (<= 60s stops speedup)
             if exp_calls[0] == 1:
                 return {"ret": 0, "infos": [0] * 14}
             if exp_calls[0] == 2:
@@ -346,17 +263,17 @@ def test_nien_thu_task_uses_world_chat_picks_idle_general_and_caps_speedup():
                 "ret": 0,
                 "infos": [13, 556, -51, 3101, "年兽", 1, 45, 103242, "G2", 0, 0, 0, 0, 0],
             }
-        if ep == "Common.ashx?id=32":
+        if ep == "/api/city/pageofficial":
             # General 101 busy (16), general 102 idle (0)
-            return {"ret": 0, "list": [[21936, "Thanh", 0, 0, [[101, "G1", 0, 0, 0, 16], [102, "G2", 0, 0, 0, 0]]]]}
+            return {"ret": 0, "data": {"ret": 0, "list": [[21936, "Thanh", 0, 0, [[101, "G1", 0, 0, 0, 16], [102, "G2", 0, 0, 0, 0]]]]}}
         if ep == "OPT.ashx?id=162":
             return {"ret": 0}
         if ep == "OPT.ashx?id=167":
             return {"ret": 0}
         raise AssertionError(f"Unexpected endpoint {ep}")
 
-    ctx, server, _ = _make_ctx(handler, city_html=city_html)
-    chat_ann = NienThuAnnouncement(13, "徐州", "2026-11-14 09:00:00", "年兽已在徐州附近出现")
+    ctx, server, _ = _make_ctx(handler)
+    chat_ann = NienThuAnnouncement(13, "徐州", "2026-11-14 09:00:00", "年兽已在徐州附近出现", source_id=1776)
     fake_chat = _FakeChatClient(chat_ann)
     seen_anns = []
     now = datetime(2026, 11, 14, 8, 2, 0)  # local 08:02
@@ -394,8 +311,8 @@ def test_nien_thu_task_hourly_dedup_and_top_of_hour_schedule():
             return {"ret": 0, "list": [[3101, 712, 0, "年兽"]] if data["lStatID"] == "5" else []}
         if ep == "Common.ashx?id=127":
             return {"ret": 0, "infos": [0] * 14}
-        if ep == "Common.ashx?id=32":
-            return {"ret": 0, "list": [[21936, "T", 0, 0, [[102, "G2", 0, 0, 0, 0]]]]}
+        if ep == "/api/city/pageofficial":
+            return {"ret": 0, "data": {"ret": 0, "list": [[21936, "T", 0, 0, [[102, "G2", 0, 0, 0, 0]]]]}}
         if ep == "OPT.ashx?id=162":
             return {"ret": 0}
         raise AssertionError(f"Unexpected {ep}")

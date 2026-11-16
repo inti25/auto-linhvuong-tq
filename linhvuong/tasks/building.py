@@ -6,7 +6,7 @@ Reverse engineered chính xác từ ZBuild.exe:
   2. Kiểm tra tài nguyên khoáng sản (Gỗ, Đá, Sắt, Lúa): City.ashx?id=20 (tid: city_id).
   3. Lấy danh sách công trình thực tế trong thành: City.ashx?id=5 (tid: city_id).
   4. Nâng cấp công trình theo mức ưu tiên cấu hình: OPT.ashx?id=65 (pid, gid, type=1, tid).
-  5. Tự động tăng tốc hoàn thành: OPT.ashx?id=69 (type=1, param1=city_id, param2=slot, paytype).
+  5. Tự động tăng tốc hoàn thành: OPT.ashx?id=69 (type=1, param1=slot, param2=city_id, paytype).
   6. Kích hoạt hiệu ứng tăng tốc 20% khi hết hạn: OPT.ashx?id=69 (type=3, param1=0, param2=0, paytype=2).
   7. Tự động An Dân khôi phục sĩ khí/lòng dân: OPT.ashx?id=4 (lType=1, tid).
 """
@@ -14,11 +14,18 @@ Reverse engineered chính xác từ ZBuild.exe:
 import queue
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from ..gateway import GatewayClient
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
+
+RET_BULK_OUT_OF_CHESTS = 8108
+RET_ITEM_EXHAUSTED = 90
+BULK_DEFAULT_ALLOWED_IDS: frozenset[int] = frozenset(
+    {1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17, 21, 23, 24, 25, 26, 28, 35, 36, 37, 44, 72, 73, 75, 76}
+)
 
 
 BUILDING_NAMES = {
@@ -60,6 +67,21 @@ BUILDING_NAMES = {
     68: "车马司 - Xưởng Ngựa",
     69: "督军场 - Đốc Quân Trường",
 }
+
+NON_SPEEDUP_BUILDING_IDS: frozenset[int] = frozenset({1, 2, 54, 55})
+
+
+def is_speedup_supported_building(gid: Optional[int]) -> bool:
+    """Trả về True nếu mã công trình (gid) hỗ trợ tăng tốc bằng OPT.ashx?id=69 (type=1).
+
+    Theo Build.js của máy chủ, Quan Phủ (1), Tường Thành (2), Cung Điện (54), Bích Lũy (55)
+    và công trình thành NPC (22..53) không cho phép tăng tốc (máy chủ trả ret=1).
+    """
+    if gid is None or gid <= 0:
+        return True
+    if gid in NON_SPEEDUP_BUILDING_IDS:
+        return False
+    return gid < 22 or gid > 53
 
 RESOURCE_BOX_NAMES = {
     24: "民生之鼎 - Dân Sinh Bảo Đỉnh",
@@ -153,7 +175,7 @@ def open_single_chest(
         if cid <= 0:
             return False, -2, "Vui lòng chọn một Thành hợp lệ (ID dương) để nhận vật phẩm từ rương"
 
-        sw_resp = gateway.call("City.ashx", 50, {"tid": str(cid), "_": ""})
+        sw_resp = gateway.set_current_city(cid)
         if sw_resp is None:
             return False, -1, f"Không thể kết nối khi chuyển sang thành {cid}"
         sw_ret = int(sw_resp.get("ret", 0))
@@ -197,11 +219,140 @@ def open_single_chest(
 
     if ret == RET_OK:
         return True, RET_OK, "Mở thành công"
-    if ret == RET_OUT_OF_CHESTS:
-        return False, RET_OUT_OF_CHESTS, "Đã hết rương/lễ bao trong túi đồ (mã 10014)"
+    if ret in (RET_OUT_OF_CHESTS, RET_ITEM_EXHAUSTED):
+        return False, RET_OUT_OF_CHESTS, f"Đã hết rương/lễ bao trong túi đồ (mã {ret})"
     if ret in (110, RET_CAPTCHA_REQUIRED):
         return False, ret, f"Server yêu cầu giải Captcha (mã {ret})"
-    return False, ret, f"Mở thất bại (mã {ret})"
+    err_msg = resp.get("errMsg")
+    return False, ret, f"Mở thất bại (mã {ret}{f': {err_msg}' if err_msg else ''})"
+
+
+def _resolve_bulk_policy(
+    gateway: GatewayClient, box_id: int, api_type: int
+) -> tuple[bool, int]:
+    """Kiểm tra box_id có hỗ trợ Optimization.ashx?action=bulk-start hay phải mở từng cái."""
+    if api_type != 48 or box_id == 53:
+        return False, 1
+    caps = gateway.optimization("capabilities")
+    if isinstance(caps, dict) and int(caps.get("ret", -1)) == 0:
+        if not caps.get("bulkEnabled", False):
+            return False, 1
+        allowed = caps.get("bulkAllowed")
+        bulk_max = max(1, int(caps.get("bulkMax", 99)))
+        if isinstance(allowed, list):
+            return (box_id in {int(x) for x in allowed}), bulk_max
+    return (box_id in BULK_DEFAULT_ALLOWED_IDS), 99
+
+
+def _run_server_bulk_open(
+    gateway: GatewayClient,
+    chest_name: str,
+    box_id: int,
+    times: int,
+    bulk_max: int,
+    city_id: Optional[int],
+    city_name: str,
+    stop_event: Optional[threading.Event],
+    on_log: Optional[Callable[[str], None]],
+    on_progress: Optional[Callable[[int, int, float], None]],
+) -> dict[str, Any]:
+    """Mở rương theo lô qua Optimization.ashx?action=bulk-start + bulk-status (Server 58+)."""
+    target_cid = int(city_id or 0)
+    if target_cid > 0:
+        gateway.set_current_city(target_cid)
+
+    success_count = 0
+    failed_count = 0
+    aborted_reason: Optional[str] = None
+    last_ret: Optional[int] = RET_OK
+    city_tag = f" tại [{city_name}]" if city_name else ""
+    sleep_fn = getattr(gateway, "_sleep", time.sleep)
+
+    while success_count < times and not (stop_event and stop_event.is_set()):
+        chunk = min(bulk_max, times - success_count)
+        req_id = str(uuid.uuid4())
+        payload = {
+            "requestId": req_id,
+            "boxId": str(box_id),
+            "limit": str(chunk),
+            "cityId": str(target_cid),
+        }
+        data = gateway.optimization("bulk-start", payload)
+        if not isinstance(data, dict):
+            failed_count += 1
+            last_ret = -1
+            break
+
+        ret = int(data.get("ret", -1))
+        last_ret = ret
+        if ret in (110, RET_CAPTCHA_REQUIRED):
+            aborted_reason = "captcha"
+            if stop_event is not None:
+                stop_event.set()
+            break
+        if ret in (RET_BULK_OUT_OF_CHESTS, RET_OUT_OF_CHESTS, RET_ITEM_EXHAUSTED):
+            aborted_reason = "out_of_stock"
+            break
+
+        # Nếu trạng thái admit chưa rõ ràng (8104/8105/8107/>=8600), poll bulk-status cùng requestId
+        if ret in (8104, 8105, 8107) or ret >= 8600 or int(data.get("state", -1)) == 0:
+            delay = 0.25
+            for _ in range(24):
+                if stop_event and stop_event.is_set():
+                    break
+                sleep_fn(delay)
+                delay = min(1.5, delay * 2)
+                st = gateway.optimization("bulk-status", {"requestId": req_id})
+                if not isinstance(st, dict):
+                    continue
+                st_ret = int(st.get("ret", -1))
+                last_ret = st_ret
+                if st_ret == 0:
+                    data = st
+                    if int(st.get("state", 0)) != 0:
+                        break
+                elif st_ret == 8109:
+                    # Job chưa được Server tiếp nhận
+                    break
+
+        ret = int(data.get("ret", -1))
+        last_ret = ret
+        if ret != 0:
+            failed_count += 1
+            if on_log:
+                err_msg = data.get("errMsg") or f"mã {ret}"
+                on_log(f"❌ Mở lô [{chest_name}]{city_tag} thất bại ({err_msg}).")
+            break
+
+        opened = max(0, int(data.get("completed", 0)))
+        planned = max(0, int(data.get("planned", chunk)))
+        success_count += opened
+        if on_log and opened > 0:
+            on_log(f"✅ Mở lô [{chest_name}]{city_tag}: đã mở {opened} rương ({success_count}/{times}).")
+        if on_progress:
+            on_progress(success_count, times, min(100.0, (success_count / times) * 100.0))
+
+        if opened == 0 or (planned > 0 and opened < planned) or int(data.get("state", 1)) == 2:
+            aborted_reason = "out_of_stock"
+            break
+
+    if aborted_reason == "out_of_stock" and on_log:
+        on_log(f"🛑 Dừng mở rương: Đã hết [{chest_name}] trong túi đồ.")
+    elif aborted_reason == "captcha" and on_log:
+        on_log(f"⚠️ Dừng mở rương: Server yêu cầu giải Captcha (mã {last_ret})!")
+    elif stop_event is not None and stop_event.is_set() and aborted_reason is None:
+        aborted_reason = "stopped"
+        if on_log:
+            on_log("⏹️ Đã dừng tiến trình mở rương theo yêu cầu.")
+
+    return {
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "completed": success_count,
+        "total": times,
+        "aborted_reason": aborted_reason,
+        "last_ret": last_ret,
+    }
 
 
 def run_batch_open_chest(
@@ -215,7 +366,7 @@ def run_batch_open_chest(
     on_log: Optional[Callable[[str], None]] = None,
     on_progress: Optional[Callable[[int, int, float], None]] = None,
 ) -> dict[str, Any]:
-    """Mở Rương Đạo Cụ / Lễ Bao Đặc Biệt hàng loạt bằng đa luồng, ghi log tuần tự và dừng sớm khi hết rương/Captcha."""
+    """Mở Rương Đạo Cụ / Lễ Bao Đặc Biệt: ưu tiên bulk-start (Server 58+) nếu box_id hỗ trợ."""
     if times <= 0:
         return {
             "success_count": 0,
@@ -244,6 +395,29 @@ def run_batch_open_chest(
                 "aborted_reason": "invalid_city",
                 "last_ret": -2,
             }
+
+    chest_info = CHEST_MAPPING.get(chest_name)
+    if chest_info is not None and times > 1:
+        if isinstance(chest_info, dict):
+            box_id = int(chest_info["id"])
+            api_type = int(chest_info.get("api", 48))
+        else:
+            box_id = int(chest_info)
+            api_type = 48
+        use_bulk, bulk_max = _resolve_bulk_policy(gateway, box_id, api_type)
+        if use_bulk:
+            return _run_server_bulk_open(
+                gateway=gateway,
+                chest_name=chest_name,
+                box_id=box_id,
+                times=times,
+                bulk_max=bulk_max,
+                city_id=city_id,
+                city_name=city_name if needs_switch else "",
+                stop_event=stop_event,
+                on_log=on_log,
+                on_progress=on_progress,
+            )
 
     task_queue: queue.Queue[int] = queue.Queue()
     for i in range(1, times + 1):
@@ -391,53 +565,14 @@ def parse_remaining_seconds(raw_val) -> int:
 
 
 def parse_boost_remaining_time(resp: dict, city_id: int = 0) -> int:
-    """Trích xuất thời gian còn lại (giây) của DS kiến trúc từ response Common.ashx?id=77."""
+    """Trích xuất thời gian còn lại (giây) của DS kiến trúc từ /api/city/pagebuilding.
+
+    Trên Server 58+, plus_finish luôn nằm ở root của khối pagebuilding (list[i][2] là map_id).
+    """
     if not isinstance(resp, dict):
         return 0
-
-    plus_finish = None
-
-    # 1. Kiểm tra trường plus_finish ở root (nếu có)
-    if "plus_finish" in resp and resp["plus_finish"] not in (None, "", 0, "0"):
-        plus_finish = resp["plus_finish"]
-
-    # 2. Kiểm tra danh sách thành trong resp["list"]
-    if plus_finish is None or plus_finish == 0:
-        city_list = resp.get("list", [])
-        target_city = None
-        for c_info in city_list:
-            if isinstance(c_info, dict):
-                c_cid = c_info.get("cid") or c_info.get("id") or c_info.get("city_id")
-                if not city_id or str(c_cid) == str(city_id):
-                    target_city = c_info
-                    break
-            elif isinstance(c_info, (list, tuple)) and len(c_info) >= 4:
-                if not city_id or str(c_info[0]) == str(city_id):
-                    target_city = c_info
-                    break
-
-        if target_city is None and city_list:
-            target_city = city_list[0]
-
-        if isinstance(target_city, dict):
-            plus_finish = (
-                target_city.get("plus_finish")
-                or target_city.get("val3")
-                or target_city.get("time_left")
-                or 0
-            )
-        elif isinstance(target_city, (list, tuple)) and len(target_city) >= 4:
-            # [city_id, name, val2, val3, ...]
-            # val3: thời hạn 建筑排程 (DS kiến trúc - 3 vị trí), val2: 20% speedup
-            val2 = target_city[2]
-            val3 = target_city[3]
-            if val3 not in (None, "", 0, "0"):
-                plus_finish = val3
-            elif val2 not in (None, "", 0, "0"):
-                plus_finish = val2
-            else:
-                plus_finish = 0
-
+    _ = city_id
+    plus_finish = resp.get("plus_finish")
     return parse_remaining_seconds(plus_finish)
 
 
@@ -507,6 +642,7 @@ class BuildingTask:
         self._resource_cooldown_until: float = 0.0
         self._c77_cache_external: bool = False
         self._c77_from_shared_cache: bool = False
+        self._non_speedup_logged: set[tuple[int, int]] = set()
 
     def reset_skipped(self):
         """Xóa danh sách các slot công trình tạm thời bị bỏ qua."""
@@ -523,14 +659,14 @@ class BuildingTask:
             self.notify(msg)
 
     def _fetch_c77(self, force: bool = False) -> dict:
-        """Đọc và cache kết quả Common.ashx?id=77 trong chu kỳ ngắn để tránh gọi trùng."""
+        """Đọc và cache kết quả /api/city/pagebuilding trong chu kỳ ngắn để tránh gọi trùng."""
         now = time.time()
         cached = getattr(self, "_c77_cache", None)
         cached_time = getattr(self, "_c77_cache_time", 0.0)
         if not force and cached is not None and (now - cached_time < 3.0):
             return cached
 
-        resp = self.gateway.call("Common.ashx", 77, {"cid": str(self.city_id), "_": ""})
+        resp = self.gateway.page_building(self.city_id)
         self._c77_from_shared_cache = False
         if not isinstance(resp, dict) or not resp:
             self._c77_cache = None
@@ -600,23 +736,14 @@ class BuildingTask:
         return True
 
     def check_and_comfort_city(self) -> bool:
-        """Kiểm tra sĩ khí / dân nộ, tự động Tế Trời An Dân nếu cần."""
-        resp = self.gateway.call("City.ashx", 6, {"tid": str(self.city_id), "_": ""}) or {}
-        ret = resp.get("ret", RET_OK)
+        """Kiểm tra sĩ khí / dân nộ qua /api/city/info, tự động Tế Trời An Dân nếu cần."""
+        data = self.gateway.city_info(self.city_id) or {}
+        ret = data.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
-        data = resp.get("data", {})
-        if data:
-            morale = int(data.get("morale", 100))
-            anger = int(data.get("anger", 0))
-        elif isinstance(resp.get("morale"), (list, tuple)):
-            m_list = resp["morale"]
-            morale = int(m_list[0]) if m_list else 100
-            anger = int(m_list[1]) if len(m_list) > 1 else 0
-        else:
-            morale = int(resp.get("morale", 100))
-            anger = int(resp.get("anger", 0))
+        morale = int(data.get("m_lmorale_current", data.get("morale", 100)))
+        anger = int(data.get("m_lmorale_complaint", data.get("anger", 0)))
 
         now_mono = time.monotonic()
         if morale < 90 or anger > 0:
@@ -686,29 +813,23 @@ class BuildingTask:
         return slots
 
     def get_real_buildings(self) -> dict[int, dict]:
-        """Lấy danh sách công trình hiện có: {pid: {"gid": gid, "level": level, "name": name}}."""
-        resp = self.gateway.call("City.ashx", 5, {"tid": str(self.city_id), "_": ""}) or {}
+        """Lấy danh sách công trình hiện có từ /api/building/list: {pid: {"gid": gid, "level": level, "name": name}}."""
+        resp = self.gateway.building_list(self.city_id) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()
 
-        buildings_list = resp.get("infos") or resp.get("buildings") or resp.get("build", [])
+        buildings_list = resp.get("items") or resp.get("infos") or []
         buildings_map = {}
         for b in buildings_list:
-            if isinstance(b, dict):
-                pid = int(b.get("pid", 0))
-                buildings_map[pid] = {
-                    "gid": int(b.get("gid", 0)),
-                    "level": int(b.get("level", 0)),
-                    "name": b.get("name", ""),
-                }
-            elif isinstance(b, (list, tuple)) and len(b) >= 4:
-                pid = int(b[0])
-                buildings_map[pid] = {
-                    "gid": int(b[1]),
-                    "level": int(b[3]),
-                    "name": str(b[2]) if len(b) > 2 else "",
-                }
+            if not isinstance(b, dict):
+                continue
+            pid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
+            buildings_map[pid] = {
+                "gid": int(b.get("m_lgid") or b.get("gid", 0)),
+                "level": int(b.get("m_llevel") if b.get("m_llevel") is not None else b.get("level", 0)),
+                "name": str(b.get("m_szname") or b.get("name") or ""),
+            }
         return buildings_map
 
     def speedup_slot(self, slot_id: int, paytype: Optional[int] = None) -> bool:
@@ -731,6 +852,7 @@ class BuildingTask:
             raise CaptchaRequired()
         if ret != RET_OK:
             err_map = {
+                1: "Công trình không thể tăng tốc (Quan Phủ/Tường Thành) hoặc thao tác thất bại",
                 4: "Mã thành trì không hợp lệ",
                 8: "Vị trí công trình không hợp lệ",
                 30: "Không đủ Coin (元宝)",
@@ -738,10 +860,46 @@ class BuildingTask:
                 45: "Không đủ Ngân Bảo (点券)",
                 999: "Lỗi không xác định",
             }
-            msg = err_map.get(ret, f"Lỗi mã {ret}")
+            server_msg = str(resp.get("errMsg") or "").strip() if isinstance(resp, dict) else ""
+            msg = err_map.get(ret) or server_msg or f"Lỗi mã {ret}"
             self._log(f"❌ Tăng tốc thất bại cho slot {slot_id}: {msg}")
             return False
         return True
+
+    @staticmethod
+    def _extract_slot_gid_and_time(item) -> Optional[tuple[int, Optional[int], int]]:
+        """Trích xuất (slot_id, gid, time_left_seconds) từ phần tử hàng đợi nâng cấp."""
+        if isinstance(item, (list, tuple)):
+            if len(item) < 1:
+                return None
+            try:
+                slot = int(item[0])
+            except (ValueError, TypeError):
+                return None
+            gid: Optional[int] = None
+            if len(item) >= 2 and item[1] is not None:
+                try:
+                    gid = int(item[1])
+                except (ValueError, TypeError):
+                    gid = None
+            time_left = parse_remaining_seconds(item[4]) if len(item) >= 5 else 0
+            return slot, gid, time_left
+        if isinstance(item, dict):
+            try:
+                slot = int(item.get("slot") or item.get("pid") or 1)
+            except (ValueError, TypeError):
+                return None
+            raw_gid = item.get("gid") if item.get("gid") is not None else item.get("m_lgid")
+            gid = None
+            if raw_gid is not None:
+                try:
+                    gid = int(raw_gid)
+                except (ValueError, TypeError):
+                    gid = None
+            raw_time = item.get("time_left") if item.get("time_left") is not None else item.get("time")
+            time_left = parse_remaining_seconds(raw_time)
+            return slot, gid, time_left
+        return None
 
     def process_speedup(self) -> int:
         """Tăng tốc các công trình đang thi công theo cơ chế chuẩn ZBuild.
@@ -749,6 +907,7 @@ class BuildingTask:
         Mỗi lần gọi OPT.ashx?id=69 giảm 50% thời gian thi công còn lại.
         Vòng lặp giảm thời gian cho mỗi slot chạy cho đến khi thời gian còn lại
         < target_hours * 3600 (mặc định 1h = 3600s) hoặc tối đa 10 lần.
+        Bỏ qua Quan Phủ (1), Tường Thành (2), Cung Điện (54), Bích Lũy (55) và công trình NPC (22..53).
         """
         target_seconds = int(self.speedup_hours * 3600)
         active_slots = self.get_active_upgrade_slots()
@@ -757,22 +916,17 @@ class BuildingTask:
 
         total_speedups = 0
         for item in active_slots:
-            if isinstance(item, (list, tuple)):
-                if len(item) < 1:
-                    continue
-                try:
-                    slot = int(item[0])
-                except (ValueError, TypeError):
-                    continue
-                time_left = parse_remaining_seconds(item[4]) if len(item) >= 5 else 0
-            elif isinstance(item, dict):
-                try:
-                    slot = int(item.get("slot") or item.get("pid") or 1)
-                except (ValueError, TypeError):
-                    continue
-                raw_time = item.get("time_left") if item.get("time_left") is not None else item.get("time")
-                time_left = parse_remaining_seconds(raw_time)
-            else:
+            parsed = self._extract_slot_gid_and_time(item)
+            if parsed is None:
+                continue
+            slot, gid, time_left = parsed
+
+            if not is_speedup_supported_building(gid):
+                gid_key = int(gid or 0)
+                if (slot, gid_key) not in self._non_speedup_logged:
+                    self._non_speedup_logged.add((slot, gid_key))
+                    bname = BUILDING_NAMES.get(gid_key, f"GID {gid_key}")
+                    self._log(f"   ⏭️ Slot {slot} ({bname}): công trình không hỗ trợ tăng tốc, bỏ qua")
                 continue
 
             if time_left <= target_seconds:
@@ -836,7 +990,7 @@ class BuildingTask:
             return False
 
         # 1. Chuyển ngữ cảnh về thành trì đang thi công
-        self.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""})
+        self.gateway.set_current_city(self.city_id)
 
         boxes_to_try = [self.box_id]
         if self.auto_fallback_box:
@@ -851,8 +1005,8 @@ class BuildingTask:
             if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
                 raise CaptchaRequired()
 
-            if ret == 10014:
-                self._log(f"ℹ️ Đã hết {box_label} trong túi đồ (mã 10014).")
+            if ret in (10014, RET_ITEM_EXHAUSTED):
+                self._log(f"ℹ️ Đã hết {box_label} trong túi đồ (mã {ret}).")
                 continue
 
             if ret != RET_OK:
@@ -861,17 +1015,18 @@ class BuildingTask:
 
             self._log(f"🎁 Đã mở thành công 1 {box_label} (toàn bộ công trình thiếu tài nguyên).")
 
-            # Kiểm tra sức chứa tối đa của kho tài nguyên để tránh tràn kho ở các lần tiếp theo
-            res_resp = self.gateway.call("City.ashx", 20, {"tid": str(self.city_id), "_": ""}) or {}
-            res_data = res_resp.get("data", {})
+            # Kiểm tra sức chứa tối đa của kho tài nguyên qua /api/resource/info để tránh tràn kho
+            res_data = self.gateway.resource_info(self.city_id) or {}
             if res_data:
-                max_storage = int(res_data.get("max_storage", 0))
+                max_storage = int(res_data.get("m_lmax_storage", res_data.get("max_storage", 0)))
                 if max_storage > 0:
-                    is_storage_full = all(
-                        int(res_data.get(k, 0)) >= max_storage
-                        for k in ("wood", "stone", "iron", "food")
+                    balances = (
+                        res_data.get("m_lwood_balance", res_data.get("wood", 0)),
+                        res_data.get("m_lstone_balance", res_data.get("stone", 0)),
+                        res_data.get("m_liron_balance", res_data.get("iron", 0)),
+                        res_data.get("m_lfood_balance", res_data.get("food", 0)),
                     )
-                    if is_storage_full:
+                    if all(int(v) >= max_storage for v in balances):
                         self._log("⚠️ Kho tài nguyên đã đầy sức chứa tối đa, ngừng mở thêm đạo cụ.")
                         self._storage_full = True
             return True
@@ -1035,16 +1190,8 @@ class BuildingTask:
                 next_lvl = cur_lvl + 1 if action_type == 1 else cur_lvl - 1
                 icon = "🏗️" if action_type == 1 else "🏚️"
 
-                resp = self.gateway.call(
-                    "OPT.ashx",
-                    65,
-                    {
-                        "pid": str(plan.pid),
-                        "gid": str(plan.gid),
-                        "type": str(action_type),
-                        "tid": str(self.city_id),
-                        "_": "",
-                    },
+                resp = self.gateway.update_building(
+                    self.city_id, plan.pid, plan.gid, action_type
                 )
                 ret = resp.get("ret", RET_OK) if isinstance(resp, dict) and resp else -1
                 if ret == 110 or ret == RET_CAPTCHA_REQUIRED:

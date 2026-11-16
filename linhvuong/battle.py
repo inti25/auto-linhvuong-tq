@@ -478,7 +478,7 @@ class BattleEngine:
                 resp = self.gateway.session.post(
                     url, data=payload, headers=headers, timeout=timeout
                 )
-                if resp.status_code == 200:
+                if resp.status_code in (200, 400):
                     return self._parse_resp_json(resp)
             except Exception:
                 pass
@@ -930,7 +930,11 @@ class BattleEngine:
             return []
         wanted = {int(g) for g in generals if g}
         try:
-            resp32 = self._post_gateway("Common.ashx", 32, {"type": "2", "_": ""}, referer_path="/")
+            page_official = getattr(self.gateway, "page_official", None)
+            if callable(page_official):
+                resp32 = page_official(2)
+            else:
+                resp32 = self._post_gateway("Common.ashx", 32, {"type": "2", "_": ""}, referer_path="/")
         except Exception:
             return []
         if not isinstance(resp32, dict) or "list" not in resp32:
