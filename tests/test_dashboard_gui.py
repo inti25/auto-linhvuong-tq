@@ -23,6 +23,7 @@ def safe_dashboard(roster_mock=None):
     with patch("threading.Thread") as mock_thread:
         try:
             dash = Dashboard(session, 57)
+            dash._auto_save_enabled = False
             dash.withdraw()
         except Exception as e:
             pytest.skip(f"Tkinter display error: {e}")
@@ -2914,6 +2915,7 @@ def test_overview_tab_displays_loyalty_tactician_and_action_buttons():
         assert hasattr(dash, "reward_all_btn")
         assert hasattr(dash, "tactician_btn")
         assert hasattr(dash, "equip_btn")
+        assert hasattr(dash, "armament_btn")
 
         c1 = City(id=15230, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200, level=20)
         g1 = General(
@@ -3742,3 +3744,36 @@ def test_dashboard_binhman_goidan_attack_action_config_runtime_and_profile(tmp_p
 
 
 
+
+
+def test_armament_dialog_lists_vo_generals_and_marks_mismatch():
+    """Hộp thoại Quân Giới Tướng chỉ liệt kê Võ tướng, đánh dấu Lệch/Khớp so với tướng mẫu."""
+    from linhvuong.armament import ArmamentSnapshot
+
+    dash = safe_dashboard()
+    try:
+        dash.roster = dummy_roster()
+        dash.gateway = None
+        dash._open_armament_dialog()
+        rows = dash.arm_tree.get_children()
+        assert set(rows) == {"417506", "417520"}
+
+        tmpl = ArmamentSnapshot(infantry=(353, 108, 0))
+        same = ArmamentSnapshot(infantry=(353, 108, 0))
+        diff = ArmamentSnapshot()
+        dash._arm_snapshots = {417506: tmpl, 417520: diff}
+        dash.arm_template_combo.set(
+            next(k for k, v in dash._arm_template_by_name.items() if v == 417506)
+        )
+        dash._on_arm_template_changed()
+        assert dash.arm_tree.item("417506", "values")[-1] == "Tướng mẫu"
+        assert "Lệch" in dash.arm_tree.item("417520", "values")[-1]
+
+        dash._arm_select_mismatch()
+        assert dash._arm_selected_ids == {417520}
+        dash._arm_snapshots[417520] = same
+        dash._refresh_arm_tree()
+        assert "Khớp" in dash.arm_tree.item("417520", "values")[-1]
+        dash._arm_dialog.destroy()
+    finally:
+        dash.destroy()

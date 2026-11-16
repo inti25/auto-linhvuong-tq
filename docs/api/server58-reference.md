@@ -432,6 +432,8 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `OPT.ashx?id=41` | `lAmount=50, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=44` / `12` / `180` | `techid=1, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=46` / `47` / `58` | `lGeneralID=4880, ...` | `{"ret":0}` |
+| `OPT.ashx?id=56` (Lưu quân giới tướng) | `lGeneralID, lInfantryEID1..3, lCavalryEID1..3, lBowmanEID1..3, lMangonelEID` (cần đủ 10 ô; id `46` thực chất là Ban thưởng `lCityID, lGeneralID, lMoney`) | `{"ret":0}`; `42` thiếu quân giới khi tướng đã có lính, `71` thiếu quân giới chính ô 1 khi đã có lính, `20` sai căn cứ, `40` tướng bận. Ô 1: Bộ=Giáp(4), Kỵ=Ngựa(8), Cung=Cung(2); ô 2–3 nhận mọi loại trừ Xe(16). Chỉ ô 1 cần > 0 khi ô 2/3 > 0. |
+| `OPT.ashx?id=57` (Trận hình & tỷ lệ) | `lGeneralID, lRatioAttack, lRatioPK, lRatioStra (tổng 100), lBattleArray, lWithdrawLoss, lWithdrawMorale` | `{"ret":0}` |
 | `OPT.ashx?id=55` | `tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=63` | `{}` | `{"ret":86}` *(đã nhận chuyên cần trong ngày)* |
 | `OPT.ashx?id=69` (`type=1,3,33`) | `type=1`/`3` | `{"ret":0,"errMsg":"成功"}`; Quan Phủ/Thành Tường (`gid=1,2,54,55`) hoặc công trình NPC (`22..53`) trả `{"ret":1,"errMsg":"操作失败，请稍后再试"}`; `type=33` khi hết: `{"ret":90,"errMsg":"道具已经用完"}` |

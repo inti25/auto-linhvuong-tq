@@ -303,6 +303,10 @@ _Avoid_: Đồ lính, vũ khí thô, trang bị lính
 Tiến trình tự động điều phối lệnh sản xuất trang thiết bị quân sự định kỳ tại các công xưởng chuyên trách trong thành trì (Xưởng Binh Khí, Xưởng Khôi Giáp, Xưởng Ngựa) theo chỉ định về chủng loại, số lượng mẻ và chu kỳ lặp lại.
 _Avoid_: Rèn vũ khí, đúc kiếm, mua đồ quân sự
 
+**Đồng Bộ Quân Giới**:
+Hoạt động sao chép cấu hình **Quân Giới** mặc định cho từng binh chủng (Bộ binh, Kỵ binh, Cung binh, Xe ném đá) — cùng **Trận hình** xuất kích nếu chọn — từ một **Võ tướng** mẫu sang các **Võ tướng** khác, độc lập hoàn toàn với **Tự Động Trang Bị**, **Chuyển quân giới** và các phân hệ chiến dịch.
+_Avoid_: Gán đồ lính, auto-equip quân, đồng bộ trang bị tướng
+
 **Ngưỡng Nhật Ký**:
 Giới hạn số dòng tối đa trên khung hiển thị giao diện (mặc định 500 dòng cho tác vụ thường, 300 dòng cho chiến trường) hoặc dung lượng tệp log trên ổ đĩa (mặc định 2MB/tệp, giữ 3 bản sao và lưu giữ tối đa 7 ngày) trước khi kích hoạt Cắt Tỉa Nhật Ký.
 _Avoid_: Max lines, log limit, dung lượng tối đa
