@@ -11,6 +11,7 @@ Reverse engineered chính xác từ ZBuild.exe:
   7. Tự động An Dân khôi phục sĩ khí/lòng dân: OPT.ashx?id=4 (lType=1, tid).
 """
 
+import logging
 import queue
 import threading
 import time
@@ -18,8 +19,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from ..gateway import GatewayClient
+from ..gateway import GatewayClient, gateway_city_context
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
+
+logger = logging.getLogger("linhvuong.tasks.building")
 
 RET_BULK_OUT_OF_CHESTS = 8108
 RET_ITEM_EXHAUSTED = 90
@@ -158,6 +161,23 @@ def chest_needs_city_switch(chest_name: str) -> bool:
     return chest_name not in NO_SWITCH_CHESTS
 
 
+def switch_city_verified(gateway: GatewayClient, city_id: int) -> tuple[bool, int, str]:
+    """Chuyển ngữ cảnh thành hiện tại (/api/city/current) và xác nhận ret == 0."""
+    cid = int(city_id)
+    sw_resp = gateway.set_current_city(cid)
+    if not isinstance(sw_resp, dict):
+        return False, -1, f"Không thể kết nối khi chuyển sang thành {cid}"
+    try:
+        sw_ret = int(sw_resp.get("ret", -1))
+    except (ValueError, TypeError):
+        sw_ret = -1
+    if sw_ret in (110, RET_CAPTCHA_REQUIRED):
+        return False, sw_ret, f"Server yêu cầu giải Captcha khi chuyển thành (mã {sw_ret})"
+    if sw_ret != RET_OK:
+        return False, sw_ret, f"Không thể chuyển sang thành {cid} (mã {sw_ret})"
+    return True, RET_OK, ""
+
+
 def open_single_chest(
     gateway: GatewayClient,
     chest_name: str,
@@ -166,23 +186,6 @@ def open_single_chest(
     """Mở 1 Rương Đạo Cụ (Common.ashx?id=48) hoặc Lễ Bao Đặc Biệt (OPT.ashx?id=69)."""
     if chest_name not in CHEST_MAPPING:
         return False, -1, f"Loại rương không hợp lệ: {chest_name}"
-
-    if chest_needs_city_switch(chest_name):
-        try:
-            cid = int(city_id) if city_id is not None else 0
-        except (ValueError, TypeError):
-            cid = 0
-        if cid <= 0:
-            return False, -2, "Vui lòng chọn một Thành hợp lệ (ID dương) để nhận vật phẩm từ rương"
-
-        sw_resp = gateway.set_current_city(cid)
-        if sw_resp is None:
-            return False, -1, f"Không thể kết nối khi chuyển sang thành {cid}"
-        sw_ret = int(sw_resp.get("ret", 0))
-        if sw_ret in (110, RET_CAPTCHA_REQUIRED):
-            return False, sw_ret, f"Server yêu cầu giải Captcha khi chuyển thành (mã {sw_ret})"
-        if sw_ret != RET_OK:
-            return False, sw_ret, f"Không thể chuyển sang thành {cid} (mã {sw_ret})"
 
     chest_info = CHEST_MAPPING[chest_name]
     if isinstance(chest_info, dict):
@@ -194,20 +197,36 @@ def open_single_chest(
         api_type = 48
         param1 = 0
 
-    if api_type == 69:
-        resp = gateway.call(
-            "OPT.ashx",
-            69,
-            {
-                "type": str(box_id),
-                "param1": str(param1),
-                "param2": "0",
-                "paytype": "1",
-                "_": "",
-            },
-        )
-    else:
-        resp = gateway.call("Common.ashx", 48, {"lBoxID": str(box_id), "_": ""})
+    needs_switch = chest_needs_city_switch(chest_name)
+    cid = 0
+    if needs_switch:
+        try:
+            cid = int(city_id) if city_id is not None else 0
+        except (ValueError, TypeError):
+            cid = 0
+        if cid <= 0:
+            return False, -2, "Vui lòng chọn một Thành hợp lệ (ID dương) để nhận vật phẩm từ rương"
+
+    with gateway_city_context(gateway):
+        if needs_switch:
+            ok_sw, sw_ret, sw_msg = switch_city_verified(gateway, cid)
+            if not ok_sw:
+                return False, sw_ret, sw_msg
+
+        if api_type == 69:
+            resp = gateway.call(
+                "OPT.ashx",
+                69,
+                {
+                    "type": str(box_id),
+                    "param1": str(param1),
+                    "param2": "0",
+                    "paytype": "1",
+                    "_": "",
+                },
+            )
+        else:
+            resp = gateway.call("Common.ashx", 48, {"lBoxID": str(box_id), "_": ""})
 
     if not isinstance(resp, dict):
         return False, -1, "Mở thất bại (không nhận được phản hồi hợp lệ)"
@@ -989,47 +1008,55 @@ class BuildingTask:
             self._log("⚠️ Kho tài nguyên đã đầy sức chứa tối đa, ngừng mở thêm đạo cụ.")
             return False
 
-        # 1. Chuyển ngữ cảnh về thành trì đang thi công
-        self.gateway.set_current_city(self.city_id)
-
         boxes_to_try = [self.box_id]
         if self.auto_fallback_box:
             for bid in DEFAULT_FALLBACK_BOX_ORDER:
                 if bid not in boxes_to_try:
                     boxes_to_try.append(bid)
 
-        for cur_box_id in boxes_to_try:
-            box_label = RESOURCE_BOX_NAMES.get(cur_box_id, f"Rương {cur_box_id}")
-            resp = self.gateway.call("Common.ashx", 48, {"lBoxID": str(cur_box_id), "_": ""}) or {}
-            ret = resp.get("ret", RET_OK)
-            if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+        with gateway_city_context(self.gateway):
+            # 1. Chuyển ngữ cảnh về thành trì đang thi công và xác nhận thành công trước khi mở rương
+            ok_sw, sw_ret, sw_msg = switch_city_verified(self.gateway, self.city_id)
+            if sw_ret in (110, RET_CAPTCHA_REQUIRED):
                 raise CaptchaRequired()
+            if not ok_sw:
+                self._log(f"⚠️ {sw_msg}; bỏ qua mở rương để tránh mở nhầm thành.")
+                logger.warning(f"[city={self.city_id}] Chuyển thành thất bại trước khi mở rương: {sw_msg}")
+                return False
 
-            if ret in (10014, RET_ITEM_EXHAUSTED):
-                self._log(f"ℹ️ Đã hết {box_label} trong túi đồ (mã {ret}).")
-                continue
+            for cur_box_id in boxes_to_try:
+                box_label = RESOURCE_BOX_NAMES.get(cur_box_id, f"Rương {cur_box_id}")
+                resp = self.gateway.call("Common.ashx", 48, {"lBoxID": str(cur_box_id), "_": ""}) or {}
+                ret = resp.get("ret", RET_OK)
+                if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+                    raise CaptchaRequired()
 
-            if ret != RET_OK:
-                self._log(f"⚠️ Mở {box_label} thất bại (mã {ret}).")
-                continue
+                if ret in (10014, RET_ITEM_EXHAUSTED):
+                    self._log(f"ℹ️ Đã hết {box_label} trong túi đồ (mã {ret}).")
+                    continue
 
-            self._log(f"🎁 Đã mở thành công 1 {box_label} (toàn bộ công trình thiếu tài nguyên).")
+                if ret != RET_OK:
+                    self._log(f"⚠️ Mở {box_label} thất bại (mã {ret}).")
+                    continue
 
-            # Kiểm tra sức chứa tối đa của kho tài nguyên qua /api/resource/info để tránh tràn kho
-            res_data = self.gateway.resource_info(self.city_id) or {}
-            if res_data:
-                max_storage = int(res_data.get("m_lmax_storage", res_data.get("max_storage", 0)))
-                if max_storage > 0:
-                    balances = (
-                        res_data.get("m_lwood_balance", res_data.get("wood", 0)),
-                        res_data.get("m_lstone_balance", res_data.get("stone", 0)),
-                        res_data.get("m_liron_balance", res_data.get("iron", 0)),
-                        res_data.get("m_lfood_balance", res_data.get("food", 0)),
-                    )
-                    if all(int(v) >= max_storage for v in balances):
-                        self._log("⚠️ Kho tài nguyên đã đầy sức chứa tối đa, ngừng mở thêm đạo cụ.")
-                        self._storage_full = True
-            return True
+                logger.info(f"[city={self.city_id}] Mở thành công 1 {box_label} (box_id={cur_box_id}) khi thiếu tài nguyên.")
+                self._log(f"🎁 Đã mở thành công 1 {box_label} (toàn bộ công trình thiếu tài nguyên).")
+
+                # Kiểm tra sức chứa tối đa của kho tài nguyên qua /api/resource/info để tránh tràn kho
+                res_data = self.gateway.resource_info(self.city_id) or {}
+                if res_data:
+                    max_storage = int(res_data.get("m_lmax_storage", res_data.get("max_storage", 0)))
+                    if max_storage > 0:
+                        balances = (
+                            res_data.get("m_lwood_balance", res_data.get("wood", 0)),
+                            res_data.get("m_lstone_balance", res_data.get("stone", 0)),
+                            res_data.get("m_liron_balance", res_data.get("iron", 0)),
+                            res_data.get("m_lfood_balance", res_data.get("food", 0)),
+                        )
+                        if all(int(v) >= max_storage for v in balances):
+                            self._log("⚠️ Kho tài nguyên đã đầy sức chứa tối đa, ngừng mở thêm đạo cụ.")
+                            self._storage_full = True
+                return True
 
         self._log("⚠️ Không còn rương tài nguyên nào trong túi đồ có thể mở.")
         return False

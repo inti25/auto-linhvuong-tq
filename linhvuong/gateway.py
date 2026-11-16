@@ -1,3 +1,4 @@
+from contextlib import contextmanager, nullcontext
 import json
 import logging
 import re
@@ -34,6 +35,7 @@ class GatewayClient:
         self.max_failovers = max(0, int(max_failovers))
         self._relogin_lock = threading.Lock()
         self._proxy_lock = threading.Lock()
+        self._city_context_lock = threading.RLock()
         self._last_relogin_time = 0.0
         self._map_cache: dict[int, tuple[float, dict]] = {}
         self._map_cache_lock = threading.Lock()
@@ -63,6 +65,12 @@ class GatewayClient:
             mount("https://", adapter)
         except Exception as e:
             logger.debug(f"Không thể cấu hình connection pool: {e}")
+
+    @contextmanager
+    def city_context(self):
+        """Khóa tuần tự các thao tác phụ thuộc thành đang chọn (/api/city/current)."""
+        with self._city_context_lock:
+            yield
 
     @property
     def base_url(self) -> str:
@@ -416,3 +424,13 @@ class GatewayClient:
                         self._map_cache.clear()
                 self._map_cache[mid_int] = (now, data)
         return data
+
+
+def gateway_city_context(gateway: Any):
+    """Trả về context manager khóa ngữ cảnh thành của gateway (tương thích mock/test)."""
+    ctx_fn = getattr(gateway, "city_context", None)
+    if callable(ctx_fn):
+        cm = ctx_fn()
+        if hasattr(cm, "__enter__") and hasattr(cm, "__exit__"):
+            return cm
+    return nullcontext()

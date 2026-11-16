@@ -1683,3 +1683,31 @@ def test_process_speedup_skips_non_speeduppable_buildings_and_avoids_ret_1_spam(
 
 
 
+def test_building_task_aborts_open_box_when_city_switch_fails():
+    """Nếu /api/city/current thất bại (vd ret=8600), không mở rương vào sai thành."""
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=77": {"ret": 0, "list": []},
+            "City.ashx?id=5": {"ret": 0, "infos": [[1, 1, "Quan Phủ", 10, 0, 0]]},
+            "OPT.ashx?id=65": {"ret": 32},
+            "City.ashx?id=50": {"ret": 8600, "errMsg": "请求未发送"},
+            "Common.ashx?id=48": {"ret": 0},
+        }
+    )
+    gw = GatewayClient(58, server, sleep=lambda s: None)
+    logs: list[str] = []
+    task = BuildingTask(
+        gw,
+        city_id=10254,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=12)],
+        auto_comfort=False,
+        auto_boost=False,
+        auto_open_box=True,
+        box_id=24,
+        notify=logs.append,
+    )
+    out = task.run_once()
+    assert out == "insufficient_resources"
+    box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
+    assert len(box_calls) == 0
+    assert any("chuyển" in line.lower() for line in logs)

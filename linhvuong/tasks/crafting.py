@@ -14,7 +14,7 @@ import logging
 import time
 from typing import Callable, Optional
 
-from ..gateway import GatewayClient
+from ..gateway import GatewayClient, gateway_city_context
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
 
 logger = logging.getLogger("linhvuong.tasks.crafting")
@@ -206,10 +206,6 @@ class WeaponCrafter:
 
         w_name = get_weapon_name(weapon_id)
 
-        # 1. Chuyển tiêu điểm thành phố qua /api/city/current
-        if switch_city:
-            self.gateway.set_current_city(city_id)
-
         # 2. Tìm vị trí ô đất và mã xưởng phù hợp trong thành
         plot_id, workshop_gid = self.find_workshop(city_id, weapon_id)
         if plot_id is None or workshop_gid is None:
@@ -219,21 +215,7 @@ class WeaponCrafter:
                 notify(err_msg)
             return False, -2, err_msg
 
-        # 3. Kích hoạt ngữ cảnh công xưởng qua Build.ashx?id=2 trước khi gửi lệnh chế tạo
-        self.gateway.call(
-            "Build.ashx",
-            2,
-            {
-                "gid": str(workshop_gid),
-                "pid": str(plot_id),
-                "tab": "0",
-                "tid": str(city_id),
-                "_": "",
-            },
-        )
-
-        # 4. Gửi lệnh chế tạo quân giới qua OPT.ashx?id=38
-        # Máy chủ yêu cầu lFaster >= 1 (1: bình thường, 3: tăng tốc)
+        # 3. Kích hoạt ngữ cảnh công xưởng qua Build.ashx?id=2 và gửi lệnh chế tạo dưới khóa city_context
         faster_val = max(1, faster) if faster is not None else 1
         payload = {
             "count": str(amount),
@@ -244,7 +226,24 @@ class WeaponCrafter:
             "num": "-1",
             "_": "",
         }
-        resp = self.gateway.call("OPT.ashx", 38, payload) or {}
+        with gateway_city_context(self.gateway):
+            if switch_city:
+                self.gateway.set_current_city(city_id)
+
+            self.gateway.call(
+                "Build.ashx",
+                2,
+                {
+                    "gid": str(workshop_gid),
+                    "pid": str(plot_id),
+                    "tab": "0",
+                    "tid": str(city_id),
+                    "_": "",
+                },
+            )
+
+            # Máy chủ yêu cầu lFaster >= 1 (1: bình thường, 3: tăng tốc)
+            resp = self.gateway.call("OPT.ashx", 38, payload) or {}
         ret = resp.get("ret", -1)
 
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:

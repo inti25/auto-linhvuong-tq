@@ -3777,3 +3777,86 @@ def test_armament_dialog_lists_vo_generals_and_marks_mismatch():
         dash._arm_dialog.destroy()
     finally:
         dash.destroy()
+
+
+
+def test_resource_monitor_switches_city_and_skips_failed_reads():
+    """Giám sát tài nguyên phải chuyển đúng city trước khi mở rương và không mở khi API đọc lỗi."""
+    dash = safe_dashboard()
+    try:
+        active_city = [10129]
+        opened_into: list[tuple[int, str]] = []
+
+        def fake_set_current_city(cid):
+            active_city[0] = int(cid)
+            return {"ret": 0}
+
+        def fake_resource_info(cid):
+            if int(cid) == 10129:
+                return {
+                    "ret": 0,
+                    "m_lfood_balance": 3352676,
+                    "m_lwood_balance": 3168573,
+                    "m_lstone_balance": 3344722,
+                    "m_liron_balance": 3409446,
+                    "m_lmax_storage": 3466600,
+                }
+            if int(cid) == 10254:
+                return {
+                    "ret": 0,
+                    "m_lfood_balance": 251163,
+                    "m_lwood_balance": 457960,
+                    "m_lstone_balance": 649669,
+                    "m_liron_balance": 743734,
+                    "m_lmax_storage": 3985008,
+                }
+            return None  # Lỗi mạng / HTTP 503 ở thành khác
+
+        def fake_city_info(cid):
+            if int(cid) in (10129, 10254):
+                return {"ret": 0, "m_lmoney_balance": 22212142}
+            return None
+
+        def fake_call(ep, api_id, payload=None, **_kw):
+            if ep == "Common.ashx" and api_id == 48:
+                opened_into.append((active_city[0], str((payload or {}).get("lBoxID", ""))))
+                return {"ret": 0}
+            return {"ret": 0}
+
+        dash.gateway.set_current_city = fake_set_current_city
+        dash.gateway.resource_info = fake_resource_info
+        dash.gateway.city_info = fake_city_info
+        dash.gateway.call = fake_call
+        dash.roster = Roster(
+            cities=[
+                City(id=10129, name="1"),
+                City(id=10229, name="2"),
+                City(id=10254, name="6"),
+            ]
+        )
+        dash._selected_resource_cities = [10129, 10229, 10254]
+        dash.res_gold_thresh_var.set("10000")
+        dash.res_wood_pct_var.set("11")
+        dash.res_iron_pct_var.set("11")
+        dash.res_stone_pct_var.set("11")
+        dash.res_food_pct_var.set("11")
+        dash.res_gold_box_combo.current(4)
+        dash.res_tn_box_combo.current(4)
+        dash._res_monitor_running = True
+        dash.after = lambda _ms, fn, *args: fn(*args)
+
+        with patch("time.sleep", side_effect=lambda _s: setattr(dash, "_res_monitor_running", False)):
+            dash._run_resource_monitor_loop()
+
+        # Chỉ thành 6 (10254) thiếu lương thực -> rương phải mở đúng vào 10254,
+        # không mở nhầm vào 10129 và không mở nhầm cho thành 10229 bị lỗi đọc API.
+        assert opened_into == [(10254, "24")]
+
+        # Nếu chuyển thành (set_current_city) thất bại (vd ret=8600), không được mở rương vào sai thành.
+        opened_into.clear()
+        active_city[0] = 10129
+        dash.gateway.set_current_city = lambda _cid: {"ret": 8600}
+        dash._check_resource_thresholds_for_city(10254)
+        assert opened_into == []
+    finally:
+        dash.destroy()

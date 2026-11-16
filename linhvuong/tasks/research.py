@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from ..gateway import GatewayClient
+from ..gateway import GatewayClient, gateway_city_context
 from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
 from .building import parse_remaining_seconds
 
@@ -147,9 +147,6 @@ class ResearchTask:
 
     def get_current_tech_levels(self) -> dict[int, int]:
         """Lấy cấp độ hiện tại của 29 kỹ thuật tại viện Đại Học / Thái Học Điện qua Build.ashx?id=2."""
-        # Chuyển focus thành thị trước khi đọc kiến trúc (bắt buộc trên server game thật)
-        self.gateway.set_current_city(self.city_id)
-
         univ_pid, univ_gid = self.get_university_info()
         if univ_pid is None:
             univ_pid = 6  # Fallback cho mock/test
@@ -162,7 +159,10 @@ class ResearchTask:
             "tid": str(self.city_id),
             "_": "",
         }
-        resp = self.gateway.call("Build.ashx", 2, payload) or {}
+        # Chuyển focus thành thị trước khi đọc kiến trúc (bắt buộc trên server game thật)
+        with gateway_city_context(self.gateway):
+            self.gateway.set_current_city(self.city_id)
+            resp = self.gateway.call("Build.ashx", 2, payload) or {}
         ret = resp.get("ret", RET_OK)
         if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
             raise CaptchaRequired()

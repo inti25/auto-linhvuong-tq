@@ -9,12 +9,14 @@ import tkinter as tk
 from tkinter import messagebox as _default_messagebox
 from typing import Any, Callable, Optional
 
+from ..gateway import gateway_city_context
 from ..tasks.building import (
     CHEST_MAPPING,
     BuildingTask as _DefaultBuildingTask,
     chest_needs_city_switch,
     parse_boost_remaining_time,
     run_batch_open_chest,
+    switch_city_verified,
 )
 from .shared import resolve_dashboard_symbol
 
@@ -179,6 +181,113 @@ class InternalAuxMixin:
             self.res_monitor_btn.configure(text="Tài Nguyên", style="Danger.TButton")
             self._append_bld_log("⏹️ Đã dừng giám sát tài nguyên.")
 
+    def _check_resource_thresholds_for_city(self, cid: int) -> None:
+        """Kiểm tra ngưỡng Vàng/Khoáng sản của đúng một Thành; chuyển focus trước khi mở rương."""
+        cname = f"Thành {cid}"
+        if self.roster:
+            b = self.roster.base_by_id(cid)
+            if b:
+                cname = b.name
+
+        # 1. Lấy tài nguyên (/api/resource/info) & vàng (/api/city/info) trên Server 58+
+        res_data = self.gateway.resource_info(cid)
+        city_data = self.gateway.city_info(cid)
+
+        city_ok = (
+            isinstance(city_data, dict)
+            and int(city_data.get("ret", -1)) == 0
+            and ("m_lmoney_balance" in city_data or "money" in city_data)
+        )
+        res_ok = (
+            isinstance(res_data, dict)
+            and int(res_data.get("ret", -1)) == 0
+            and ("m_lmax_storage" in res_data or "max_storage" in res_data)
+        )
+
+        need_gold = False
+        money = 0
+        gold_th = 100000000
+        if city_ok:
+            money = int(city_data.get("m_lmoney_balance", city_data.get("money", 0)))
+            try:
+                gold_th = int(self.res_gold_thresh_var.get().replace(",", "").replace(".", "").strip())
+            except ValueError:
+                gold_th = 100000000
+            need_gold = money < gold_th
+
+        need_tn = False
+        max_storage = 0
+        if res_ok:
+            wood = int(res_data.get("m_lwood_balance", res_data.get("wood", 0)))
+            iron = int(res_data.get("m_liron_balance", res_data.get("iron", 0)))
+            stone = int(res_data.get("m_lstone_balance", res_data.get("stone", 0)))
+            food = int(res_data.get("m_lfood_balance", res_data.get("food", 0)))
+            max_storage = int(res_data.get("m_lmax_storage", res_data.get("max_storage", 0)))
+            if max_storage > 0:
+                try:
+                    w_pct = float(self.res_wood_pct_var.get()) / 100.0
+                    i_pct = float(self.res_iron_pct_var.get()) / 100.0
+                    s_pct = float(self.res_stone_pct_var.get()) / 100.0
+                    f_pct = float(self.res_food_pct_var.get()) / 100.0
+                except ValueError:
+                    w_pct = i_pct = s_pct = f_pct = 0.7
+
+                need_tn = (
+                    wood < max_storage * w_pct
+                    or iron < max_storage * i_pct
+                    or stone < max_storage * s_pct
+                    or food < max_storage * f_pct
+                )
+
+        if not (need_gold or need_tn):
+            return
+
+        def _open_box_for_city(combo_attr: str, default_id: int, icon: str, kind_label: str, reason: str) -> None:
+            combo = getattr(self, combo_attr, None)
+            box_str = combo.get() if combo is not None else str(default_id)
+            try:
+                box_id = int(str(box_str).split(":")[0].strip())
+            except (ValueError, IndexError):
+                box_id = default_id
+            r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(box_id), "_": ""})
+            ret = int(r_box.get("ret", -1)) if isinstance(r_box, dict) else -1
+            if ret in (110, 73):
+                self._res_monitor_running = False
+                self.after(0, self._append_bld_log, f"⚠️ [{cname}] Server yêu cầu Captcha khi mở rương #{box_id}!")
+                return
+            if ret == 0:
+                logger.info(f"[{cname}] (cid={cid}) {reason}: Đã mở {kind_label} #{box_id}.")
+                self.after(0, self._append_bld_log, f"{icon} [{cname}] {reason}: Đã mở {kind_label} #{box_id}.")
+            else:
+                self.after(0, self._append_bld_log, f"⚠️ [{cname}] Mở {kind_label} #{box_id} thất bại (mã {ret}).")
+
+        with gateway_city_context(self.gateway):
+            ok_sw, sw_ret, sw_msg = switch_city_verified(self.gateway, cid)
+            if not ok_sw:
+                logger.warning(f"[{cname}] (cid={cid}) {sw_msg}; bỏ qua mở rương để tránh mở nhầm thành khác.")
+                self.after(0, self._append_bld_log, f"⚠️ [{cname}] {sw_msg}; bỏ qua mở rương.")
+                if sw_ret in (110, 73):
+                    self._res_monitor_running = False
+                return
+
+            if need_gold:
+                _open_box_for_city(
+                    "res_gold_box_combo",
+                    11,
+                    "💰",
+                    "rương vàng",
+                    f"Vàng={money:,} < ngưỡng {gold_th:,}",
+                )
+
+            if need_tn and self._res_monitor_running:
+                _open_box_for_city(
+                    "res_tn_box_combo",
+                    24,
+                    "📦",
+                    "rương TN",
+                    f"Khoáng sản dưới ngưỡng (Kho {max_storage:,})",
+                )
+
     def _run_resource_monitor_loop(self):
         while self._res_monitor_running:
             target_cids = list(self._selected_resource_cities)
@@ -189,84 +298,7 @@ class InternalAuxMixin:
                 if not self._res_monitor_running:
                     break
                 try:
-                    cname = f"Thành {cid}"
-                    if self.roster:
-                        b = self.roster.base_by_id(cid)
-                        if b:
-                            cname = b.name
-
-                    # 1. Lấy tài nguyên (/api/resource/info) & vàng (/api/city/info) trên Server 58+
-                    res_data = self.gateway.resource_info(cid) or {}
-                    city_data = self.gateway.city_info(cid) or {}
-                    money = int(city_data.get("m_lmoney_balance", city_data.get("money", 0)))
-                    wood = int(res_data.get("m_lwood_balance", res_data.get("wood", 0)))
-                    iron = int(res_data.get("m_liron_balance", res_data.get("iron", 0)))
-                    stone = int(res_data.get("m_lstone_balance", res_data.get("stone", 0)))
-                    food = int(res_data.get("m_lfood_balance", res_data.get("food", 0)))
-                    max_storage = int(res_data.get("m_lmax_storage", res_data.get("max_storage", 1000000)))
-                    if max_storage <= 0:
-                        max_storage = 1000000
-
-                    # 2. Kiểm tra ngưỡng vàng
-                    try:
-                        gold_th = int(self.res_gold_thresh_var.get().replace(",", "").replace(".", "").strip())
-                    except ValueError:
-                        gold_th = 100000000
-
-                    if money < gold_th:
-                        g_box_str = self.res_gold_box_combo.get() if hasattr(self, "res_gold_box_combo") else "11"
-                        try:
-                            g_box_id = int(g_box_str.split(":")[0].strip())
-                        except (ValueError, IndexError):
-                            g_box_id = 11
-                        r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(g_box_id), "_": ""}) or {}
-                        ret = r_box.get("ret", 0)
-                        if ret == 0:
-                            self.after(
-                                0,
-                                self._append_bld_log,
-                                f"💰 [{cname}] Vàng={money:,} < ngưỡng {gold_th:,}: Đã mở rương vàng #{g_box_id}.",
-                            )
-                        else:
-                            self.after(
-                                0, self._append_bld_log, f"⚠️ [{cname}] Mở rương vàng #{g_box_id} thất bại (mã {ret})."
-                            )
-
-                    # 3. Kiểm tra ngưỡng khoáng sản %
-                    try:
-                        w_pct = float(self.res_wood_pct_var.get()) / 100.0
-                        i_pct = float(self.res_iron_pct_var.get()) / 100.0
-                        s_pct = float(self.res_stone_pct_var.get()) / 100.0
-                        f_pct = float(self.res_food_pct_var.get()) / 100.0
-                    except ValueError:
-                        w_pct = i_pct = s_pct = f_pct = 0.7
-
-                    need_tn = (
-                        wood < max_storage * w_pct
-                        or iron < max_storage * i_pct
-                        or stone < max_storage * s_pct
-                        or food < max_storage * f_pct
-                    )
-
-                    if need_tn:
-                        tn_box_str = self.res_tn_box_combo.get() if hasattr(self, "res_tn_box_combo") else "24"
-                        try:
-                            tn_box_id = int(tn_box_str.split(":")[0].strip())
-                        except (ValueError, IndexError):
-                            tn_box_id = 24
-                        r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(tn_box_id), "_": ""}) or {}
-                        ret = r_box.get("ret", 0)
-                        if ret == 0:
-                            self.after(
-                                0,
-                                self._append_bld_log,
-                                f"📦 [{cname}] Khoáng sản dưới ngưỡng: Đã mở rương TN #{tn_box_id} (Kho {max_storage:,}).",
-                            )
-                        else:
-                            self.after(
-                                0, self._append_bld_log, f"⚠️ [{cname}] Mở rương TN #{tn_box_id} thất bại (mã {ret})."
-                            )
-
+                    self._check_resource_thresholds_for_city(cid)
                 except (RuntimeError, tk.TclError):
                     break
                 except Exception as e:
