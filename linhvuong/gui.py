@@ -184,9 +184,7 @@ class LoginWindow(tk.Tk):
         ttk.Label(card, text="URL Proxy List").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 14))
         purl_frame = tk.Frame(card, bg=CARD)
         purl_frame.grid(row=5, column=1, sticky="ew", pady=4)
-        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=15).pack(side="left", fill="x", expand=True)
-        ttk.Button(purl_frame, text="⚡ Free", width=6, command=self._fill_free_proxy).pack(side="left", padx=(4, 0))
-        ttk.Button(purl_frame, text="🔄 Test", width=6, command=self._test_proxy_url).pack(side="left", padx=(4, 0))
+        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=28).pack(side="left", fill="x", expand=True)
 
         proxy_fields = [
             ("Proxy", self.proxy_var, ""),
@@ -583,9 +581,7 @@ class AccountLoginFrame(tk.Frame):
         ttk.Label(card, text="URL Proxy List").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 14))
         purl_frame = tk.Frame(card, bg=CARD)
         purl_frame.grid(row=4, column=1, sticky="ew", pady=4)
-        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=15).pack(side="left", fill="x", expand=True)
-        ttk.Button(purl_frame, text="⚡ Free", width=6, command=self._fill_free_proxy).pack(side="left", padx=(4, 0))
-        ttk.Button(purl_frame, text="🔄 Test", width=6, command=self._test_proxy_url).pack(side="left", padx=(4, 0))
+        ttk.Entry(purl_frame, textvariable=self.proxy_url_var, width=28).pack(side="left", fill="x", expand=True)
 
         proxy_fields = [
             ("Proxy", self.proxy_var, ""),

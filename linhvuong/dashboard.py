@@ -4966,36 +4966,7 @@ class Dashboard(tk.Frame):
         self.bld_bases_tree.bind("<ButtonRelease-1>", self._on_bld_bases_click)
         self.bld_bases_tree.bind("<<TreeviewSelect>>", self._on_bld_base_selected)
 
-        # 3. Khung Tăng tốc xây dựng
-        f_spd = ttk.LabelFrame(col1, text="Tăng tốc xây dựng", style="Card.TLabelframe")
-        f_spd.pack(fill="x", padx=2, pady=(4, 0))
-        r_spd = tk.Frame(f_spd, bg=BG)
-        r_spd.pack(fill="x", padx=4, pady=4)
-
-        tk.Checkbutton(
-            r_spd,
-            text="Tốc nhà bằng",
-            variable=self.bld_speedup_var,
-            bg=BG,
-            fg=FG,
-            selectcolor=CARD,
-            activebackground=BG,
-            font=("Segoe UI", 9),
-        ).pack(side="left", padx=2)
-
-        self.bld_speedup_item_combo = ttk.Combobox(r_spd, state="readonly", width=8, values=["Ngân Bảo", "Coin"])
-        self.bld_speedup_item_combo.set("Ngân Bảo")
-        self.bld_speedup_item_combo.pack(side="left", padx=2)
-
-        tk.Label(r_spd, text="đến dưới", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
-        ttk.Entry(r_spd, textvariable=self.bld_speedup_hours_var, width=3).pack(side="left", padx=2)
-        tk.Label(r_spd, text="giờ", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
-
-        self.bld_speedup_var.trace_add("write", self._sync_running_bld_speedup)
-        self.bld_speedup_hours_var.trace_add("write", self._sync_running_bld_speedup)
-        self.bld_speedup_item_combo.bind("<<ComboboxSelected>>", self._sync_running_bld_speedup)
-
-        # 4. Khung Dịch Trại
+        # 3. Khung Dịch Trại
         f_dt = ttk.LabelFrame(col1, text="🏕️ Dịch Trại", style="Card.TLabelframe")
         f_dt.pack(fill="x", padx=2, pady=(4, 0))
 
@@ -5045,8 +5016,8 @@ class Dashboard(tk.Frame):
         col2.rowconfigure(1, weight=1)
         col2.columnconfigure(0, weight=1)
 
-        # 1. Quản lý nhà
-        self.bld_queue_frame = ttk.LabelFrame(col2, text="Quản lý nhà", style="Card.TLabelframe")
+        # 1. Xây dựng
+        self.bld_queue_frame = ttk.LabelFrame(col2, text="Xây dựng", style="Card.TLabelframe")
         self.bld_queue_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
 
         bld_bar = tk.Frame(self.bld_queue_frame, bg=BG)
@@ -5057,6 +5028,28 @@ class Dashboard(tk.Frame):
         ttk.Button(bld_bar, text="Hạ", style="Danger.TButton", command=self._lower_bld_target_lvl).pack(side="left", padx=2)
         ttk.Button(bld_bar, text="↑", style="Action.TButton", width=3, command=self._move_bld_up).pack(side="left", padx=2)
         ttk.Button(bld_bar, text="↓", style="Action.TButton", width=3, command=self._move_bld_down).pack(side="left", padx=2)
+
+        r_spd = tk.Frame(self.bld_queue_frame, bg=BG)
+        r_spd.pack(fill="x", padx=4, pady=(0, 2))
+        tk.Checkbutton(
+            r_spd,
+            text="Tốc nhà bằng",
+            variable=self.bld_speedup_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=2)
+        self.bld_speedup_item_combo = ttk.Combobox(r_spd, state="readonly", width=8, values=["Ngân Bảo", "Coin"])
+        self.bld_speedup_item_combo.set("Ngân Bảo")
+        self.bld_speedup_item_combo.pack(side="left", padx=2)
+        tk.Label(r_spd, text="đến dưới", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        ttk.Entry(r_spd, textvariable=self.bld_speedup_hours_var, width=3).pack(side="left", padx=2)
+        tk.Label(r_spd, text="giờ", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        self.bld_speedup_var.trace_add("write", self._sync_running_bld_speedup)
+        self.bld_speedup_hours_var.trace_add("write", self._sync_running_bld_speedup)
+        self.bld_speedup_item_combo.bind("<<ComboboxSelected>>", self._sync_running_bld_speedup)
 
         bld_sub = tk.Frame(self.bld_queue_frame, bg=BG)
         bld_sub.pack(fill="x", padx=4, pady=(0, 2))
@@ -6910,7 +6903,7 @@ class Dashboard(tk.Frame):
                 base_name = b.name
 
         if hasattr(self, "bld_queue_frame"):
-            self.bld_queue_frame.configure(text=f"Hàng Đợi Quy Hoạch: {base_name}")
+            self.bld_queue_frame.configure(text=f"Xây dựng: {base_name}")
 
         cached = self._city_building_plans.get(new_base_id)
         if cached:
@@ -7860,7 +7853,7 @@ class Dashboard(tk.Frame):
                 self.bld_bases_tree.selection_set(str(first_base.id))
                 self._current_bld_city_id = first_base.id
                 if hasattr(self, "bld_queue_frame"):
-                    self.bld_queue_frame.configure(text=f"Hàng Đợi Quy Hoạch: {first_base.name}")
+                    self.bld_queue_frame.configure(text=f"Xây dựng: {first_base.name}")
             self._check_and_update_boost_status()
             self._schedule_periodic_boost_check()
 
