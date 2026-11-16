@@ -16,6 +16,7 @@ import re
 import threading
 import time
 import tkinter as tk
+from contextlib import contextmanager
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Optional, Union
@@ -719,6 +720,7 @@ class Dashboard(tk.Frame):
         self._selected_building_cities: set[int] = set()
         self._selected_resource_cities: set[int] = set()
         self._research_city_id: Optional[int] = None
+        self._pending_gd_city_id: Optional[int] = None
         self._pending_gd_generals: Optional[set[int]] = None
         self._pending_bm_generals: Optional[set[int]] = None
         self._current_bm_base_id: Optional[int] = None
@@ -729,6 +731,13 @@ class Dashboard(tk.Frame):
         self._current_bld_city_id: Optional[int] = None
         self._log_win = None
         self._active_log_texts: list[tk.Text] = []
+        self._active_profile_path: Optional[Path] = None
+        self._auto_save_enabled: bool = True
+        self._auto_save_suppress_depth: int = 0
+        self._auto_save_after_id: Optional[str] = None
+        self._auto_save_delay_ms: int = 400
+        self._auto_save_dirty: bool = False
+        self._destroyed: bool = False
 
         # Các biến cấu hình nội chính & tài nguyên
         self.bld_speedup_var = tk.BooleanVar(value=False)
@@ -965,20 +974,24 @@ class Dashboard(tk.Frame):
         self.notebook.add(t7, text="🧧 Niên Thú")
         self._build_nien_thu_tab(t7)
 
+        # Gắn cơ chế tự động lưu cấu hình khi người dùng chỉnh trên giao diện
+        self._bind_auto_save_hooks()
+
         # Tự động nạp hồ sơ cấu hình tổng hợp mặc định theo tài khoản
-        acc_prof = Path(self.default_profile_name)
-        if acc_prof.exists():
-            try:
-                self._load_unified_profile(acc_prof)
-            except Exception:
-                pass
-        elif Path("auto_profile.json").exists():
-            try:
-                self._load_unified_profile(Path("auto_profile.json"))
-                if hasattr(self, "profile_path_var"):
-                    self.profile_path_var.set(self.default_profile_name)
-            except Exception:
-                pass
+        with self._suppress_auto_save():
+            acc_prof = Path(self.default_profile_name)
+            if acc_prof.exists():
+                try:
+                    self._load_unified_profile(acc_prof)
+                except Exception:
+                    pass
+            elif Path("auto_profile.json").exists():
+                try:
+                    self._load_unified_profile(Path("auto_profile.json"))
+                    if hasattr(self, "profile_path_var"):
+                        self.profile_path_var.set(self.default_profile_name)
+                except Exception:
+                    pass
 
         self.reload()
 
@@ -1276,13 +1289,14 @@ class Dashboard(tk.Frame):
         if cid not in self.craft_configs:
             self.craft_configs[cid] = CityCraftConfig(city_id=cid, weapon_id=101, weapon_ids=[101], amount="1000", interval="5", enabled=False)
         cfg = self.craft_configs[cid]
-        self.craft_amount_var.set(str(cfg.amount))
-        self.craft_interval_var.set(str(cfg.interval))
-        self.craft_enable_var.set(bool(cfg.enabled))
+        with self._suppress_auto_save():
+            self.craft_amount_var.set(str(cfg.amount))
+            self.craft_interval_var.set(str(cfg.interval))
+            self.craft_enable_var.set(bool(cfg.enabled))
 
-        wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
-        if hasattr(self, "craft_weapon_dropdown"):
-            self.craft_weapon_dropdown.set_selected(wids)
+            wids = cfg.weapon_ids if (hasattr(cfg, "weapon_ids") and cfg.weapon_ids) else [cfg.weapon_id]
+            if hasattr(self, "craft_weapon_dropdown"):
+                self.craft_weapon_dropdown.set_selected(wids)
 
     def _save_current_craft_form_to_config(self):
         cid = self._get_current_craft_city_id()
@@ -1322,12 +1336,15 @@ class Dashboard(tk.Frame):
 
     def _on_craft_weapon_dropdown_changed(self, _selected_ids=None):
         self._save_current_craft_form_to_config()
+        self._schedule_auto_save()
 
     def _on_craft_weapon_selected(self, _event=None):
         self._save_current_craft_form_to_config()
+        self._schedule_auto_save()
 
     def _on_craft_enable_toggled(self):
         self._save_current_craft_form_to_config()
+        self._schedule_auto_save()
 
     def _refresh_craft_tree(self):
         if not hasattr(self, "craft_tree"):
@@ -1371,8 +1388,10 @@ class Dashboard(tk.Frame):
             cfg.enabled = not cfg.enabled
             self.craft_configs[cid] = cfg
             if cid == self._get_current_craft_city_id():
-                self.craft_enable_var.set(cfg.enabled)
+                with self._suppress_auto_save():
+                    self.craft_enable_var.set(cfg.enabled)
             self._refresh_craft_tree()
+            self._schedule_auto_save()
         else:
             self._select_craft_city_by_id(cid)
 
@@ -1536,6 +1555,201 @@ class Dashboard(tk.Frame):
             self._craft_stop_event.wait(1.0)
 
     # -------------------------------------------------------------------------
+    # TỰ ĐỘNG LƯU CẤU HÌNH KHI CHỈNH TRÊN GIAO DIỆN (AUTO-SAVE)
+    # -------------------------------------------------------------------------
+    @contextmanager
+    def _suppress_auto_save(self):
+        self._auto_save_suppress_depth = getattr(self, "_auto_save_suppress_depth", 0) + 1
+        try:
+            yield
+        finally:
+            self._auto_save_suppress_depth = max(0, getattr(self, "_auto_save_suppress_depth", 1) - 1)
+
+    def _cancel_auto_save_timer(self) -> None:
+        after_id = getattr(self, "_auto_save_after_id", None)
+        if after_id is not None:
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+            self._auto_save_after_id = None
+
+    def _schedule_auto_save(self, *_args) -> None:
+        if getattr(self, "_destroyed", False):
+            return
+        if not getattr(self, "_auto_save_enabled", True):
+            return
+        if getattr(self, "_auto_save_suppress_depth", 0) > 0:
+            return
+        self._auto_save_dirty = True
+        self._cancel_auto_save_timer()
+        delay_ms = max(0, int(getattr(self, "_auto_save_delay_ms", 400)))
+        try:
+            self._auto_save_after_id = self.after(delay_ms, self._flush_auto_save)
+        except Exception:
+            self._flush_auto_save()
+
+    def _flush_auto_save(self) -> None:
+        self._auto_save_after_id = None
+        if getattr(self, "_destroyed", False):
+            return
+        if not getattr(self, "_auto_save_enabled", True):
+            self._auto_save_dirty = False
+            return
+        if not getattr(self, "_auto_save_dirty", False):
+            return
+        if getattr(self, "_auto_save_suppress_depth", 0) > 0:
+            return
+        self._auto_save_dirty = False
+        try:
+            self._save_unified_profile()
+        except Exception as e:
+            logger.debug(f"Tự động lưu hồ sơ thất bại: {e}")
+
+    def _on_craft_form_var_changed(self, *_args) -> None:
+        if getattr(self, "_auto_save_suppress_depth", 0) > 0:
+            return
+        if hasattr(self, "_save_current_craft_form_to_config"):
+            self._save_current_craft_form_to_config()
+        self._schedule_auto_save()
+
+    def _bind_auto_save_hooks(self) -> None:
+        """Gắn listener cho toàn bộ biến, combobox và dropdown cấu hình trên giao diện."""
+        traced_vars = (
+            # Xây dựng & Nội chính
+            "bld_speedup_var",
+            "bld_speedup_hours_var",
+            "bld_open_box_var",
+            "bld_interval_var",
+            "bld_box_max_var",
+            "bld_box_fallback_var",
+            # Nghiên cứu
+            "res_art_var",
+            "res_even_var",
+            "res_interval_var",
+            # Tài nguyên & Phụ trợ
+            "res_gold_thresh_var",
+            "res_wood_pct_var",
+            "res_iron_pct_var",
+            "res_stone_pct_var",
+            "res_food_pct_var",
+            "aux_daily_reward_var",
+            "aux_comfort_var",
+            "aux_boost_var",
+            "aux_explore_var",
+            "aux_explore_whip_var",
+            "aux_explore_coin_var",
+            "aux_explore_turns_var",
+            "log_amount_var",
+            # Dịch trại
+            "dt_dest_x_var",
+            "dt_dest_y_var",
+            # Thảo phạt
+            "tp_target_inf_var",
+            "tp_target_cav_var",
+            "tp_target_arc_var",
+            "tp_auto_recruit_var",
+            "tp_auto_morale_var",
+            "tp_min_morale_var",
+            "tp_interval_var",
+            # Gọi man / Vong linh
+            "gd_radius_var",
+            "gd_interval_var",
+            "gd_target_inf_var",
+            "gd_target_cav_var",
+            "gd_target_arc_var",
+            "gd_auto_recruit_var",
+            "gd_auto_morale_var",
+            "gd_min_morale_var",
+            "gd_action_mode_var",
+            # Bình man
+            "bm_mode_var",
+            "bm_interval_var",
+            "bm_camp_id_var",
+            "bm_threshold_var",
+            "bm_radius_var",
+            "bm_mantypes_var",
+            "bm_target_inf_var",
+            "bm_target_cav_var",
+            "bm_target_arc_var",
+            "bm_auto_recruit_var",
+            "bm_auto_morale_var",
+            "bm_min_morale_var",
+            "bm_action_mode_var",
+            # Chiến trường & Bắt Boss
+            "bt_auto_counter_var",
+            "bt_window_var",
+            "bt_leave_boss_var",
+            "bt_cleanse_var",
+            "bt_action_mode_var",
+            "bt_skip_confused_var",
+            "bt_retreat_var",
+            "bt_auto_capture_boss_var",
+            "bt_capture_morale_var",
+            # Niên thú
+            "nt_target_inf_var",
+            "nt_target_cav_var",
+            "nt_target_arc_var",
+            "nt_auto_recruit_var",
+            "nt_auto_morale_var",
+            "nt_min_morale_var",
+            "nt_speedup_march_var",
+            "nt_speedup_return_var",
+            "nt_stop_jade_var",
+            "nt_use_world_chat_var",
+            "nt_run_immediately_var",
+            # Chế tạo quân giới
+            "craft_enable_var",
+        )
+        for attr in traced_vars:
+            var = getattr(self, attr, None)
+            if var is not None and hasattr(var, "trace_add"):
+                var.trace_add("write", self._schedule_auto_save)
+
+        for attr in ("craft_amount_var", "craft_interval_var"):
+            var = getattr(self, attr, None)
+            if var is not None and hasattr(var, "trace_add"):
+                var.trace_add("write", self._on_craft_form_var_changed)
+
+        combo_attrs = (
+            "bld_slots_combo",
+            "bld_speedup_item_combo",
+            "res_gold_box_combo",
+            "res_tn_box_combo",
+            "tp_city_combo",
+            "tp_mission_combo",
+            "gd_city_combo",
+            "gd_action_mode_combo",
+            "bm_city_combo",
+            "bm_parent_city_combo",
+            "bm_action_mode_combo",
+            "log_army_combo",
+            "bt_action_mode_combo",
+            "bt_stratagem_combo",
+            "nt_city_combo",
+        )
+        for attr in combo_attrs:
+            combo = getattr(self, attr, None)
+            if combo is not None and hasattr(combo, "bind"):
+                combo.bind("<<ComboboxSelected>>", self._schedule_auto_save, add="+")
+
+        if hasattr(self, "gd_target_dropdown") and self.gd_target_dropdown is not None:
+            orig_gd_cmd = self.gd_target_dropdown.command
+            def _gd_dd_cmd(sel, _orig=orig_gd_cmd):
+                if _orig:
+                    _orig(sel)
+                self._schedule_auto_save()
+            self.gd_target_dropdown.command = _gd_dd_cmd
+
+        if hasattr(self, "bm_mantypes_dropdown") and self.bm_mantypes_dropdown is not None:
+            orig_bm_cmd = self.bm_mantypes_dropdown.command
+            def _bm_dd_cmd(sel, _orig=orig_bm_cmd):
+                if _orig:
+                    _orig(sel)
+                self._schedule_auto_save()
+            self.bm_mantypes_dropdown.command = _bm_dd_cmd
+
+    # -------------------------------------------------------------------------
     # HỒ SƠ CẤU HÌNH TỔNG HỢP (UNIFIED PROFILE CONFIGURATION)
     # -------------------------------------------------------------------------
     @staticmethod
@@ -1578,10 +1792,30 @@ class Dashboard(tk.Frame):
             tp_city_id = self._pending_tp_city_id
 
         tp_gens = []
-        if hasattr(self, "tp_gen_tree"):
+        if hasattr(self, "tp_gen_tree") and self.tp_gen_tree.get_children():
             tp_gens = [int(iid) for iid in self.tp_gen_tree.get_children() if self.tp_gen_tree.item(iid, "values")[0] == "☑"]
-        if not tp_gens and getattr(self, "_pending_tp_generals", None):
+        elif getattr(self, "_pending_tp_generals", None):
             tp_gens = list(self._pending_tp_generals)
+
+        gd_city_id = None
+        if hasattr(self, "gd_city_combo") and self.roster and self.roster.cities:
+            gd_idx = self.gd_city_combo.current()
+            if 0 <= gd_idx < len(self.roster.cities):
+                gd_city_id = self.roster.cities[gd_idx].id
+        elif getattr(self, "_pending_gd_city_id", None) is not None:
+            gd_city_id = self._pending_gd_city_id
+
+        gd_gens = []
+        if hasattr(self, "gd_gen_tree") and self.gd_gen_tree.get_children():
+            gd_gens = [int(iid) for iid in self.gd_gen_tree.get_children() if self.gd_gen_tree.item(iid, "values")[0] == "☑"]
+        elif getattr(self, "_pending_gd_generals", None):
+            gd_gens = sorted(self._pending_gd_generals)
+
+        bm_gens = []
+        if hasattr(self, "bm_gen_tree") and self.bm_gen_tree.get_children():
+            bm_gens = [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"]
+        elif getattr(self, "_pending_bm_generals", None):
+            bm_gens = sorted(self._pending_bm_generals)
 
         profile = {
             "version": 1,
@@ -1631,14 +1865,14 @@ class Dashboard(tk.Frame):
                 "interval": self.tp_interval_var.get() if hasattr(self, "tp_interval_var") else "10",
             },
             "goi_dan": {
-                "city_id": self.roster.cities[self.gd_city_combo.current()].id if (hasattr(self, "gd_city_combo") and self.roster and self.roster.cities and 0 <= self.gd_city_combo.current() < len(self.roster.cities)) else None,
+                "city_id": gd_city_id,
                 "mode_idx": self.gd_mode_combo.current() if hasattr(self, "gd_mode_combo") else 0,
                 "target_type": self._get_gd_target_type() if hasattr(self, "_get_gd_target_type") else 301,
                 "target_types": self.gd_target_dropdown.get_selected() if hasattr(self, "gd_target_dropdown") else [301],
                 "radius": self.gd_radius_var.get() if hasattr(self, "gd_radius_var") else "5",
                 "auto_recover": bool(self.gd_recover_var.get()) if hasattr(self, "gd_recover_var") else True,
                 "interval": self.gd_interval_var.get() if hasattr(self, "gd_interval_var") else "10",
-                "generals": [int(iid) for iid in self.gd_gen_tree.get_children() if self.gd_gen_tree.item(iid, "values")[0] == "☑"] if hasattr(self, "gd_gen_tree") else [],
+                "generals": gd_gens,
                 "target_infantry": self.gd_target_inf_var.get() if hasattr(self, "gd_target_inf_var") else "0",
                 "target_cavalry": self.gd_target_cav_var.get() if hasattr(self, "gd_target_cav_var") else "0",
                 "target_archers": self.gd_target_arc_var.get() if hasattr(self, "gd_target_arc_var") else "0",
@@ -1659,7 +1893,7 @@ class Dashboard(tk.Frame):
                 "threshold": self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30",
                 "mantypes": self.bm_mantypes_dropdown.get_selected_str() if hasattr(self, "bm_mantypes_dropdown") else (self.bm_mantypes_var.get() if hasattr(self, "bm_mantypes_var") else "7,8,9,10"),
                 "target_types": self.bm_mantypes_dropdown.get_selected() if hasattr(self, "bm_mantypes_dropdown") else [7, 8, 9, 10],
-                "generals": [int(iid) for iid in self.bm_gen_tree.get_children() if self.bm_gen_tree.item(iid, "values")[0] == "☑"] if hasattr(self, "bm_gen_tree") else [],
+                "generals": bm_gens,
                 "target_infantry": self.bm_target_inf_var.get() if hasattr(self, "bm_target_inf_var") else "0",
                 "target_cavalry": self.bm_target_cav_var.get() if hasattr(self, "bm_target_cav_var") else "0",
                 "target_archers": self.bm_target_arc_var.get() if hasattr(self, "bm_target_arc_var") else "0",
@@ -2057,10 +2291,15 @@ class Dashboard(tk.Frame):
                 gd_data.get("attack_action_mode") if "attack_action_mode" in gd_data else None,
                 gd_data.get("action_combo_idx") if "action_combo_idx" in gd_data else None,
             )
+            if "city_id" in gd_data and gd_data["city_id"] is not None:
+                try:
+                    self._pending_gd_city_id = int(gd_data["city_id"])
+                except (ValueError, TypeError):
+                    pass
             if "generals" in gd_data and isinstance(gd_data["generals"], list):
                 gd_gens = [int(x) for x in gd_data["generals"] if str(x).isdigit()]
                 self._pending_gd_generals = set(gd_gens)
-                target_cid = int(gd_data["city_id"]) if ("city_id" in gd_data and str(gd_data["city_id"]).isdigit()) else None
+                target_cid = getattr(self, "_pending_gd_city_id", None)
                 if not target_cid and gd_gens and self.roster and self.roster.cities:
                     for c in self.roster.cities:
                         c_gens = {g.id for g in self.roster.generals_of(c.id)}
@@ -2080,6 +2319,13 @@ class Dashboard(tk.Frame):
                         vals[0] = "☑" if int(iid) in self._pending_gd_generals else "☐"
                         self.gd_gen_tree.item(iid, values=vals)
                     self._update_gd_gen_count_label()
+            elif getattr(self, "_pending_gd_city_id", None) and hasattr(self, "gd_city_combo") and self.roster and self.roster.cities:
+                for idx, c in enumerate(self.roster.cities):
+                    if c.id == self._pending_gd_city_id:
+                        if self.gd_city_combo.current() != idx:
+                            self.gd_city_combo.current(idx)
+                            self._on_gd_city_selected()
+                        break
             loaded_sections.append("Gọi Man")
 
         # 5. Bình Man
@@ -2317,24 +2563,39 @@ class Dashboard(tk.Frame):
 
         return loaded_sections
 
-    def _save_unified_profile(self, filepath: Optional[Path] = None) -> Path:
+    def _resolve_active_profile_target(self, filepath: Optional[Path] = None) -> Path:
+        if filepath is not None:
+            return Path(filepath)
         def_name = getattr(self, "default_profile_name", "auto_profile.json")
-        target = filepath or Path(self.profile_path_var.get() if hasattr(self, "profile_path_var") and self.profile_path_var.get() else def_name)
+        cur_var_name = self.profile_path_var.get() if hasattr(self, "profile_path_var") and self.profile_path_var.get() else def_name
+        active_path = getattr(self, "_active_profile_path", None)
+        if active_path is not None and active_path.name == cur_var_name:
+            return active_path
+        return Path(cur_var_name)
+
+    def _save_unified_profile(self, filepath: Optional[Path] = None) -> Path:
+        target = self._resolve_active_profile_target(filepath)
         profile_dict = self._collect_unified_profile()
         prof = Profile.from_dict(profile_dict)
         target = ProfileStore.save(prof, target)
+        self._active_profile_path = target
+        self._auto_save_dirty = False
+        self._cancel_auto_save_timer()
         if hasattr(self, "profile_path_var"):
             self.profile_path_var.set(target.name)
         return target
 
     def _load_unified_profile(self, filepath: Optional[Path] = None) -> tuple[bool, str]:
-        def_name = getattr(self, "default_profile_name", "auto_profile.json")
-        target = filepath or Path(self.profile_path_var.get() if hasattr(self, "profile_path_var") and self.profile_path_var.get() else def_name)
+        target = self._resolve_active_profile_target(filepath)
         if not target.exists():
             return False, f"Không tìm thấy file: {target.name}"
         try:
             prof = ProfileStore.load(target)
-            sections = self._apply_unified_profile(prof.to_dict())
+            with self._suppress_auto_save():
+                sections = self._apply_unified_profile(prof.to_dict())
+            self._active_profile_path = target
+            self._auto_save_dirty = False
+            self._cancel_auto_save_timer()
             if hasattr(self, "profile_path_var"):
                 self.profile_path_var.set(target.name)
             return True, f"Đã nạp thành công các phân hệ: {', '.join(sections)}"
@@ -2549,6 +2810,7 @@ class Dashboard(tk.Frame):
         vals = list(self.nt_gen_tree.item(item, "values"))
         vals[0] = "☑" if vals[0] == "☐" else "☐"
         self.nt_gen_tree.item(item, values=vals)
+        self._schedule_auto_save()
 
     def _collect_nien_thu_profile_dict(self) -> dict:
         nt_city_id = 0
@@ -2560,13 +2822,13 @@ class Dashboard(tk.Frame):
             nt_city_id = int(self._pending_nt_city_id)
 
         nt_gens: list[int] = []
-        if hasattr(self, "nt_gen_tree"):
+        if hasattr(self, "nt_gen_tree") and self.nt_gen_tree.get_children():
             nt_gens = [
                 int(iid)
                 for iid in self.nt_gen_tree.get_children()
                 if self.nt_gen_tree.item(iid, "values")[0] == "☑"
             ]
-        if not nt_gens and getattr(self, "_pending_nt_generals", None):
+        elif getattr(self, "_pending_nt_generals", None):
             nt_gens = sorted(self._pending_nt_generals)
 
         return {
@@ -2887,6 +3149,7 @@ class Dashboard(tk.Frame):
         vals = list(self.tp_gen_tree.item(item, "values"))
         vals[0] = "☑" if vals[0] == "☐" else "☐"
         self.tp_gen_tree.item(item, values=vals)
+        self._schedule_auto_save()
 
     def _manual_adjust_tp_troops(self):
         """Bổ sung/biên chế quân lính thủ công ngay lập tức cho các tướng đã chọn."""
@@ -3279,6 +3542,7 @@ class Dashboard(tk.Frame):
             vals[0] = "☑"
             self.gd_gen_tree.item(item, values=vals)
         self._update_gd_gen_count_label()
+        self._schedule_auto_save()
 
     def _deselect_all_gd_gens(self):
         for item in self.gd_gen_tree.get_children():
@@ -3286,6 +3550,7 @@ class Dashboard(tk.Frame):
             vals[0] = "☐"
             self.gd_gen_tree.item(item, values=vals)
         self._update_gd_gen_count_label()
+        self._schedule_auto_save()
 
     def _on_gd_gen_toggle(self, event):
         item = self.gd_gen_tree.identify_row(event.y)
@@ -3295,6 +3560,7 @@ class Dashboard(tk.Frame):
         vals[0] = "☑" if vals[0] == "☐" else "☐"
         self.gd_gen_tree.item(item, values=vals)
         self._update_gd_gen_count_label()
+        self._schedule_auto_save()
 
     def _on_gd_city_selected(self, _event=None):
         sel_idx = self.gd_city_combo.current()
@@ -3860,6 +4126,7 @@ class Dashboard(tk.Frame):
             self.bm_gen_tree.item(item, values=vals)
         self._update_bm_gen_count_label()
         self._update_bm_bases_tree_gen_count()
+        self._schedule_auto_save()
 
     def _deselect_all_bm_gens(self):
         for item in self.bm_gen_tree.get_children():
@@ -3868,6 +4135,7 @@ class Dashboard(tk.Frame):
             self.bm_gen_tree.item(item, values=vals)
         self._update_bm_gen_count_label()
         self._update_bm_bases_tree_gen_count()
+        self._schedule_auto_save()
 
     def _on_bm_gen_toggle(self, event):
         item = self.bm_gen_tree.identify_row(event.y)
@@ -3878,6 +4146,7 @@ class Dashboard(tk.Frame):
         self.bm_gen_tree.item(item, values=vals)
         self._update_bm_gen_count_label()
         self._update_bm_bases_tree_gen_count()
+        self._schedule_auto_save()
 
     def _append_bm_log(self, msg: str):
         self._append_text_buffer(self.bm_log_text, f"[{time.strftime('%H:%M:%S')}] {msg}\n")
@@ -4061,6 +4330,7 @@ class Dashboard(tk.Frame):
                 vals[0] = "☑"
                 cfg.enabled = True
             self.bm_bases_tree.item(item, values=vals)
+            self._schedule_auto_save()
 
     def _on_bm_bases_tree_select(self, _event=None):
         sel = self.bm_bases_tree.selection()
@@ -4068,7 +4338,10 @@ class Dashboard(tk.Frame):
             return
         try:
             base_id = int(sel[0])
+            if base_id == self._current_bm_base_id:
+                return
             self._switch_bm_base(base_id)
+            self._schedule_auto_save()
         except ValueError:
             pass
 
@@ -4090,6 +4363,7 @@ class Dashboard(tk.Frame):
                     self.bm_base_configs[bid].enabled = enabled
             except ValueError:
                 pass
+        self._schedule_auto_save()
 
     def _save_bm_current_base_config(self):
         if self._current_bm_base_id is None:
@@ -4151,62 +4425,63 @@ class Dashboard(tk.Frame):
 
         cfg = self._get_or_create_bm_base_config(base)
 
-        if hasattr(self, "bm_detail_frame"):
-            self.bm_detail_frame.configure(text=f"⚙️ Cấu hình căn cứ: {base.name} ({base.pos_x}, {base.pos_y})")
+        with self._suppress_auto_save():
+            if hasattr(self, "bm_detail_frame"):
+                self.bm_detail_frame.configure(text=f"⚙️ Cấu hình căn cứ: {base.name} ({base.pos_x}, {base.pos_y})")
 
-        if hasattr(self, "bm_mode_var"):
-            self.bm_mode_var.set(cfg.mode)
-        if hasattr(self, "bm_radius_var"):
-            self.bm_radius_var.set(str(cfg.radius))
-        if hasattr(self, "bm_threshold_var"):
-            self.bm_threshold_var.set(str(cfg.threshold))
-        if hasattr(self, "bm_camp_id_var"):
-            self.bm_camp_id_var.set(str(cfg.camp_id) if cfg.camp_id is not None else "")
-        if hasattr(self, "bm_parent_city_combo") and self.roster.cities:
-            if cfg.parent_city_id:
-                for idx, c in enumerate(self.roster.cities):
-                    if str(c.id) == str(cfg.parent_city_id):
-                        self.bm_parent_city_combo.current(idx)
+            if hasattr(self, "bm_mode_var"):
+                self.bm_mode_var.set(cfg.mode)
+            if hasattr(self, "bm_radius_var"):
+                self.bm_radius_var.set(str(cfg.radius))
+            if hasattr(self, "bm_threshold_var"):
+                self.bm_threshold_var.set(str(cfg.threshold))
+            if hasattr(self, "bm_camp_id_var"):
+                self.bm_camp_id_var.set(str(cfg.camp_id) if cfg.camp_id is not None else "")
+            if hasattr(self, "bm_parent_city_combo") and self.roster.cities:
+                if cfg.parent_city_id:
+                    for idx, c in enumerate(self.roster.cities):
+                        if str(c.id) == str(cfg.parent_city_id):
+                            self.bm_parent_city_combo.current(idx)
+                            break
+                elif not self.bm_parent_city_combo.get() and len(self.roster.cities) > 0:
+                    self.bm_parent_city_combo.current(0)
+            if hasattr(self, "bm_mantypes_dropdown"):
+                t_types = cfg.target_types if cfg.target_types else ([int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()] if isinstance(cfg.mantypes, str) else [7, 8, 9, 10])
+                self.bm_mantypes_dropdown.set_selected(t_types)
+            if hasattr(self, "bm_mantypes_var"):
+                self.bm_mantypes_var.set(cfg.mantypes if isinstance(cfg.mantypes, str) else ",".join(str(x) for x in cfg.mantypes))
+            if hasattr(self, "bm_target_inf_var"):
+                self.bm_target_inf_var.set(str(cfg.target_infantry))
+            if hasattr(self, "bm_target_cav_var"):
+                self.bm_target_cav_var.set(str(cfg.target_cavalry))
+            if hasattr(self, "bm_target_arc_var"):
+                self.bm_target_arc_var.set(str(cfg.target_archers))
+            if hasattr(self, "bm_auto_recruit_var"):
+                self.bm_auto_recruit_var.set(cfg.auto_recruit)
+            if hasattr(self, "bm_auto_morale_var"):
+                self.bm_auto_morale_var.set(cfg.auto_morale)
+            if hasattr(self, "bm_min_morale_var"):
+                self.bm_min_morale_var.set(str(cfg.min_morale))
+            self._apply_action_mode_widgets(
+                getattr(self, "bm_action_mode_var", None),
+                getattr(self, "bm_action_mode_combo", None),
+                str(getattr(cfg, "attack_action_mode", "adaptive") or "adaptive"),
+                int(getattr(cfg, "action_combo_idx", 0) or 0),
+            )
+
+            self._update_bm_mode_ui_states(cfg.mode)
+
+            if hasattr(self, "bm_city_combo"):
+                combo_values = list(self.bm_city_combo["values"])
+                for idx, val in enumerate(combo_values):
+                    if base.name in val:
+                        self.bm_city_combo.current(idx)
                         break
-            elif not self.bm_parent_city_combo.get() and len(self.roster.cities) > 0:
-                self.bm_parent_city_combo.current(0)
-        if hasattr(self, "bm_mantypes_dropdown"):
-            t_types = cfg.target_types if cfg.target_types else ([int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()] if isinstance(cfg.mantypes, str) else [7, 8, 9, 10])
-            self.bm_mantypes_dropdown.set_selected(t_types)
-        if hasattr(self, "bm_mantypes_var"):
-            self.bm_mantypes_var.set(cfg.mantypes if isinstance(cfg.mantypes, str) else ",".join(str(x) for x in cfg.mantypes))
-        if hasattr(self, "bm_target_inf_var"):
-            self.bm_target_inf_var.set(str(cfg.target_infantry))
-        if hasattr(self, "bm_target_cav_var"):
-            self.bm_target_cav_var.set(str(cfg.target_cavalry))
-        if hasattr(self, "bm_target_arc_var"):
-            self.bm_target_arc_var.set(str(cfg.target_archers))
-        if hasattr(self, "bm_auto_recruit_var"):
-            self.bm_auto_recruit_var.set(cfg.auto_recruit)
-        if hasattr(self, "bm_auto_morale_var"):
-            self.bm_auto_morale_var.set(cfg.auto_morale)
-        if hasattr(self, "bm_min_morale_var"):
-            self.bm_min_morale_var.set(str(cfg.min_morale))
-        self._apply_action_mode_widgets(
-            getattr(self, "bm_action_mode_var", None),
-            getattr(self, "bm_action_mode_combo", None),
-            str(getattr(cfg, "attack_action_mode", "adaptive") or "adaptive"),
-            int(getattr(cfg, "action_combo_idx", 0) or 0),
-        )
 
-        self._update_bm_mode_ui_states(cfg.mode)
-
-        if hasattr(self, "bm_city_combo"):
-            combo_values = list(self.bm_city_combo["values"])
-            for idx, val in enumerate(combo_values):
-                if base.name in val:
-                    self.bm_city_combo.current(idx)
-                    break
-
-        if hasattr(self, "bm_bases_tree") and self.bm_bases_tree.exists(str(base_id)):
-            cur_sel = self.bm_bases_tree.selection()
-            if not cur_sel or cur_sel[0] != str(base_id):
-                self.bm_bases_tree.selection_set(str(base_id))
+            if hasattr(self, "bm_bases_tree") and self.bm_bases_tree.exists(str(base_id)):
+                cur_sel = self.bm_bases_tree.selection()
+                if not cur_sel or cur_sel[0] != str(base_id):
+                    self.bm_bases_tree.selection_set(str(base_id))
 
         if hasattr(self, "bm_gen_tree"):
             self.bm_gen_tree.delete(*self.bm_gen_tree.get_children())
@@ -5522,6 +5797,7 @@ class Dashboard(tk.Frame):
                     self._update_group_summary(parent)
 
         self._save_current_bld_tree_to_cache()
+        self._schedule_auto_save()
 
     def _set_selected_base_state(self, state: bool):
         sel = self.bld_bases_tree.selection()
@@ -5540,6 +5816,7 @@ class Dashboard(tk.Frame):
             self._selected_building_cities.add(base_id)
         else:
             self._selected_building_cities.discard(base_id)
+        self._schedule_auto_save()
 
     def _set_selected_base_as_nc(self):
         sel = self.bld_bases_tree.selection()
@@ -5568,6 +5845,7 @@ class Dashboard(tk.Frame):
                     break
         base_name = self.bld_bases_tree.item(item, "text")
         self._append_bld_log(f"★ Đã chọn '{base_name}' làm Thành Nghiên Cứu trọng điểm.")
+        self._schedule_auto_save()
 
     def _clear_all_nc_bases(self):
         self._research_city_id = None
@@ -5577,6 +5855,7 @@ class Dashboard(tk.Frame):
                 vals[2] = "☐"
                 self.bld_bases_tree.item(iid, values=vals)
         self._append_bld_log("✖ Đã bỏ chọn tất cả Thành Nghiên Cứu.")
+        self._schedule_auto_save()
 
     def _apply_resource_settings(self):
         gold_th = self.res_gold_thresh_var.get()
@@ -6522,6 +6801,7 @@ class Dashboard(tk.Frame):
             if idx > 0:
                 self.bld_tree.move(target, "", idx - 1)
                 self._save_current_bld_tree_to_cache()
+                self._schedule_auto_save()
 
     def _move_bld_down(self):
         sel = self.bld_tree.selection()
@@ -6536,6 +6816,7 @@ class Dashboard(tk.Frame):
             if idx < len(roots) - 1:
                 self.bld_tree.move(target, "", idx + 1)
                 self._save_current_bld_tree_to_cache()
+                self._schedule_auto_save()
 
     def _select_all_bld(self, state: bool):
         sym = "☑" if state else "☐"
@@ -6553,6 +6834,7 @@ class Dashboard(tk.Frame):
                 vals[0] = sym
                 self.bld_tree.item(root_iid, values=vals)
         self._save_current_bld_tree_to_cache()
+        self._schedule_auto_save()
 
     def _set_bld_target_lvl(self):
         sel = self.bld_tree.selection()
@@ -6589,6 +6871,7 @@ class Dashboard(tk.Frame):
                     self._update_group_summary(parent)
 
         self._save_current_bld_tree_to_cache()
+        self._schedule_auto_save()
 
     def _set_bld_target_lvl_all(self):
         try:
@@ -6618,6 +6901,7 @@ class Dashboard(tk.Frame):
 
         self._save_current_bld_tree_to_cache()
         self._append_bld_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} công trình.")
+        self._schedule_auto_save()
 
     def _on_bld_tree_selected(self, _event=None):
         pass
@@ -6647,7 +6931,10 @@ class Dashboard(tk.Frame):
                     self.bld_tree.item(child, values=c_vals)
                     self._update_bld_tree_row_style(child)
                 self._update_group_summary(item)
-            self._save_current_bld_tree_to_cache()
+                self._save_current_bld_tree_to_cache()
+                self._schedule_auto_save()
+            else:
+                self._save_current_bld_tree_to_cache()
             return
 
         vals = list(self.bld_tree.item(item, "values"))
@@ -6658,6 +6945,7 @@ class Dashboard(tk.Frame):
             if parent and parent.startswith("group_"):
                 self._update_group_summary(parent)
             self._save_current_bld_tree_to_cache()
+            self._schedule_auto_save()
 
     def _on_bld_bases_click(self, event):
         item = self.bld_bases_tree.identify_row(event.y)
@@ -6678,6 +6966,7 @@ class Dashboard(tk.Frame):
                 vals[0] = "☑"
                 self._selected_building_cities.add(base_id)
             self.bld_bases_tree.item(item, values=vals)
+            self._schedule_auto_save()
         elif col == "#2":
             is_res = vals[1] if len(vals) > 1 else "☐"
             if is_res == "☑":
@@ -6687,6 +6976,7 @@ class Dashboard(tk.Frame):
                 vals[1] = "☑"
                 self._selected_resource_cities.add(base_id)
             self.bld_bases_tree.item(item, values=vals)
+            self._schedule_auto_save()
         elif col == "#3":
             is_nc = vals[2] if len(vals) > 2 else "☐"
             if is_nc == "★":
@@ -6707,6 +6997,7 @@ class Dashboard(tk.Frame):
                             if 0 <= idx < len(self.res_city_combo["values"]):
                                 self.res_city_combo.current(idx)
                             break
+            self._schedule_auto_save()
 
     def _on_bld_base_selected(self, _event=None):
         sel = self.bld_bases_tree.selection()
@@ -6755,6 +7046,7 @@ class Dashboard(tk.Frame):
                     self._selected_building_cities.discard(bid)
             except ValueError:
                 pass
+        self._schedule_auto_save()
 
     def _collect_bld_plans_from_tree(self) -> list[dict]:
         """Thu thập danh sách cấu hình phẳng từ bld_tree bảo toàn đúng thứ tự Loại công trình."""
@@ -7121,6 +7413,8 @@ class Dashboard(tk.Frame):
 
         if plans_list:
             self._render_bld_tree_from_plans(plans_list)
+            self._save_current_bld_tree_to_cache()
+            self._schedule_auto_save()
         self._append_bld_log(f"📂 Đã nạp danh sách {len(plans_list)} quy hoạch công trình.")
 
     def _save_build_plans(self):
@@ -7573,6 +7867,7 @@ class Dashboard(tk.Frame):
         idx = self.res_tree.index(item)
         if idx > 0:
             self.res_tree.move(item, "", idx - 1)
+            self._schedule_auto_save()
 
     def _move_res_down(self):
         sel = self.res_tree.selection()
@@ -7583,6 +7878,7 @@ class Dashboard(tk.Frame):
         children = self.res_tree.get_children("")
         if idx < len(children) - 1:
             self.res_tree.move(item, "", idx + 1)
+            self._schedule_auto_save()
 
     def _select_all_res(self, state: bool):
         sym = "☑" if state else "☐"
@@ -7590,6 +7886,7 @@ class Dashboard(tk.Frame):
             vals = list(self.res_tree.item(iid, "values"))
             vals[0] = sym
             self.res_tree.item(iid, values=vals)
+        self._schedule_auto_save()
 
     def _set_res_target_lvl(self):
         sel = self.res_tree.selection()
@@ -7612,6 +7909,7 @@ class Dashboard(tk.Frame):
                 self.res_tree.item(iid, values=vals, tags=(tag,))
             except (ValueError, TypeError):
                 self.res_tree.item(iid, values=vals)
+        self._schedule_auto_save()
 
     def _set_res_target_lvl_all(self):
         try:
@@ -7634,6 +7932,7 @@ class Dashboard(tk.Frame):
                     self.res_tree.item(iid, values=vals)
                 count += 1
         self._append_logis_log(f"🎯 Đã đặt Cấp mục tiêu = {lvl} cho tất cả {count} kỹ thuật.")
+        self._schedule_auto_save()
 
     def _on_res_tree_selected(self, _event=None):
         sel = self.res_tree.selection()
@@ -7660,6 +7959,7 @@ class Dashboard(tk.Frame):
         if col == "#3":
             vals[0] = "☑" if vals[0] == "☐" else "☐"
             self.res_tree.item(item, values=vals)
+            self._schedule_auto_save()
         else:
             self.res_tree.selection_set(item)
         if len(vals) > 2:
@@ -7691,6 +7991,7 @@ class Dashboard(tk.Frame):
                 except (ValueError, TypeError):
                     tag = "upgrade"
                 self.res_tree.item(iid, values=(en, tid, target_lvl, cur_lvl), tags=(tag,))
+            self._schedule_auto_save()
         self._append_logis_log(f"📂 Đã nạp cấu hình {len(plans)} kỹ thuật.")
 
     def _save_tech_plans(self):
@@ -7819,6 +8120,10 @@ class Dashboard(tk.Frame):
         self.refresh_btn.state(["!disabled"])
 
     def _loaded(self, roster: Roster):
+        with self._suppress_auto_save():
+            self._apply_loaded_roster(roster)
+
+    def _apply_loaded_roster(self, roster: Roster):
         self.roster = roster
         # Tab 1: Thành & Doanh trại
         self.city_tree.delete(*self.city_tree.get_children())
@@ -7949,6 +8254,12 @@ class Dashboard(tk.Frame):
 
         if city_items:
             self._fetch_city_buildings()
+            gd_cid = getattr(self, "_pending_gd_city_id", None)
+            if gd_cid is not None and hasattr(self, "gd_city_combo") and roster.cities:
+                for idx, c in enumerate(roster.cities):
+                    if c.id == gd_cid:
+                        self.gd_city_combo.current(idx)
+                        break
             self._on_gd_city_selected()
 
         if hasattr(self, "_on_tac_roster_updated"):
@@ -9606,6 +9917,9 @@ class Dashboard(tk.Frame):
             if hasattr(self, "bt_capture_morale_var"):
                 self.bt_capture_morale_var.set(m_val if m_val.isdigit() else "60")
 
+            self._auto_save_dirty = True
+            self._flush_auto_save()
+
             if hasattr(self, "_append_bt_log"):
                 self._append_bt_log("🔔 Đã lưu cài đặt Thông báo và Tự động bắt sống BOSS bằng Coin.")
             win.destroy()
@@ -10014,6 +10328,9 @@ class Dashboard(tk.Frame):
         self._bt_load_battle()
 
     def destroy(self):
+        self._flush_auto_save()
+        self._destroyed = True
+        self._cancel_auto_save_timer()
         try:
             if hasattr(self, "_morale_stop_event") and self._morale_stop_event:
                 self._morale_stop_event.set()

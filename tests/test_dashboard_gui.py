@@ -23,6 +23,7 @@ def safe_dashboard(roster_mock=None):
     with patch("threading.Thread") as mock_thread:
         try:
             dash = Dashboard(session, 57)
+            dash._auto_save_enabled = False
             dash.withdraw()
         except Exception as e:
             pytest.skip(f"Tkinter display error: {e}")

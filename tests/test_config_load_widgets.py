@@ -32,6 +32,7 @@ def safe_dashboard():
     with patch("threading.Thread"):
         try:
             dash = Dashboard(session, 57)
+            dash._auto_save_enabled = False
             dash.withdraw()
         except Exception as e:
             pytest.skip(f"Tkinter display error: {e}")
