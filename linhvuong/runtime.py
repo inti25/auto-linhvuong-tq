@@ -423,6 +423,8 @@ class AccountSession:
         self._battle_thread: Optional[threading.Thread] = None
         self._battle_id = 0
         self._battle_state: Optional[dict] = None
+        self._roster_resync_lock = threading.Lock()
+        self._roster_resync_inflight = False
 
         self._chest_running = False
         self._chest_stop = threading.Event()
@@ -666,6 +668,8 @@ class AccountSession:
                 else:
                     current[key] = val
             self.profile = Profile.from_dict(current)
+            if self.roster and self.roster.bases:
+                self.profile.sync_with_bases(self.roster.bases)
             self.save_profile()
             data = self.profile.to_dict()
         self._emit("profile_updated", data)
@@ -676,6 +680,8 @@ class AccountSession:
     def import_profile(self, data: dict) -> dict:
         with self._lock:
             self.profile = Profile.from_dict(data)
+            if self.roster and self.roster.bases:
+                self.profile.sync_with_bases(self.roster.bases)
             self.save_profile()
             out = self.profile.to_dict()
         self._emit("profile_updated", out)
@@ -793,19 +799,53 @@ class AccountSession:
     # -------------------------------------------------------------------------
     # ROSTER / BUILDING / TECH SYNC
     # -------------------------------------------------------------------------
+    def _ensure_roster_loaded(self) -> Roster:
+        if not self.roster or not self.roster.bases:
+            self.reload_roster()
+        return self.roster
+
+    def _trigger_roster_resync_async(self, missing_city_id: int) -> None:
+        with self._roster_resync_lock:
+            if self._roster_resync_inflight:
+                return
+            self._roster_resync_inflight = True
+
+        def _worker():
+            try:
+                self.append_log("building", f"🔄 Căn cứ {missing_city_id} không còn tồn tại; đang đồng bộ lại danh sách căn cứ...")
+                self.reload_roster()
+            except Exception as exc:
+                logger.warning(f"Đồng bộ lại roster sau khi mất căn cứ {missing_city_id} thất bại: {exc}")
+            finally:
+                with self._roster_resync_lock:
+                    self._roster_resync_inflight = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def reload_roster(self) -> dict:
         roster = fetch_roster(self.gateway)
         self.roster = roster
         self._last_roster_err = None
-        # Đảm bảo thành đầu tiên được bật nếu chưa cấu hình building.cities
-        if roster.bases and not self.profile.building.cities:
-            for idx, b in enumerate(roster.bases):
-                self.profile.building.cities[str(b.id)] = self.profile.building.cities.get(
-                    str(b.id)
-                ) or type(next(iter(self.profile.building.cities.values()), None) or __import__("linhvuong.profile", fromlist=["CityBuildingConfig"]).CityBuildingConfig)(
-                    name=b.name, enabled=(idx == 0), resource=False, plans=[]
-                )
-            self.save_profile()
+        if roster.bases:
+            with self._lock:
+                sync_res = self.profile.sync_with_bases(roster.bases)
+                if sync_res.changed:
+                    self.save_profile()
+                    profile_dict = self.profile.to_dict()
+                else:
+                    profile_dict = None
+            if sync_res.changed:
+                parts = []
+                if sync_res.removed_ids:
+                    parts.append(f"xóa {len(sync_res.removed_ids)} căn cứ không còn tồn tại ({sync_res.removed_ids})")
+                if sync_res.added_ids:
+                    parts.append(f"thêm {len(sync_res.added_ids)} căn cứ mới ({sync_res.added_ids})")
+                if sync_res.renamed_ids:
+                    parts.append(f"cập nhật tên {len(sync_res.renamed_ids)} căn cứ")
+                if parts:
+                    self.append_log("building", f"🔄 Đồng bộ danh sách căn cứ: {', '.join(parts)}.")
+                if profile_dict is not None:
+                    self._emit("profile_updated", profile_dict)
         data = serialize_roster(roster)
         self._emit("roster_updated", data)
         self._emit("status_changed", self.get_status_snapshot())
@@ -1033,15 +1073,19 @@ class AccountSession:
     # XÂY DỰNG / NGHIÊN CỨU / TÀI NGUYÊN / PHỤ TRỢ
     # -------------------------------------------------------------------------
     def start_building(self) -> None:
+        self._ensure_roster_loaded()
         b_prof = self.profile.building
+        valid_base_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
         selected_cids = [
             int(cid_str) for cid_str, cdata in b_prof.cities.items()
-            if cid_str.lstrip("-").isdigit() and cdata.enabled
+            if cid_str.lstrip("-").isdigit()
+            and cdata.enabled
+            and (valid_base_ids is None or int(cid_str) in valid_base_ids)
         ]
         if not selected_cids and self._default_city_id():
             selected_cids = [self._default_city_id()]  # type: ignore[list-item]
         if not selected_cids:
-            raise ValueError("Chưa có căn cứ nào được chọn để xây dựng.")
+            raise ValueError("Chưa có căn cứ nào hợp lệ được chọn để xây dựng.")
 
         box_options_ids = [1, 6, 11, 16, 24, 35]
         box_idx = max(0, min(len(box_options_ids) - 1, int(b_prof.box_type_idx)))
@@ -1090,6 +1134,7 @@ class AccountSession:
                     on_sync_data=lambda target_cid, rdata: self._sync_city_buildings_from_raw(
                         target_cid, rdata, from_auto_cycle=True
                     ),
+                    on_city_missing=self._trigger_roster_resync_async,
                 )
             )
         if not tasks:
@@ -1150,17 +1195,24 @@ class AccountSession:
     def start_resource_monitor(self) -> None:
         if self._res_monitor_running:
             return
-        res_cids = list(self.profile.resource.resource_cities)
+        self._ensure_roster_loaded()
+        valid_base_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
+        res_cids = [
+            cid for cid in self.profile.resource.resource_cities
+            if valid_base_ids is None or cid in valid_base_ids
+        ]
         if not res_cids:
             res_cids = [
                 int(cid_str)
                 for cid_str, cdata in self.profile.building.cities.items()
-                if cid_str.lstrip("-").isdigit() and cdata.resource
+                if cid_str.lstrip("-").isdigit()
+                and cdata.resource
+                and (valid_base_ids is None or int(cid_str) in valid_base_ids)
             ]
         if not res_cids and self._default_city_id():
             res_cids = [self._default_city_id()]  # type: ignore[list-item]
         if not res_cids:
-            raise ValueError("Vui lòng chọn ít nhất 1 thành để giám sát tài nguyên.")
+            raise ValueError("Vui lòng chọn ít nhất 1 thành hợp lệ để giám sát tài nguyên.")
 
         self._res_monitor_running = True
         self._res_monitor_stop.clear()
@@ -1170,7 +1222,9 @@ class AccountSession:
         def _loop():
             while self._res_monitor_running and not self._res_monitor_stop.is_set():
                 r_cfg = self.profile.resource
-                cids = list(r_cfg.resource_cities) or res_cids
+                cur_valid_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
+                raw_cids = list(r_cfg.resource_cities) or res_cids
+                cids = [cid for cid in raw_cids if cur_valid_ids is None or cid in cur_valid_ids]
                 for cid in cids:
                     if not self._res_monitor_running or self._res_monitor_stop.is_set():
                         break
@@ -1178,6 +1232,9 @@ class AccountSession:
                         base = self.roster.base_by_id(cid)
                         cname = base.name if base else f"Thành {cid}"
                         resp = self.gateway.call("City.ashx", 20, {"tid": str(cid), "_": ""}) or {}
+                        if resp.get("ret", 0) == 4:
+                            self._trigger_roster_resync_async(cid)
+                            continue
                         money = _safe_int(resp.get("money", resp.get("gold", 0)), 0)
                         wood = _safe_int(resp.get("wood", 0), 0)
                         iron = _safe_int(resp.get("iron", 0), 0)
@@ -2112,9 +2169,14 @@ class AccountSession:
     def start_crafting(self) -> None:
         if self._craft_running:
             return
-        enabled = [c for c in self.profile.crafting.cities.values() if c.enabled]
+        self._ensure_roster_loaded()
+        valid_city_ids = {c.id for c in self.roster.cities} if self.roster and self.roster.cities else None
+        enabled = [
+            c for cid_str, c in self.profile.crafting.cities.items()
+            if c.enabled and (valid_city_ids is None or int(c.city_id or cid_str) in valid_city_ids)
+        ]
         if not enabled:
-            raise ValueError("Vui lòng bật ít nhất 1 thành chế tạo quân giới.")
+            raise ValueError("Vui lòng bật ít nhất 1 thành hợp lệ để chế tạo quân giới.")
         self._craft_running = True
         self._craft_stop.clear()
 
@@ -2122,12 +2184,15 @@ class AccountSession:
             crafter = WeaponCrafter(self.gateway, workshop_cache_ttl=300.0)
             while self._craft_running and not self._craft_stop.is_set():
                 now = time.time()
+                cur_valid_city_ids = {c.id for c in self.roster.cities} if self.roster and self.roster.cities else None
                 for cid_str, cfg in list(self.profile.crafting.cities.items()):
                     if self._craft_stop.is_set():
                         break
                     if not cfg.enabled:
                         continue
                     cid = int(cfg.city_id or cid_str)
+                    if cur_valid_city_ids is not None and cid not in cur_valid_city_ids:
+                        continue
                     interval_sec = max(10.0, _safe_float(cfg.interval, 5.0) * 60.0)
                     if now - self._craft_last_run.get(cid, 0.0) >= interval_sec:
                         wids = cfg.weapon_ids or [cfg.weapon_id]

@@ -1760,3 +1760,76 @@ def test_building_task_aborts_open_box_when_city_switch_fails():
     box_calls = [d for k, d in server.calls if k == "Common.ashx?id=48"]
     assert len(box_calls) == 0
     assert any("chuyển" in line.lower() for line in logs)
+
+
+def test_building_task_does_not_assume_level_zero_when_building_list_fails():
+    """Khi /api/building/list lỗi hoặc trả rỗng, tuyệt đối không suy diễn level=0 để gửi lệnh xây."""
+    for handler_resp in ({"ret": 500}, {"ret": 0, "items": []}):
+        server = FakeServer(
+            handlers={
+                "Common.ashx?id=77": {"ret": 0, "list": []},
+                "/api/building/list": handler_resp,
+                "OPT.ashx?id=65": {"ret": 0},
+            }
+        )
+        gw = GatewayClient(58, server, sleep=lambda s: None)
+        task = BuildingTask(
+            gw,
+            city_id=10129,
+            plans=[BuildingPlan(pid=1, gid=1, target_level=20)],
+            auto_comfort=False,
+            auto_boost=False,
+        )
+        out = task.run_once()
+        assert out == "buildings_read_failed"
+        upgrade_calls = [c for c in server.calls if c[0] == "/api/building/update"]
+        assert len(upgrade_calls) == 0
+
+
+def test_building_task_returns_city_not_found_and_runner_prunes_dead_city():
+    """Khi server trả ret=4 (thành không tồn tại), BuildingTask báo city_not_found và Runner loại khỏi vòng lặp."""
+    from linhvuong.dashboard.runners import BuildingAutoRunner
+
+    class MultiCityServer(FakeServer):
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((path, dict(params or {})))
+            cid = int((params or {}).get("cityTentId", (params or {}).get("cityId", 0)) or 0)
+            if path == "/api/city/pagebuilding":
+                return Resp({"ret": 0, "plus_finish": 100, "list": []})
+            if path == "/api/building/list":
+                if cid == 10229:
+                    return Resp({"ret": 4, "data": {"items": []}})
+                return Resp({"ret": 0, "data": {"items": [{"m_lpos": 1, "m_lgid": 1, "m_llevel": 20, "m_szname": "Quan Phủ"}]}})
+            return Resp({"ret": 0})
+
+    server = MultiCityServer()
+    gw = GatewayClient(58, server, sleep=lambda s: None)
+    missing_seen: list[int] = []
+
+    dead_task = BuildingTask(
+        gw,
+        city_id=10229,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=20)],
+        auto_comfort=False,
+        auto_boost=False,
+        city_name="Thành Ma",
+        on_city_missing=missing_seen.append,
+    )
+    live_task = BuildingTask(
+        gw,
+        city_id=10129,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=20)],
+        auto_comfort=False,
+        auto_boost=False,
+        city_name="Thành Sống",
+    )
+
+    logs: list[str] = []
+    runner = BuildingAutoRunner([dead_task, live_task], interval=0.01, log_cb=logs.append, status_cb=lambda _s: None)
+    runner.run()
+
+    assert missing_seen == [10229]
+    assert dead_task not in runner.tasks
+    upgrade_calls = [c for c in server.calls if c[0] == "/api/building/update"]
+    assert len(upgrade_calls) == 0

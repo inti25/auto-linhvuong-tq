@@ -24,6 +24,7 @@ from .base import RET_CAPTCHA_REQUIRED, RET_OK, CaptchaRequired
 
 logger = logging.getLogger("linhvuong.tasks.building")
 
+RET_CITY_NOT_FOUND = 4
 RET_BULK_OUT_OF_CHESTS = 8108
 RET_ITEM_EXHAUSTED = 90
 BULK_DEFAULT_ALLOWED_IDS: frozenset[int] = frozenset(
@@ -630,6 +631,7 @@ class BuildingTask:
         notify: Callable[[str], None] = print,
         city_name: str = "",
         on_sync_data: Optional[Callable[[int, dict[int, dict]], None]] = None,
+        on_city_missing: Optional[Callable[[int], None]] = None,
     ):
         self.gateway = gateway
         self.city_id = city_id
@@ -651,6 +653,7 @@ class BuildingTask:
         self.even_upgrade = even_upgrade
         self.notify = notify
         self.on_sync_data = on_sync_data
+        self.on_city_missing = on_city_missing
         self.skipped_pids: set[int] = set()
         self.deferred_pids: set[int] = set()
         self.comfort_interval: float = 300.0
@@ -831,15 +834,10 @@ class BuildingTask:
         slots, _ = self._fetch_active_upgrade_slots(force=force)
         return slots
 
-    def get_real_buildings(self) -> dict[int, dict]:
-        """Lấy danh sách công trình hiện có từ /api/building/list: {pid: {"gid": gid, "level": level, "name": name}}."""
-        resp = self.gateway.building_list(self.city_id) or {}
-        ret = resp.get("ret", RET_OK)
-        if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
-            raise CaptchaRequired()
-
+    @staticmethod
+    def _parse_buildings_map(resp: dict) -> dict[int, dict]:
         buildings_list = resp.get("items") or resp.get("infos") or []
-        buildings_map = {}
+        buildings_map: dict[int, dict] = {}
         for b in buildings_list:
             if not isinstance(b, dict):
                 continue
@@ -850,6 +848,34 @@ class BuildingTask:
                 "name": str(b.get("m_szname") or b.get("name") or ""),
             }
         return buildings_map
+
+    def _fetch_real_buildings_checked(self) -> tuple[dict[int, dict], Optional[int], bool]:
+        """Đọc danh sách công trình thực tế kèm mã ret và cờ thành công để tránh suy diễn cấp 0 khi API lỗi."""
+        resp = self.gateway.building_list(self.city_id)
+        if not isinstance(resp, dict) or not resp:
+            return {}, None, False
+        try:
+            ret = int(resp.get("ret", RET_OK))
+        except (ValueError, TypeError):
+            ret = -1
+        if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+            raise CaptchaRequired()
+        if ret != RET_OK:
+            return {}, ret, False
+        buildings_map = self._parse_buildings_map(resp)
+        if not buildings_map:
+            return {}, RET_OK, False
+        return buildings_map, RET_OK, True
+
+    def get_real_buildings(self) -> dict[int, dict]:
+        """Lấy danh sách công trình hiện có từ /api/building/list: {pid: {"gid": gid, "level": level, "name": name}}."""
+        resp = self.gateway.building_list(self.city_id) or {}
+        ret = resp.get("ret", RET_OK)
+        if ret == 110 or ret == RET_CAPTCHA_REQUIRED:
+            raise CaptchaRequired()
+        if ret != RET_OK:
+            return {}
+        return self._parse_buildings_map(resp)
 
     def speedup_slot(self, slot_id: int, paytype: Optional[int] = None, kind: int = 1) -> bool:
         """Sử dụng vật phẩm tăng tốc xây dựng (kind=1: giảm 50%, kind=2: giảm 1 giờ)."""
@@ -1111,6 +1137,32 @@ class BuildingTask:
         self._log("⚠️ Không còn rương tài nguyên nào trong túi đồ có thể mở.")
         return False
 
+    def _handle_city_not_found(self) -> str:
+        self._log("⚠️ Căn cứ không còn tồn tại trên máy chủ (mã 4), dừng theo dõi căn cứ này.")
+        if self.on_city_missing:
+            try:
+                self.on_city_missing(self.city_id)
+            except Exception:
+                pass
+        return "city_not_found"
+
+    def _sync_once_when_busy(self) -> Optional[str]:
+        if getattr(self, "_synced_once", False):
+            return None
+        try:
+            rb, rb_ret, rb_ok = self._fetch_real_buildings_checked()
+            if rb_ret == RET_CITY_NOT_FOUND:
+                return self._handle_city_not_found()
+            if rb_ok or rb_ret == RET_OK:
+                self._synced_once = True
+            if rb_ok and self.on_sync_data:
+                self.on_sync_data(self.city_id, {k: dict(v) for k, v in rb.items()})
+        except CaptchaRequired:
+            raise
+        except Exception:
+            pass
+        return None
+
     def run_once(self) -> str:
         now_mono = time.monotonic()
         if self._c77_cache_external:
@@ -1147,27 +1199,17 @@ class BuildingTask:
             return "slots_read_failed"
         if len(active_slots) >= self.max_slots:
             self._update_busy_until(active_slots)
-            if not getattr(self, "_synced_once", False):
-                try:
-                    rb = self.get_real_buildings()
-                    self._synced_once = True
-                    if self.on_sync_data:
-                        self.on_sync_data(self.city_id, {k: dict(v) for k, v in rb.items()})
-                except Exception:
-                    pass
+            missing_res = self._sync_once_when_busy()
+            if missing_res:
+                return missing_res
             return "slots_busy"
 
         self._busy_until = 0.0
         available_slots = self.max_slots - len(active_slots)
         if available_slots <= 0:
-            if not getattr(self, "_synced_once", False):
-                try:
-                    rb = self.get_real_buildings()
-                    self._synced_once = True
-                    if self.on_sync_data:
-                        self.on_sync_data(self.city_id, {k: dict(v) for k, v in rb.items()})
-                except Exception:
-                    pass
+            missing_res = self._sync_once_when_busy()
+            if missing_res:
+                return missing_res
             return "slots_busy"
 
         # Nếu vừa thiếu tài nguyên toàn thành (không tự mở rương), nghỉ cooldown trước khi spam lại id=65
@@ -1178,8 +1220,13 @@ class BuildingTask:
         ):
             return "insufficient_resources"
 
-        # 4. Lấy danh sách công trình thực tế
-        real_buildings = self.get_real_buildings()
+        # 4. Lấy danh sách công trình thực tế (tuyệt đối không suy diễn cấp 0 khi API lỗi/rỗng)
+        real_buildings, rb_ret, rb_ok = self._fetch_real_buildings_checked()
+        if not rb_ok:
+            if rb_ret == RET_CITY_NOT_FOUND:
+                return self._handle_city_not_found()
+            self._log("⚠️ Không đọc được danh sách công trình thực tế từ máy chủ, bỏ qua lượt xây này.")
+            return "buildings_read_failed"
         self._synced_once = True
         if self.on_sync_data:
             try:
@@ -1314,6 +1361,8 @@ class BuildingTask:
                     if not last_error:
                         last_error = "insufficient_resources"
                     continue
+                elif ret == RET_CITY_NOT_FOUND:
+                    return self._handle_city_not_found()
                 else:
                     self._log(f"❌ {action_verb.capitalize()} slot {plan.pid} ({bname}) thất bại (mã {ret}). Bỏ qua, nâng cấp công trình khác...")
                     self.skipped_pids.add(plan.pid)

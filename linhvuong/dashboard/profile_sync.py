@@ -302,6 +302,110 @@ class ProfileSyncMixin:
 
         return loaded_sections
 
+    def _sync_state_with_roster(self, roster) -> bool:
+        """Đồng bộ bộ nhớ UI với danh sách Căn Cứ thực tế từ máy chủ (ADR-0042).
+
+        Chỉ thanh lọc khi `roster.bases` khác rỗng; trả về True nếu phát hiện
+        căn cứ bị xóa, thêm mới hoặc đổi tên so với hồ sơ đã nạp.
+        """
+        if not roster or not getattr(roster, "bases", None):
+            return False
+
+        valid_base_ids = {b.id for b in roster.bases}
+        valid_city_ids = {b.id for b in roster.bases if not b.is_camp}
+        base_name_map = {b.id: b.name for b in roster.bases}
+        first_base_id = roster.bases[0].id
+        first_city_id = next((b.id for b in roster.bases if not b.is_camp), None)
+
+        changed = False
+
+        loaded_names: Optional[dict[int, str]] = getattr(self, "_loaded_profile_city_names", None)
+        if loaded_names is not None:
+            if any(cid not in valid_base_ids for cid in loaded_names):
+                changed = True
+            for b in roster.bases:
+                if b.id not in loaded_names or loaded_names[b.id] != b.name:
+                    changed = True
+
+        # 1. Xây Dựng & Tài Nguyên
+        if hasattr(self, "_city_building_plans"):
+            stale_bld = [cid for cid in self._city_building_plans if cid not in valid_base_ids]
+            for cid in stale_bld:
+                self._city_building_plans.pop(cid, None)
+                changed = True
+
+        if hasattr(self, "_selected_building_cities"):
+            stale_sel = self._selected_building_cities - valid_base_ids
+            if stale_sel:
+                self._selected_building_cities -= stale_sel
+                changed = True
+
+        if hasattr(self, "_selected_resource_cities"):
+            stale_res = self._selected_resource_cities - valid_base_ids
+            if stale_res:
+                self._selected_resource_cities -= stale_res
+                changed = True
+
+        if getattr(self, "_current_bld_city_id", None) is not None and self._current_bld_city_id not in valid_base_ids:
+            self._current_bld_city_id = first_base_id
+            if hasattr(self, "_render_bld_tree_from_plans"):
+                self._render_bld_tree_from_plans(self._city_building_plans.get(first_base_id, []))
+
+        # 2. Nghiên Cứu (chỉ Thành)
+        if getattr(self, "_research_city_id", None) is not None and self._research_city_id not in valid_city_ids:
+            self._research_city_id = first_city_id
+            changed = True
+
+        # 3. Bình Man (cả Thành và Doanh trại)
+        if hasattr(self, "bm_base_configs") and isinstance(self.bm_base_configs, dict):
+            stale_bm = [bid for bid in self.bm_base_configs if bid not in valid_base_ids]
+            for bid in stale_bm:
+                self.bm_base_configs.pop(bid, None)
+                changed = True
+            for bid, bcfg in self.bm_base_configs.items():
+                bname = base_name_map.get(bid, "")
+                if bname and bcfg.name != bname:
+                    bcfg.name = bname
+                    changed = True
+                if bcfg.parent_city_id:
+                    try:
+                        pcid = int(str(bcfg.parent_city_id).strip())
+                    except ValueError:
+                        pcid = None
+                    if pcid is None or pcid not in valid_city_ids:
+                        bcfg.parent_city_id = str(first_city_id) if first_city_id is not None else ""
+                        changed = True
+                if bcfg.camp_id:
+                    try:
+                        camp_id = int(str(bcfg.camp_id).strip())
+                    except ValueError:
+                        camp_id = None
+                    if camp_id is None or camp_id not in valid_base_ids:
+                        bcfg.camp_id = ""
+                        changed = True
+
+        if getattr(self, "_current_bm_base_id", None) is not None and self._current_bm_base_id not in valid_base_ids:
+            self._current_bm_base_id = first_base_id
+            changed = True
+
+        # 4. Chế Tạo Quân Giới (chỉ Thành)
+        if hasattr(self, "craft_configs") and isinstance(self.craft_configs, dict):
+            stale_craft = [cid for cid in self.craft_configs if cid not in valid_city_ids]
+            for cid in stale_craft:
+                self.craft_configs.pop(cid, None)
+                changed = True
+
+        # 5. Tham chiếu chờ của Thảo Phạt / Niên Thú
+        if getattr(self, "_pending_tp_city_id", None) is not None and self._pending_tp_city_id not in valid_base_ids:
+            self._pending_tp_city_id = first_city_id if first_city_id is not None else first_base_id
+            changed = True
+        if getattr(self, "_pending_nt_city_id", None) is not None and self._pending_nt_city_id not in valid_city_ids:
+            self._pending_nt_city_id = first_city_id
+            changed = True
+
+        self._loaded_profile_city_names = dict(base_name_map)
+        return changed
+
     def _save_unified_profile(self, filepath: Optional[Path] = None) -> Path:
         target = Path(filepath) if filepath is not None else self._resolve_active_profile_target()
         profile_dict = self._collect_unified_profile()
@@ -322,6 +426,24 @@ class ProfileSyncMixin:
             prof = ProfileStore.load(target)
             with self._suppress_auto_save():
                 sections = self._apply_unified_profile(prof.to_dict())
+                if getattr(self, "roster", None) and getattr(self.roster, "bases", None):
+                    if self._sync_state_with_roster(self.roster):
+                        if hasattr(self, "bld_bases_tree"):
+                            for iid in self.bld_bases_tree.get_children(""):
+                                vals = list(self.bld_bases_tree.item(iid, "values"))
+                                if len(vals) > 2:
+                                    try:
+                                        cid_int = int(iid)
+                                        vals[0] = "☑" if cid_int in self._selected_building_cities else "☐"
+                                        vals[1] = "☑" if cid_int in self._selected_resource_cities else "☐"
+                                        vals[2] = "★" if self._research_city_id == cid_int else "☐"
+                                        self.bld_bases_tree.item(iid, values=vals)
+                                    except ValueError:
+                                        pass
+                        if hasattr(self, "_refresh_bm_bases_tree"):
+                            self._refresh_bm_bases_tree()
+                        if hasattr(self, "_refresh_craft_tree"):
+                            self._refresh_craft_tree()
                 if hasattr(self, "profile_path_var"):
                     self.profile_path_var.set(target.name)
             self._active_profile_path = target

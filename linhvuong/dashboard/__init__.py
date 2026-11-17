@@ -697,8 +697,12 @@ class Dashboard(
         self.refresh_btn.state(["!disabled"])
 
     def _loaded(self, roster: Roster):
+        sync_changed = False
+        had_loaded_profile_cities = bool(getattr(self, "_loaded_profile_city_names", None))
         with self._suppress_auto_save():
             self.roster = roster
+            if hasattr(self, "_sync_state_with_roster"):
+                sync_changed = self._sync_state_with_roster(roster)
             self.city_tree.delete(*self.city_tree.get_children())
             for base in roster.bases:
                 coords = f"{base.pos_x},{base.pos_y}" if (base.pos_x or base.pos_y) else "-"
@@ -718,7 +722,11 @@ class Dashboard(
                         "☑"
                         if (
                             base.id in self._selected_building_cities
-                            or (not self._selected_building_cities and base == roster.bases[0])
+                            or (
+                                not self._selected_building_cities
+                                and not had_loaded_profile_cities
+                                and base == roster.bases[0]
+                            )
                         )
                         else "☐"
                     )
@@ -853,6 +861,16 @@ class Dashboard(
                 if getattr(self, "_last_daily_claim_date", None) != today_str:
                     self._last_daily_claim_date = today_str
                     self._do_claim_daily()
+
+        if sync_changed and getattr(self, "_auto_save_enabled", False) and hasattr(self, "_resolve_active_profile_target"):
+            try:
+                target = self._resolve_active_profile_target()
+                if target.exists():
+                    self._save_unified_profile(target)
+                    if hasattr(self, "_append_bld_log"):
+                        self._append_bld_log("🔄 Đã đồng bộ danh sách căn cứ thực tế vào hồ sơ JSON.")
+            except Exception as exc:
+                logger.debug(f"Đồng bộ hồ sơ sau khi tải roster thất bại: {exc}")
 
     def destroy(self):
         self._closing = True

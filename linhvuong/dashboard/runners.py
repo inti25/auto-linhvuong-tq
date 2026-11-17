@@ -244,12 +244,23 @@ class BuildingAutoRunner(BaseTaskRunner):
                         for t in tasks_needing_c77:
                             t.set_c77_cache(shared_resp, fetched_at)
 
-                for t in self.tasks:
+                missing_tasks = []
+                for t in list(self.tasks):
                     if self.stop_event.is_set():
                         break
                     res = t.run_once()
+                    if res == "city_not_found":
+                        missing_tasks.append(t)
+                        continue
                     if res != "all_buildings_completed":
                         all_completed = False
+
+                if missing_tasks:
+                    self.tasks = [t for t in self.tasks if t not in missing_tasks]
+                    if not self.tasks:
+                        self.log("⚠️ Không còn căn cứ hợp lệ nào trong hàng đợi xây dựng.")
+                        self.status_cb("Hoàn tất quy hoạch")
+                        break
 
                 if all_completed and self.tasks:
                     self.log("🎉 Toàn bộ công trình quy hoạch của tất cả các căn cứ đã hoàn tất!")

@@ -19,18 +19,19 @@ class BuildingMixin:
     def _collect_building_profile_dict(self) -> dict:
         self._save_current_bld_tree_to_cache()
         cities_cfg = {}
-        all_cids = (
-            set(self._city_building_plans.keys())
-            | self._selected_building_cities
-            | self._selected_resource_cities
-        )
-        if self._research_city_id:
-            all_cids.add(self._research_city_id)
-        if self.roster:
-            for b in self.roster.bases:
-                all_cids.add(b.id)
+        if self.roster and self.roster.bases:
+            ordered_cids = [b.id for b in self.roster.bases]
+        else:
+            all_cids = (
+                set(self._city_building_plans.keys())
+                | self._selected_building_cities
+                | self._selected_resource_cities
+            )
+            if self._research_city_id:
+                all_cids.add(self._research_city_id)
+            ordered_cids = sorted(all_cids)
 
-        for cid in sorted(all_cids):
+        for cid in ordered_cids:
             plans = self._city_building_plans.get(cid, [])
             base_name = ""
             if self.roster:
@@ -114,11 +115,14 @@ class BuildingMixin:
             cities_data = bld_data.get("cities")
 
         if cities_data and isinstance(cities_data, dict):
+            self._loaded_profile_city_names = {}
             for cid_str, cinfo in cities_data.items():
                 try:
                     cid = int(cid_str)
                 except ValueError:
                     continue
+                if isinstance(cinfo, dict):
+                    self._loaded_profile_city_names[cid] = str(cinfo.get("name", ""))
                 c_plans = cinfo.get("plans", [])
                 self._city_building_plans[cid] = c_plans
                 if cinfo.get("enabled", True):
@@ -1729,7 +1733,13 @@ class BuildingMixin:
         if not self._bld_runner or not self._bld_runner.is_alive():
             self._save_current_bld_tree_to_cache()
 
-            selected_cids = list(self._selected_building_cities)
+            valid_base_ids = (
+                {b.id for b in self.roster.bases} if (self.roster and self.roster.bases) else None
+            )
+            selected_cids = [
+                cid for cid in self._selected_building_cities
+                if valid_base_ids is None or cid in valid_base_ids
+            ]
             if not selected_cids:
                 if self._current_bld_city_id:
                     selected_cids = [self._current_bld_city_id]
@@ -1826,6 +1836,7 @@ class BuildingMixin:
                     on_sync_data=lambda target_cid, rdata: self.after(
                         0, self._sync_city_buildings_data, target_cid, rdata, True
                     ),
+                    on_city_missing=lambda _missing_cid: self.after(0, self.reload),
                 )
                 tasks.append(task)
 

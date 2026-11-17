@@ -401,6 +401,93 @@ def test_goi_dan_and_binh_man_attack_action_profile_roundtrip():
     assert loaded.binh_man.bases["-999"].action_combo_idx == 2
 
 
+def test_sync_with_bases_prunes_deleted_adds_new_and_updates_names():
+    from linhvuong.profile import BaseBinhManConfig, CityCraftConfig
+    from linhvuong.roster import City
+
+    prof = Profile()
+    prof.building.cities = {
+        "10129": CityBuildingConfig(name="Cũ", enabled=False, resource=False, plans=[{"pid": 1, "gid": 1, "target_level": 20}]),
+        "10229": CityBuildingConfig(name="", enabled=True, resource=True, plans=[{"pid": 1, "gid": 1, "target_level": 20}]),
+        "-500": CityBuildingConfig(name="Trại cũ", enabled=True, resource=False, plans=[]),
+    }
+    prof.resource.resource_cities = [10129, 10229, -500]
+    prof.research.city_id = 10229
+    prof.thao_phat.city_id = 10229
+    prof.goi_dan.city_id = 10229
+    prof.nien_thu.city_id = 10229
+    prof.binh_man.current_base_id = -500
+    prof.binh_man.bases = {
+        "10129": BaseBinhManConfig(name="Cũ", enabled=False, parent_city_id="10229"),
+        "10229": BaseBinhManConfig(name="Đã mất", enabled=True),
+        "-500": BaseBinhManConfig(name="Trại cũ", enabled=True, camp_id="-500"),
+    }
+    prof.crafting.cities = {
+        "10129": CityCraftConfig(city_id=10129, enabled=True),
+        "10229": CityCraftConfig(city_id=10229, enabled=True),
+        "-600": CityCraftConfig(city_id=-600, enabled=True),
+    }
+
+    live_bases = [
+        City(id=10129, name="1", type="Thành"),
+        City(id=10254, name="TT", type="Thành"),
+        City(id=-600, name="Trại Mới", type="Doanh trại"),
+    ]
+    res = prof.sync_with_bases(live_bases)
+
+    assert res.changed is True
+    assert set(res.removed_ids) == {10229, -500, -600}
+    assert set(res.added_ids) == {10254, -600}
+    assert 10129 in res.renamed_ids
+
+    assert list(prof.building.cities.keys()) == ["10129", "10254", "-600"]
+    assert prof.building.cities["10129"].name == "1"
+    assert prof.building.cities["10129"].enabled is False
+    assert prof.building.cities["10254"].name == "TT"
+    assert prof.building.cities["10254"].enabled is False
+    assert prof.building.cities["-600"].name == "Trại Mới"
+    assert prof.building.cities["-600"].enabled is False
+
+    assert prof.resource.resource_cities == [10129]
+    assert prof.research.city_id == 10129
+    assert prof.thao_phat.city_id == 10129
+    assert prof.goi_dan.city_id == 10129
+    assert prof.nien_thu.city_id == 10129
+
+    assert list(prof.binh_man.bases.keys()) == ["10129"]
+    assert prof.binh_man.bases["10129"].name == "1"
+    assert prof.binh_man.bases["10129"].parent_city_id == "10129"
+    assert prof.binh_man.current_base_id == 10129
+
+    assert list(prof.crafting.cities.keys()) == ["10129"]
+
+
+def test_sync_with_bases_empty_roster_does_not_prune():
+    prof = Profile()
+    prof.building.cities["10129"] = CityBuildingConfig(name="1", enabled=True, resource=True)
+    prof.resource.resource_cities = [10129]
+    prof.research.city_id = 10129
+
+    res = prof.sync_with_bases([])
+    assert res.changed is False
+    assert "10129" in prof.building.cities
+    assert prof.resource.resource_cities == [10129]
+    assert prof.research.city_id == 10129
+
+
+def test_sync_with_bases_initializes_first_enabled_when_empty():
+    from linhvuong.roster import City
+
+    prof = Profile()
+    res = prof.sync_with_bases([
+        City(id=10129, name="1", type="Thành"),
+        City(id=10254, name="TT", type="Thành"),
+    ])
+    assert res.changed is True
+    assert prof.building.cities["10129"].enabled is True
+    assert prof.building.cities["10254"].enabled is False
+
+
 
 
 

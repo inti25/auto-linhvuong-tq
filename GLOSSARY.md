@@ -13,6 +13,10 @@ _Avoid_: Thành trì (khi cần phân biệt với Doanh trại), base
 Căn cứ dã ngoại hoặc đồn trú lưu động của người chơi trên bản đồ thế giới, có thể đóng quân, xuất kích đánh Man và di chuyển vị trí (ID âm hoặc định danh qua `lTentID`).
 _Avoid_: Trại tạm, Trại Di Chuyển, camp, tent
 
+**Căn Cứ**:
+Đơn vị địa bàn thuộc quyền sở hữu của người chơi trên bản đồ, bao gồm cả **Thành** (ID dương) và **Doanh trại** (ID âm).
+_Avoid_: Danh sách thành (khi có cả Doanh trại), sở hữu, node bản đồ
+
 **Võ tướng**:
 Tướng chuyên về quân sự (loại 2), có chỉ số dũng võ, thể lực, sĩ khí; trực tiếp thống lĩnh binh mã xuất chinh dã ngoại, tham gia Thảo Phạt, Bình Man, Gọi Man.
 _Avoid_: Tướng võ, martial
@@ -290,6 +294,10 @@ _Avoid_: In-workspace login, form đăng nhập con, login frame
 **Đồng Bộ Dữ Liệu Thực Tế**:
 Tiến trình tự động cập nhật cấp độ và trạng thái kiến trúc, kỹ thuật từ phản hồi của máy chủ về bộ nhớ và giao diện bot sau mỗi chu kỳ thi công mà không phát sinh thêm lệnh truy vấn dư thừa.
 _Avoid_: Refresh dữ liệu, reload thực tế, fetch lặp
+
+**Đồng Bộ Danh Sách Căn Cứ**:
+Tiến trình đối chiếu danh sách **Căn Cứ** thực tế đang tồn tại trên máy chủ với **Hồ Sơ Tài Khoản Riêng Biệt** để bổ sung căn cứ mới, cập nhật tên và loại bỏ các căn cứ không còn tồn tại.
+_Avoid_: Xóa thành tay, giữ cấu hình thành ma, đồng bộ một chiều
 
 **Bảo Toàn Thứ Tự Ưu Tiên**:
 Nguyên tắc bất biến duy trì chính xác vị trí sắp xếp của các đối tượng trong Hàng Đợi Xây Dựng và Hàng Đợi Nghiên Cứu qua các lần nạp dữ liệu thực tế, chuyển đổi căn cứ hoặc nạp hồ sơ cấu hình.
