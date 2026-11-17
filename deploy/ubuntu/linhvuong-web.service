@@ -1,0 +1,19 @@
+[Unit]
+Description=Linh Vuong Auto Bot & Web Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=linhvuong
+Group=linhvuong
+WorkingDirectory=/var/lib/linhvuong
+EnvironmentFile=-/etc/linhvuong/env
+ExecStart=/usr/local/bin/LinhVuongWeb --host ${LINHVUONG_WEB_HOST:-127.0.0.1} --port ${LINHVUONG_WEB_PORT:-8000}
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

@@ -10,10 +10,17 @@ from typing import Any, Callable, Optional
 import requests
 
 from .auth import LoginError, login, normalize_proxy_url, parse_server_id
+from .paths import settings_path as _default_settings_path
 from .proxy import DEFAULT_FREE_PROXY_URL, ProxyPool
 
 SETTINGS = Path("gui_settings.json")  # chỉ lưu server, tài khoản, cấu hình proxy; không lưu mật khẩu game
 BG, CARD, FG, ACCENT = "#14161f", "#1e2130", "#e8eaf2", "#6c7bff"
+
+
+def _resolve_settings_file() -> Path:
+    if SETTINGS != Path("gui_settings.json"):
+        return SETTINGS
+    return _default_settings_path()
 
 
 def set_app_icon(win: tk.Tk | tk.Toplevel):
@@ -308,13 +315,16 @@ class LoginWindow(tk.Tk):
             "last_account": self.saved_acc_combo.get().strip() if hasattr(self, "saved_acc_combo") else "",
             "accounts": self.accounts_dict,
         }
-        SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        sf = _resolve_settings_file()
+        sf.parent.mkdir(parents=True, exist_ok=True)
+        sf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _load_settings(self):
         self.accounts_dict = {}
-        if SETTINGS.exists():
+        sf = _resolve_settings_file()
+        if sf.exists():
             try:
-                data = json.loads(SETTINGS.read_text(encoding="utf-8"))
+                data = json.loads(sf.read_text(encoding="utf-8"))
                 raw_accounts = data.get("accounts")
                 if isinstance(raw_accounts, dict) and raw_accounts:
                     self.accounts_dict = dict(raw_accounts)
@@ -523,7 +533,9 @@ class LoginWindow(tk.Tk):
             "last_account": acc_key,
             "accounts": self.accounts_dict,
         }
-        SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        sf = _resolve_settings_file()
+        sf.parent.mkdir(parents=True, exist_ok=True)
+        sf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self.session, self.server_id, self.username = session, server_id, username
         self.password = password
         self.proxy_url = p_url
@@ -1101,9 +1113,10 @@ class MultiAccountApp(tk.Tk):
     def _load_accounts(self):
         accounts_dict = {}
         last_account = ""
-        if SETTINGS.exists():
+        sf = _resolve_settings_file()
+        if sf.exists():
             try:
-                data = json.loads(SETTINGS.read_text(encoding="utf-8"))
+                data = json.loads(sf.read_text(encoding="utf-8"))
                 raw_accounts = data.get("accounts")
                 if isinstance(raw_accounts, dict) and raw_accounts:
                     accounts_dict = dict(raw_accounts)
@@ -1379,7 +1392,9 @@ class MultiAccountApp(tk.Tk):
             "accounts": clean_accounts,
         }
         try:
-            SETTINGS.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            sf = _resolve_settings_file()
+            sf.parent.mkdir(parents=True, exist_ok=True)
+            sf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
 

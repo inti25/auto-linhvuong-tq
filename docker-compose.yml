@@ -1,0 +1,18 @@
+services:
+  linhvuong-web:
+    build: .
+    container_name: linhvuong-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      LINHVUONG_DATA_DIR: /data
+      LINHVUONG_WEB_HOST: "0.0.0.0"
+      LINHVUONG_WEB_PORT: "8000"
+      LINHVUONG_WEB_USERNAME: "${LINHVUONG_WEB_USERNAME:-admin}"
+      LINHVUONG_WEB_PASSWORD: "${LINHVUONG_WEB_PASSWORD:-changeme_strong_password}"
+      # Mở khóa Két Mật Khẩu Mã Hóa để tự đăng nhập & chạy lại tác vụ sau restart container:
+      # LINHVUONG_VAULT_KEY: "${LINHVUONG_VAULT_KEY:-}"
+    volumes:
+      - ./data:/data
+    stop_grace_period: 20s

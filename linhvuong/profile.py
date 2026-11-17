@@ -457,7 +457,10 @@ class DiTraiProfile:
 class NotificationProfile:
     desktop_enabled: bool = True
     sound_enabled: bool = True
+    web_enabled: bool = True
     telegram_enabled: bool = False
+    telegram_alert_captcha: bool = True
+    telegram_alert_disconnect: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
@@ -471,6 +474,10 @@ class NotificationProfile:
         notify_desktop_toast: Optional[bool] = None,
         notify_sound: Optional[bool] = None,
         notify_telegram: Optional[bool] = None,
+        web_enabled: Optional[bool] = None,
+        notify_web: Optional[bool] = None,
+        telegram_alert_captcha: Optional[bool] = None,
+        telegram_alert_disconnect: Optional[bool] = None,
         **kwargs,
     ):
         d_val = notify_desktop_toast if notify_desktop_toast is not None else desktop_enabled
@@ -479,8 +486,14 @@ class NotificationProfile:
         s_val = notify_sound if notify_sound is not None else sound_enabled
         self.sound_enabled = True if s_val is None else bool(s_val)
 
+        w_val = notify_web if notify_web is not None else web_enabled
+        self.web_enabled = True if w_val is None else bool(w_val)
+
         t_val = notify_telegram if notify_telegram is not None else telegram_enabled
         self.telegram_enabled = False if t_val is None else bool(t_val)
+
+        self.telegram_alert_captcha = True if telegram_alert_captcha is None else bool(telegram_alert_captcha)
+        self.telegram_alert_disconnect = True if telegram_alert_disconnect is None else bool(telegram_alert_disconnect)
 
         self.telegram_bot_token = str(kwargs.get("telegram_bot_token", telegram_bot_token)).strip()
         self.telegram_chat_id = str(kwargs.get("telegram_chat_id", telegram_chat_id)).strip()
@@ -509,6 +522,14 @@ class NotificationProfile:
     def notify_telegram(self, val: bool):
         self.telegram_enabled = bool(val)
 
+    @property
+    def notify_web(self) -> bool:
+        return self.web_enabled
+
+    @notify_web.setter
+    def notify_web(self, val: bool):
+        self.web_enabled = bool(val)
+
     @classmethod
     def from_dict(cls, data: dict) -> "NotificationProfile":
         if not isinstance(data, dict):
@@ -521,6 +542,10 @@ class NotificationProfile:
         if s_val is None:
             s_val = data.get("sound_enabled", True)
 
+        w_val = data.get("notify_web")
+        if w_val is None:
+            w_val = data.get("web_enabled", True)
+
         t_val = data.get("notify_telegram")
         if t_val is None:
             t_val = data.get("telegram_enabled", False)
@@ -528,7 +553,10 @@ class NotificationProfile:
         return cls(
             desktop_enabled=bool(d_val),
             sound_enabled=bool(s_val),
+            web_enabled=bool(w_val),
             telegram_enabled=bool(t_val),
+            telegram_alert_captcha=bool(data.get("telegram_alert_captcha", True)),
+            telegram_alert_disconnect=bool(data.get("telegram_alert_disconnect", True)),
             telegram_bot_token=str(data.get("telegram_bot_token", "")).strip(),
             telegram_chat_id=str(data.get("telegram_chat_id", "")).strip(),
         )
@@ -537,9 +565,13 @@ class NotificationProfile:
         return {
             "desktop_enabled": self.desktop_enabled,
             "sound_enabled": self.sound_enabled,
+            "web_enabled": self.web_enabled,
             "telegram_enabled": self.telegram_enabled,
+            "telegram_alert_captcha": self.telegram_alert_captcha,
+            "telegram_alert_disconnect": self.telegram_alert_disconnect,
             "notify_desktop_toast": self.desktop_enabled,
             "notify_sound": self.sound_enabled,
+            "notify_web": self.web_enabled,
             "notify_telegram": self.telegram_enabled,
             "telegram_bot_token": self.telegram_bot_token,
             "telegram_chat_id": self.telegram_chat_id,
@@ -784,19 +816,23 @@ class ProfileStore:
         target_path: Optional[Union[str, Path]] = None,
         username: str = "",
         server_id: int = 0,
+        data_dir: Optional[Union[str, Path]] = None,
     ) -> Path:
         """Giải quyết đường dẫn file hồ sơ cấu hình phù hợp nhất."""
         if target_path:
             return Path(target_path)
 
+        from .paths import get_data_dir
+
+        base_dir = get_data_dir(data_dir)
         acc_name = cls.default_profile_name(username, server_id)
-        if acc_name != cls.DEFAULT_FILENAME and Path(acc_name).exists():
-            return Path(acc_name)
+        if acc_name != cls.DEFAULT_FILENAME and (base_dir / acc_name).exists():
+            return base_dir / acc_name
 
-        if Path(cls.DEFAULT_FILENAME).exists():
-            return Path(cls.DEFAULT_FILENAME)
+        if (base_dir / cls.DEFAULT_FILENAME).exists():
+            return base_dir / cls.DEFAULT_FILENAME
 
-        return Path(acc_name)
+        return base_dir / acc_name
 
     @classmethod
     def load(cls, filepath: Union[str, Path]) -> Profile:

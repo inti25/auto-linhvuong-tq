@@ -6,6 +6,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 gui_settings.json
+vault.enc
+web_auth.json
+runtime_state.json
+.linhvuong.lock
+data/
 # Virtual environments
 .venv/
 venv/
@@ -21,7 +26,10 @@ LVClientCode
 build/
 dist/
 *.spec
+!LinhVuong.spec
+!LinhVuongWeb.spec
 LinhVuong.exe
+LinhVuongWeb.exe
 *.egg-info/
 .eggs/
 wheels/

@@ -123,7 +123,7 @@ Tính năng tự động gửi lệnh Cầm Hoạch (`OPT.ashx?id=54, action=5`)
 _Avoid_: Bắt mù quáng, cắn vcoin vô tội vạ, spam action 5 khi sĩ khí cao
 
 **Thông Báo Đa Kênh**:
-Cơ chế phát tín hiệu cảnh báo tức thì đồng thời qua Windows Desktop Toast (kèm âm thanh chuông cảnh báo hệ thống), ghi log giao diện ứng dụng và đẩy tin nhắn từ xa qua Telegram Bot khi hệ thống phát hiện sự kiện đặc biệt (như BOSS xuất hiện trên chiến trường).
+Cơ chế phát tín hiệu cảnh báo tức thì đồng thời qua thông báo cục bộ trên nền tảng vận hành (Windows Desktop Toast kèm âm thanh trên bản Desktop, hoặc Web Toast/Browser Notification kèm âm thanh Web Audio trên Bảng Điều Khiển Web), ghi nhật ký tác vụ và đẩy tin nhắn từ xa qua Telegram Bot khi phát hiện sự kiện quan trọng (như BOSS xuất hiện trên chiến trường, tác vụ tạm dừng vì Captcha hoặc gián đoạn phiên kết nối).
 _Avoid_: Báo lẻ kênh, notification đơn lẻ, log thông thường
 
 **An Dân**:
@@ -264,7 +264,7 @@ Nút bấm và cửa sổ tương tác (Modal Dialog) trên Thanh Điều Hướ
 _Avoid_: Nút donate, quét mã ủng hộ, donate button
 
 **Không Gian Đa Tài Khoản**:
-Cửa sổ ứng dụng hợp nhất vận hành song song nhiều phiên làm việc của các tài khoản Linh Vương khác nhau trên cùng một tiến trình duy nhất.
+Không gian điều hành hợp nhất (trên ứng dụng Desktop hoặc Bảng Điều Khiển Web) vận hành song song nhiều phiên làm việc cô lập của các tài khoản Linh Vương khác nhau trong cùng một tiến trình dịch vụ duy nhất.
 _Avoid_: Multi-account window, trình chạy đa acc, gộp cửa sổ
 
 **Thẻ Tài Khoản**:
@@ -410,6 +410,18 @@ _Avoid_: Đào bảo, quay thưởng, explore
 **Tự Động Trang Bị** (`Auto-Equip Generals`):
 Cơ chế truy vấn kho đồ đạc và trang bị đang mặc của toàn bộ tướng qua `Common.ashx?id=24` (`lType` ∈ {`1: Mũ`, `2: Vũ khí`, `3: Giáp`, `4: Thú cưỡi`}) và tự động phân bổ hoặc tháo trang bị qua `OPT.ashx?id=58` (`lCityTentID`, `lGeneralID`, `lEquipType`, `lEquipID`; với `lEquipID=0` là tháo đồ). Mã loại `item_type_id = XYZZ` (`item[2]`) quy định ô trang bị ở `X` (`1..4`) và phân hệ ở `Y` (`Y=1` cho **Võ tướng**, `Y=2` cho **Văn quan**). Hệ thống chỉ thao tác trên tướng rảnh (`status == 0`), tách riêng từng hệ và hỗ trợ tùy chọn **Đổi trang bị** (tháo về kho chia lại từ đầu) và **Tháo trang bị**. Với **Võ tướng**, ưu tiên theo cấp độ giảm dần (`Cao → Thấp`) và ghép trang bị theo bậc/phẩm chất giảm dần (`(-level, -item_type_id, item_id)`). Với **Văn quan**, phân bổ thông minh theo 3 tầng ưu tiên (**Thái thú** → **Mưu sĩ đang biên chế** → **Quan văn nhàn rỗi**, trong mỗi tầng xếp theo cấp độ giảm dần `Cao → Thấp`): **Thái thú** ưu tiên chọn trang bị có chỉ số **Nội chính** (`item[6]`) cao nhất trước, nhường trang bị thuần Trí mưu/Mị lực (`Nội chính = 0`) cho **Mưu sĩ đang biên chế** và **Quan văn nhàn rỗi**, sau đó mới vét đồ còn dư trong kho vào các ô còn trống của Thái thú.
 _Avoid_: Mặc đồ ngẫu nhiên, auto-gear chung hệ, đồng bộ đồ mù quáng
+
+**Bảng Điều Khiển Web** (`Web Dashboard`):
+Giao diện điều khiển từ xa trên trình duyệt phục vụ quản lý Không Gian Đa Tài Khoản và điều phối các phân hệ tự động hóa khi vận hành bot trên máy chủ không màn hình.
+_Avoid_: Web GUI, trang quản trị, web panel
+
+**Phiên Quản Trị Web** (`Web Admin Session`):
+Phiên xác thực dành riêng cho người vận hành khi truy cập Bảng Điều Khiển Web qua mạng, tách biệt hoàn toàn với phiên kết nối máy chủ game của từng tài khoản Linh Vương.
+_Avoid_: Game session, token đăng nhập game
+
+**Két Mật Khẩu Mã Hóa** (`Encrypted Credential Vault`):
+Kho lưu trữ tùy chọn bảo vệ mật khẩu tài khoản game ở trạng thái mã hóa trên ổ đĩa, cho phép dịch vụ nền tự động khôi phục kết nối sau khi khởi động lại máy chủ khi được mở khóa.
+_Avoid_: Lưu mật khẩu thô, auto-login cache, file password
 
 
 ## Danh Mục Công Trình (Nhà)

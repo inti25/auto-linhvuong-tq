@@ -1,4 +1,4 @@
-name: Build & Release Windows Exe
+name: Build & Release Executables (Windows + Ubuntu Web)
 
 on:
   push:
@@ -23,8 +23,8 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: Build & Release Executable
+  build-windows:
+    name: Build Windows Desktop & Web Exe
     runs-on: windows-latest
 
     steps:
@@ -42,26 +42,27 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev] pyinstaller
+          pip install -e ".[web,dev]" pyinstaller
 
       - name: Run unit tests
         run: |
-          python -m pytest tests/test_tasks.py tests/test_battle.py tests/test_building.py tests/test_roster.py tests/test_logistics.py tests/test_thao_phat.py tests/test_coffee_qr_frozen.py
+          python -m pytest -q
 
-      - name: Build executable with PyInstaller
+      - name: Build Desktop & Web executables with PyInstaller
         run: |
           pyinstaller LinhVuong.spec --clean --noconfirm
+          pyinstaller LinhVuongWeb.spec --clean --noconfirm
 
-      - name: Prepare Release Package & Checksums
+      - name: Prepare Windows Release Package & Checksums
         id: package
         shell: pwsh
         run: |
           $ver = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } elseif ($env:INPUT_RELEASE_TAG) { $env:INPUT_RELEASE_TAG } else { "latest" }
           $zipName = "LinhVuong-$ver-win64.zip"
 
-          # Tạo thư mục đóng gói phân phối
           New-Item -ItemType Directory -Path "dist/package" -Force | Out-Null
           Copy-Item "dist/LinhVuong.exe" -Destination "dist/package/"
+          Copy-Item "dist/LinhVuongWeb.exe" -Destination "dist/package/"
           if (Test-Path "config.example.json") { Copy-Item "config.example.json" -Destination "dist/package/" }
           if (Test-Path "build_plans.example.json") { Copy-Item "build_plans.example.json" -Destination "dist/package/" }
           if (Test-Path "tech_plans.example.json") { Copy-Item "tech_plans.example.json" -Destination "dist/package/" }
@@ -70,55 +71,116 @@ jobs:
           if (Test-Path "linhvuong_menu.png") { Copy-Item "linhvuong_menu.png" -Destination "dist/package/" }
           if (Test-Path "qrcode.png") { Copy-Item "qrcode.png" -Destination "dist/package/" }
 
-          # Nén file zip
           Compress-Archive -Path "dist/package/*" -DestinationPath "dist/$zipName" -Force
 
-          # Tạo checksum SHA-256
           $exeHash = (Get-FileHash -Algorithm SHA256 "dist/LinhVuong.exe").Hash
+          $webHash = (Get-FileHash -Algorithm SHA256 "dist/LinhVuongWeb.exe").Hash
           $zipHash = (Get-FileHash -Algorithm SHA256 "dist/$zipName").Hash
 
           @(
               "$exeHash  LinhVuong.exe",
+              "$webHash  LinhVuongWeb.exe",
               "$zipHash  $zipName"
-          ) | Set-Content -Path "dist/checksums.txt" -Encoding utf8
+          ) | Set-Content -Path "dist/checksums-win64.txt" -Encoding utf8
 
           echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
           echo "tag_name=$ver" >> $env:GITHUB_OUTPUT
         env:
           INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
 
-      - name: Upload Artifacts
+      - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LinhVuong-Executable
+          name: LinhVuong-Windows
           path: |
             dist/LinhVuong.exe
+            dist/LinhVuongWeb.exe
             dist/*.zip
-            dist/checksums.txt
+            dist/checksums-win64.txt
           if-no-files-found: error
 
-      - name: Check whether to publish Release
-        id: check_release
-        shell: pwsh
+  build-ubuntu-web:
+    name: Build Ubuntu Web Binary (linux-amd64)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          $shouldRelease = ($env:GITHUB_REF_TYPE -eq "tag") -or [bool]($env:INPUT_RELEASE_TAG)
-          echo "should_release=$shouldRelease" >> $env:GITHUB_OUTPUT
+          python -m pip install --upgrade pip
+          pip install -e ".[web,dev]" pyinstaller
+
+      - name: Run headless & web tests
+        run: |
+          python -m pytest -q tests/test_paths_and_security.py tests/test_runtime_and_web.py tests/test_profile.py tests/test_engine.py tests/test_cli.py
+
+      - name: Build Ubuntu Web binary
+        run: |
+          pyinstaller LinhVuongWeb.spec --clean --noconfirm
+          chmod +x dist/LinhVuongWeb
+
+      - name: Package Ubuntu Web Binary & Checksums
+        id: package_linux
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VER="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_RELEASE_TAG" ]; then
+            VER="$INPUT_RELEASE_TAG"
+          else
+            VER="latest"
+          fi
+          TAR_NAME="LinhVuongWeb-${VER}-linux-amd64.tar.gz"
+          mkdir -p dist/linux-pkg
+          cp dist/LinhVuongWeb dist/linux-pkg/
+          cp deploy/ubuntu/linhvuong-web.service dist/linux-pkg/
+          cp deploy/ubuntu/env.example dist/linux-pkg/
+          cp deploy/ubuntu/nginx-linhvuong.conf dist/linux-pkg/
+          tar -czf "dist/${TAR_NAME}" -C dist/linux-pkg .
+          (cd dist && sha256sum LinhVuongWeb "${TAR_NAME}" > checksums-linux-amd64.txt)
+          echo "tar_name=${TAR_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${VER}" >> "$GITHUB_OUTPUT"
         env:
           INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
 
-      - name: Publish GitHub Release
-        if: steps.check_release.outputs.should_release == 'True'
+      - name: Upload Ubuntu Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinhVuongWeb-Ubuntu-amd64
+          path: |
+            dist/LinhVuongWeb
+            dist/*.tar.gz
+            dist/checksums-linux-amd64.txt
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-ubuntu-web]
+    if: github.event_name == 'push' || github.event.inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.package.outputs.tag_name }}
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.release_tag }}
           target_commitish: ${{ github.sha }}
-          name: Release ${{ steps.package.outputs.tag_name }}
+          name: Release ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.release_tag }}
           draft: ${{ github.event.inputs.draft || false }}
           prerelease: ${{ github.event.inputs.prerelease || false }}
           generate_release_notes: true
           files: |
-            dist/LinhVuong.exe
-            dist/${{ steps.package.outputs.zip_name }}
-            dist/checksums.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            artifacts/**/*

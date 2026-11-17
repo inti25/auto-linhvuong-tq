@@ -19,9 +19,11 @@ from typing import Any, Callable, Optional, Set, Tuple
 import requests
 
 logger = logging.getLogger("linhvuong.notifications")
+_ = platform.system()  # Warm platform uname cache before tests patch subprocess.Popen
 
 # Bộ nhớ chống lặp: (battle_id, boss_position) -> đã thông báo
 _notified_boss_keys: Set[Tuple[int, int]] = set()
+_notified_system_keys: Set[Tuple[str, str]] = set()
 _lock = threading.Lock()
 
 
@@ -29,13 +31,28 @@ def reset_notified_bosses() -> None:
     """Xóa bộ nhớ đệm chống lặp (phục vụ test suites hoặc khởi động lại phiên)."""
     with _lock:
         _notified_boss_keys.clear()
+        _notified_system_keys.clear()
+
+
+def reset_system_alert(account_key: str, event_type: Optional[str] = None) -> None:
+    """Xóa trạng thái chống lặp cảnh báo hệ thống sau khi người dùng đã xử lý (ví dụ giải Captcha)."""
+    with _lock:
+        if event_type is None:
+            for k in list(_notified_system_keys):
+                if k[0] == account_key:
+                    _notified_system_keys.discard(k)
+        else:
+            _notified_system_keys.discard((account_key, event_type))
 
 
 @dataclass(init=False)
 class NotificationConfig:
     desktop_enabled: bool = True
     sound_enabled: bool = True
+    web_enabled: bool = True
     telegram_enabled: bool = False
+    telegram_alert_captcha: bool = True
+    telegram_alert_disconnect: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
@@ -49,6 +66,10 @@ class NotificationConfig:
         notify_desktop_toast: Optional[bool] = None,
         notify_sound: Optional[bool] = None,
         notify_telegram: Optional[bool] = None,
+        web_enabled: Optional[bool] = None,
+        notify_web: Optional[bool] = None,
+        telegram_alert_captcha: Optional[bool] = None,
+        telegram_alert_disconnect: Optional[bool] = None,
         **kwargs,
     ):
         d_val = notify_desktop_toast if notify_desktop_toast is not None else desktop_enabled
@@ -57,8 +78,14 @@ class NotificationConfig:
         s_val = notify_sound if notify_sound is not None else sound_enabled
         self.sound_enabled = True if s_val is None else bool(s_val)
 
+        w_val = notify_web if notify_web is not None else web_enabled
+        self.web_enabled = True if w_val is None else bool(w_val)
+
         t_val = notify_telegram if notify_telegram is not None else telegram_enabled
         self.telegram_enabled = False if t_val is None else bool(t_val)
+
+        self.telegram_alert_captcha = True if telegram_alert_captcha is None else bool(telegram_alert_captcha)
+        self.telegram_alert_disconnect = True if telegram_alert_disconnect is None else bool(telegram_alert_disconnect)
 
         self.telegram_bot_token = str(kwargs.get("telegram_bot_token", telegram_bot_token)).strip()
         self.telegram_chat_id = str(kwargs.get("telegram_chat_id", telegram_chat_id)).strip()
@@ -87,6 +114,14 @@ class NotificationConfig:
     def notify_telegram(self, val: bool):
         self.telegram_enabled = bool(val)
 
+    @property
+    def notify_web(self) -> bool:
+        return self.web_enabled
+
+    @notify_web.setter
+    def notify_web(self, val: bool):
+        self.web_enabled = bool(val)
+
     @classmethod
     def from_dict(cls, data: dict) -> "NotificationConfig":
         if not isinstance(data, dict):
@@ -99,6 +134,10 @@ class NotificationConfig:
         if s_val is None:
             s_val = data.get("sound_enabled", True)
 
+        w_val = data.get("notify_web")
+        if w_val is None:
+            w_val = data.get("web_enabled", True)
+
         t_val = data.get("notify_telegram")
         if t_val is None:
             t_val = data.get("telegram_enabled", False)
@@ -106,7 +145,10 @@ class NotificationConfig:
         return cls(
             desktop_enabled=bool(d_val),
             sound_enabled=bool(s_val),
+            web_enabled=bool(w_val),
             telegram_enabled=bool(t_val),
+            telegram_alert_captcha=bool(data.get("telegram_alert_captcha", True)),
+            telegram_alert_disconnect=bool(data.get("telegram_alert_disconnect", True)),
             telegram_bot_token=str(data.get("telegram_bot_token", "")).strip(),
             telegram_chat_id=str(data.get("telegram_chat_id", "")).strip(),
         )
@@ -115,9 +157,13 @@ class NotificationConfig:
         return {
             "desktop_enabled": self.desktop_enabled,
             "sound_enabled": self.sound_enabled,
+            "web_enabled": self.web_enabled,
             "telegram_enabled": self.telegram_enabled,
+            "telegram_alert_captcha": self.telegram_alert_captcha,
+            "telegram_alert_disconnect": self.telegram_alert_disconnect,
             "notify_desktop_toast": self.desktop_enabled,
             "notify_sound": self.sound_enabled,
+            "notify_web": self.web_enabled,
             "notify_telegram": self.telegram_enabled,
             "telegram_bot_token": self.telegram_bot_token,
             "telegram_chat_id": self.telegram_chat_id,
@@ -218,6 +264,7 @@ def dispatch_boss_alert(
     config: Optional[NotificationConfig] = None,
     on_log: Optional[Callable[[str], None]] = None,
     bypass_dedup: bool = False,
+    on_web_event: Optional[Callable[[dict], None]] = None,
     **kwargs,
 ) -> bool:
     """Điều phối thông báo BOSS đa kênh bất đồng bộ kèm cơ chế chống lặp (Deduplication)."""
@@ -254,6 +301,19 @@ def dispatch_boss_alert(
         except Exception:
             pass
 
+    if on_web_event and cfg.web_enabled:
+        try:
+            on_web_event({
+                "kind": "boss",
+                "title": plain_title,
+                "body": plain_body,
+                "sound": cfg.sound_enabled,
+                "battle_id": battle_id,
+                "battle_url": battle_url,
+            })
+        except Exception:
+            pass
+
     def _worker():
         # 1. Desktop Toast & Sound
         if cfg.desktop_enabled:
@@ -276,4 +336,71 @@ def dispatch_boss_alert(
 
     t = threading.Thread(target=_worker, name="BossNotificationWorker", daemon=True)
     t.start()
+    return True
+
+
+def dispatch_system_alert(
+    event_type: str,
+    account_key: str,
+    title: str,
+    message: str,
+    config: Optional[NotificationConfig] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_web_event: Optional[Callable[[dict], None]] = None,
+    bypass_dedup: bool = False,
+) -> bool:
+    """Phát cảnh báo sự kiện hệ thống (CaptchaRequired, mất kết nối/proxy) qua Web & Telegram."""
+    cfg = config or NotificationConfig()
+    if not bypass_dedup:
+        dedup_key = (account_key, event_type)
+        with _lock:
+            if dedup_key in _notified_system_keys:
+                return False
+            _notified_system_keys.add(dedup_key)
+
+    if on_web_event and cfg.web_enabled:
+        try:
+            on_web_event({
+                "kind": event_type,
+                "account_key": account_key,
+                "title": title,
+                "body": message,
+                "sound": cfg.sound_enabled,
+            })
+        except Exception:
+            pass
+
+    should_telegram = (
+        cfg.telegram_enabled
+        and cfg.telegram_bot_token
+        and cfg.telegram_chat_id
+        and (
+            (event_type == "captcha" and cfg.telegram_alert_captcha)
+            or (event_type == "disconnect" and cfg.telegram_alert_disconnect)
+            or event_type not in ("captcha", "disconnect")
+        )
+    )
+    if not should_telegram:
+        return True
+
+    icon = "⚠️" if event_type == "captcha" else "🔴"
+    telegram_msg = (
+        f"{icon} <b>[Linh Vương] {title}</b>\n"
+        f"👤 <b>Tài khoản:</b> {account_key}\n"
+        f"📝 {message}"
+    )
+
+    def _worker():
+        ok, res_msg = send_telegram_message(
+            bot_token=cfg.telegram_bot_token,
+            chat_id=cfg.telegram_chat_id,
+            message=telegram_msg,
+        )
+        if not ok and on_log:
+            try:
+                on_log(f"⚠️ [Telegram] {res_msg}")
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, name="SystemNotificationWorker", daemon=True).start()
     return True

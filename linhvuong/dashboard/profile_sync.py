@@ -333,7 +333,9 @@ class ProfileSyncMixin:
         active_path = getattr(self, "_active_profile_path", None)
         if active_path is not None and active_path.name == cur_var_name:
             return active_path
-        return Path(cur_var_name)
+        from ..paths import get_data_dir
+
+        return get_data_dir() / cur_var_name
 
     def _save_unified_profile(self, filepath: Optional[Path] = None) -> Path:
         target = self._resolve_active_profile_target(filepath)
