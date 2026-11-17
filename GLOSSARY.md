@@ -146,6 +146,10 @@ _Avoid_: Báo lẻ kênh, notification đơn lẻ, log thông thường
 Hành động tế trời hoặc phát lương thực (`OPT.ashx?id=4`) khôi phục lòng dân và sĩ khí thành trì, triệt tiêu dân nộ để ngăn ngừa bạo loạn.
 _Avoid_: Khuyên dân, vỗ về
 
+**Cống quận**:
+Hoạt động đóng góp hoặc cống hiến từ một **Thành** cho công trình cấp quận tương ứng (Quan Phủ hoặc Tường Thành), không áp dụng cho **Doanh trại**.
+_Avoid_: Cống hiến thành, tribute
+
 **Kỹ Thuật Đại Học**:
 29 công nghệ nâng cấp tại viện Đại Học quyết định sản lượng tài nguyên và năng lực tác chiến quân binh.
 _Avoid_: Công nghệ, tech

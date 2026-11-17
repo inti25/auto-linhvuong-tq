@@ -805,7 +805,10 @@ function makeEl(tag, id = "", className = "") {
           "logi-amt","dt-x","dt-y","btn-run-explore","btn-chest-start","btn-chest-stop",
           "btn-logi-xfer","btn-logi-comfort","btn-logi-daily","btn-dt-start","btn-dt-stop","btn-clr-int-log",
           "aux-boost-lbl","aux-explore-lbl","dt-status-lbl","chest-progress-fill","chest-progress-lbl",
-          "dt-camp","chest-type","chest-city","chest-times","logi-from","logi-to","logi-type"
+          "dt-camp","chest-type","chest-city","chest-times","logi-from","logi-to","logi-type",
+          "btn-nc-clear","dt-origin-lbl","bld-tgt-lvl","btn-bld-up-lvl","btn-bld-down-lvl",
+          "btn-bld-mv-up","btn-bld-mv-down","aux-tribute","aux-tribute-gid","btn-tribute-now",
+          "btn-apply-rsrc","btn-xfer-add","btn-xfer-del","xfer-int","btn-tgl-xfer","xfer-status-lbl"
         ];
         for (const cid of ids) {
           const c = makeEl("button", cid, "");
@@ -842,7 +845,8 @@ const allStaticIds = [
   "admin-login-error","btn-admin-logout","btn-mobile-menu","btn-add-account","btn-start-all","btn-stop-all",
   "btn-open-syslogs","btn-admin-settings","btn-coffee","modal-close","btn-sound-toggle","btn-resume-captcha",
   "hdr-profile-import","btn-autostart-cfg","btn-free-proxy","btn-test-proxy","game-login-form","btn-game-login",
-  "btn-save-acc-only","btn-delete-acc","modal-backdrop","modal-title","modal-body","modal-footer"
+  "btn-save-acc-only","btn-delete-acc","modal-backdrop","modal-title","modal-body","modal-footer",
+  "btn-relogin","hdr-profile-save","gl-server","gl-proxy","gl-server-hint"
 ];
 for (const id of allStaticIds) registerById(makeEl("div", id, id === "tab-content" ? "ws-body" : ""));
 byId.get("account-list").scrollHeight = 900;
@@ -850,6 +854,7 @@ byId.get("tab-content").scrollHeight = 1200;
 
 const document = {
   activeElement: null,
+  addEventListener: () => {},
   getElementById: (id) => byId.get(id) || null,
   querySelectorAll: (sel) => (sel === ".tab-btn" ? [] : []),
   createElement: (tag) => makeEl(tag),
@@ -972,3 +977,137 @@ Object.assign(windowObj, { Object, Array, Number, String, Boolean, Set, Map, Mat
         timeout=15,
     )
     assert proc.returncode == 0, f"JS scroll regression failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+
+
+def test_stratagem_combo_idx_matches_desktop(tmp_path, monkeypatch):
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    sess = wm.login_account(server_id=53, username="strat", password="pw")
+    expected = {0: 0, 1: 93, 2: 95, 3: 94}
+    for idx, sid in expected.items():
+        sess.profile.combat.stratagem_combo_idx = idx
+        assert sess._build_combat_config().offensive_stratagem_id == sid
+    wm.graceful_shutdown()
+
+
+def test_transfer_loop_stops_when_garrison_lacks_troops(tmp_path, monkeypatch):
+    import time
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    sess = wm.login_account(server_id=53, username="xfer", password="pw")
+    sess.update_profile({
+        "logistics": {
+            "transfer_orders": [{"from_city_id": 1001, "to_city_id": -2001, "army_id": 1, "amount": 500}],
+            "transfer_interval": "3",
+        }
+    })
+
+    calls = []
+
+    def _fake_garrison(self, cid):
+        # Lượt 1 đủ 500, lượt 2 chỉ còn 100 -> phải dừng vòng lặp
+        return {1: 500} if len(calls) == 0 else {1: 100}
+
+    monkeypatch.setattr(runtime_mod.LogisticsTask, "get_garrison_troops", _fake_garrison)
+    monkeypatch.setattr(runtime_mod.LogisticsTask, "transfer_army", lambda self, order: calls.append(order.amount) or True)
+
+    orig_wait = sess._transfer_stop.wait
+    monkeypatch.setattr(sess._transfer_stop, "wait", lambda _t: orig_wait(0.01))
+
+    sess.start_transfer_loop()
+    assert sess._transfer_thread is not None
+    sess._transfer_thread.join(timeout=2.0)
+
+    assert calls == [500]
+    assert sess._transfer_running is False
+    assert "thiếu quân giới" in sess._transfer_status
+    wm.graceful_shutdown()
+
+
+def test_auto_tribute_runs_once_per_day_for_enabled_cities_only(tmp_path, monkeypatch):
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    sess = wm.login_account(server_id=53, username="trib", password="pw")
+    sess.update_profile({
+        "building": {
+            "cities": {
+                "1001": {"name": "Lạc Dương", "enabled": True},
+                "-2001": {"name": "Trại 1", "enabled": True},
+            }
+        },
+        "logistics": {"tribute_enabled": True, "tribute_building_gid": 2},
+    })
+    sent = []
+    monkeypatch.setattr(sess, "tribute_city", lambda cid, gid=1: sent.append((cid, gid)))
+
+    sess._check_tribute_once()
+    sess._check_tribute_once()  # cùng ngày không gọi lại lần 2
+    assert sent == [(1001, 2)]
+    wm.graceful_shutdown()
+
+
+def test_web_armament_rename_equip_and_logistics_endpoints(tmp_path, monkeypatch):
+    from linhvuong.armament import ArmamentSnapshot
+    from linhvuong.generals import EquipmentInventory, EquipmentItem
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="pw")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    snap = ArmamentSnapshot(infantry=(101, 0, 0), cavalry=(201, 0, 0), battle_array=2, names={101: "Đao", 201: "Giáp"})
+    monkeypatch.setattr(runtime_mod, "fetch_armament", lambda gw, gid, bid: snap)
+
+    inv = EquipmentInventory(
+        free_items={("vo", 1): [EquipmentItem(item_id=1, equip_type=1, item_type_id=1101, level=10)]},
+        equipped_by_general={1: {2: EquipmentItem(item_id=2, equip_type=2, item_type_id=2101, level=12)}},
+    )
+    monkeypatch.setattr(runtime_mod, "fetch_equipment_inventory", lambda gw: inv)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "pw"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 53, "username": "armuser", "password": "pw"},
+        ).status_code == 200
+
+        meta = client.get("/api/meta").json()
+        assert meta["rename_max_width"] == 17
+        assert len(meta["armament_scopes"]) == 4
+
+        r_snaps = client.get("/api/accounts/armuser%20%40%20S53/armament/snapshots")
+        assert r_snaps.status_code == 200
+        assert "1" in r_snaps.json()["snapshots"]
+
+        r_tpl = client.post("/api/accounts/armuser%20%40%20S53/armament/template", json={"general_id": 1})
+        assert r_tpl.status_code == 200
+        assert r_tpl.json()["info"]["battle_array"] == 2
+
+        r_cmp = client.post(
+            "/api/accounts/armuser%20%40%20S53/armament/compare",
+            json={"template_id": 1, "general_ids": [1], "scopes": ["infantry"], "sync_formation": True},
+        )
+        assert r_cmp.status_code == 200
+        assert r_cmp.json()["result"]["1"] == "match"
+
+        r_ren = client.post(
+            "/api/accounts/armuser%20%40%20S53/rename/preview",
+            json={"general_ids": [1, 2], "prefix": "LV_", "numbered": True, "start_index": 1},
+        )
+        assert r_ren.status_code == 200
+        rows = r_ren.json()["rows"]
+        assert [r["new_name"] for r in rows] == ["LV_01", "LV_02"]
+        assert all(r["valid"] for r in rows)
+
+        r_eq = client.get("/api/accounts/armuser%20%40%20S53/equip/inventory")
+        assert r_eq.status_code == 200
+        eq_inv = r_eq.json()["inventory"]
+        assert eq_inv["free_vo"] == [1, 0, 0, 0]
+        assert eq_inv["free_van"] == [0, 0, 0, 0]
+        assert "Lv.12" in eq_inv["equipped_by_general"]["1"]["2"]
+
+        assert client.post("/api/accounts/armuser%20%40%20S53/armament/stop").status_code == 200
+        assert client.post("/api/accounts/armuser%20%40%20S53/rename/stop").status_code == 200
+
+    wm.graceful_shutdown()
