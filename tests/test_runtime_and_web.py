@@ -252,6 +252,19 @@ def test_systemd_unit_execstart_no_bash_default_expansion_and_env_parser(monkeyp
     for line in exec_lines:
         assert ":-" not in line, f"ExecStart không được chứa bash default expansion: {line}"
 
+    # Kiểm tra các tham số và giá trị mặc định trong install.sh
+    for expected in (
+        'VERSION="${VERSION:-latest}"',
+        'WEB_HOST="${WEB_HOST:-${LINHVUONG_WEB_HOST:-0.0.0.0}}"',
+        'WEB_PORT="${WEB_PORT:-${LINHVUONG_WEB_PORT:-8080}}"',
+        'WEB_PASSWORD="${WEB_PASSWORD:-${LINHVUONG_WEB_PASSWORD:-admin}}"',
+        "--version)",
+        "--host)",
+        "--port)",
+        "--web-password)",
+    ):
+        assert expected in install_text, f"Thiếu cấu hình {expected} trong install.sh"
+
     # Server phải đọc LINHVUONG_WEB_HOST/PORT an toàn kể cả khi biến môi trường rỗng
     monkeypatch.setenv("LINHVUONG_WEB_HOST", "")
     monkeypatch.setenv("LINHVUONG_WEB_PORT", "")

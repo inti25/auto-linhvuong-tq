@@ -65,11 +65,24 @@ Mở trình duyệt tại `http://127.0.0.1:8000` (xem mật khẩu quản trị
 
 ### Cách A: Cài đặt trực tiếp bằng Binary + `systemd` (Khuyên dùng, không cần Python/mã nguồn)
 
-**1. Chạy 1 lệnh trên Ubuntu Server** (tự tải binary `LinhVuongWeb` mới nhất từ GitHub Releases và cài đặt dịch vụ `systemd`):
+**1. Chạy 1 lệnh trên Ubuntu Server** (tự tải binary `LinhVuongWeb` từ GitHub Releases và hỏi nhập tham số `version`, `host`, `port`, `web_password`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inti25/auto-linhvuong-tq/main/deploy/ubuntu/install.sh | sudo bash
 ```
+
+Hoặc truyền trực tiếp tham số qua CLI (không cần nhập tay):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/inti25/auto-linhvuong-tq/main/deploy/ubuntu/install.sh | sudo bash -s -- \
+  --version v2.0.0 --host 0.0.0.0 --port 8080 --web-password admin -y
+```
+
+Giá trị mặc định khi nhấn Enter (hoặc thêm `-y`/`--non-interactive`):
+- `version`: `latest` (có thể nhập tag cụ thể như `v1.0.5`, `v2.0.0`)
+- `host`: `0.0.0.0`
+- `port`: `8080`
+- `web_password`: `admin`
 
 Hoặc nếu bạn đã copy sẵn file binary `LinhVuongWeb` lên server:
 
@@ -78,14 +91,15 @@ bash deploy/ubuntu/install.sh --binary ./LinhVuongWeb
 ```
 
 Script [deploy/ubuntu/install.sh](deploy/ubuntu/install.sh) sẽ:
-1. Cài file binary vào `/usr/local/bin/LinhVuongWeb` (từ `--binary`, file cục bộ, hoặc tải từ GitHub Releases).
-2. Tạo user hệ thống `linhvuong` và thư mục dữ liệu `/var/lib/linhvuong` (`LINHVUONG_DATA_DIR`).
-3. Tạo `/etc/linhvuong/env` từ [deploy/ubuntu/env.example](deploy/ubuntu/env.example).
-4. Cài và bật dịch vụ `systemd` ([deploy/ubuntu/linhvuong-web.service](deploy/ubuntu/linhvuong-web.service)).
+1. Nhận cấu hình `version`, `host`, `port`, `web_password` (nhập tương tác hoặc qua cờ `--version`, `--host`, `--port`, `--web-password`).
+2. Cài file binary vào `/usr/local/bin/LinhVuongWeb` (từ `--binary`, file cục bộ, hoặc tải từ GitHub Releases).
+3. Tạo user hệ thống `linhvuong` và thư mục dữ liệu `/var/lib/linhvuong` (`LINHVUONG_DATA_DIR`).
+4. Tạo hoặc cập nhật `/etc/linhvuong/env`.
+5. Cài và bật dịch vụ `systemd` ([deploy/ubuntu/linhvuong-web.service](deploy/ubuntu/linhvuong-web.service)).
 
 Hoặc chạy nhanh trực tiếp bằng tay không cần `systemd`:
 ```bash
-LINHVUONG_DATA_DIR=./data LINHVUONG_WEB_PASSWORD="mat_khau_manh" ./LinhVuongWeb --host 0.0.0.0 --port 8000
+LINHVUONG_DATA_DIR=./data LINHVUONG_WEB_PASSWORD="mat_khau_manh" ./LinhVuongWeb --host 0.0.0.0 --port 8080
 ```
 
 **2. Cấu hình mật khẩu Web & biến môi trường tại `/etc/linhvuong/env`**:
@@ -96,10 +110,10 @@ sudo nano /etc/linhvuong/env
 
 Các biến quan trọng:
 - `LINHVUONG_DATA_DIR=/var/lib/linhvuong`: nơi lưu `gui_settings.json`, `auto_profile_*.json`, `vault.enc`, `web_auth.json`, `logs/`.
-- `LINHVUONG_WEB_HOST=127.0.0.1` (khuyên giữ `127.0.0.1` nếu đi qua SSH tunnel hoặc Nginx/Caddy; đổi thành `0.0.0.0` nếu mở cổng trực tiếp).
-- `LINHVUONG_WEB_PORT=8000`
+- `LINHVUONG_WEB_HOST=0.0.0.0` (đổi thành `127.0.0.1` nếu chỉ muốn đi qua SSH tunnel hoặc Nginx/Caddy).
+- `LINHVUONG_WEB_PORT=8080`
 - `LINHVUONG_WEB_USERNAME=admin`
-- `LINHVUONG_WEB_PASSWORD=<mat_khau_manh>`
+- `LINHVUONG_WEB_PASSWORD=admin` *(nên đổi mật khẩu mạnh khi mở ra Internet)*
 - `LINHVUONG_VAULT_KEY=<chuoi_bi_mat>` *(tùy chọn)*: mở khóa **Két Mật Khẩu Mã Hóa** để server tự động đăng nhập lại và tiếp tục tác vụ sau khi reboot.
 
 Khởi động lại dịch vụ sau khi sửa `/etc/linhvuong/env`:
