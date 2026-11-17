@@ -277,3 +277,107 @@ def test_systemd_unit_execstart_no_bash_default_expansion_and_env_parser(monkeyp
     args_env = build_parser().parse_args([])
     assert args_env.host == "0.0.0.0"
     assert args_env.port == 9090
+
+
+def test_web_start_binhman_and_goidan_combat_config_on_web_event(tmp_path, monkeypatch):
+    _mock_offline(monkeypatch)
+    reset_notified_bosses()
+
+    events = []
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    wm.subscribe(lambda key, ev, payload: events.append((key, ev, payload)))
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="webpassword")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "webpassword"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 53, "username": "bmuser", "password": "secret"},
+        ).status_code == 200
+
+        sess = wm.get_session("bmuser @ S53")
+        assert sess is not None
+        started = {}
+
+        def _fake_start(name, runnable, **kwargs):
+            started[name] = runnable
+
+        monkeypatch.setattr(sess.engine, "start", _fake_start)
+
+        assert client.put(
+            "/api/accounts/bmuser%20%40%20S53/profile",
+            json={
+                "binh_man": {"bases": {"1001": {"enabled": True, "generals": [1]}}},
+                "goi_dan": {"city_id": 1001, "generals": [1]},
+            },
+        ).status_code == 200
+
+        r_bm = client.post("/api/accounts/bmuser%20%40%20S53/tasks/binhman/start")
+        assert r_bm.status_code == 200
+        assert r_bm.json()["ok"] is True
+        bm_cfg = started["binhman"].tasks[0].combat_config
+        assert callable(bm_cfg.on_web_event)
+        bm_cfg.on_web_event({"kind": "boss", "title": "Boss test"})
+        assert any(ev == "notification" and p.get("title") == "Boss test" for _, ev, p in events)
+
+        r_gd = client.post("/api/accounts/bmuser%20%40%20S53/tasks/goidan/start")
+        assert r_gd.status_code == 200
+        assert r_gd.json()["ok"] is True
+        assert callable(started["goidan"].combat_config.on_web_event)
+
+    wm.graceful_shutdown()
+
+
+def test_battle_track_forwards_on_web_event_to_boss_alert(monkeypatch):
+    from linhvuong.battle import BattleEngine, BattleState, BattleTroop, CombatConfig
+    import linhvuong.notifications as notif_mod
+
+    reset_notified_bosses()
+    captured = {}
+
+    def _fake_dispatch(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(notif_mod, "dispatch_boss_alert", _fake_dispatch)
+
+    gw = MagicMock()
+    gw.user_id = 100
+    gw.server_id = 53
+    web_events = []
+    cfg = CombatConfig(
+        auto_counter_formation=False,
+        leave_boss_last=True,
+        on_web_event=lambda ev: web_events.append(ev),
+    )
+    engine = BattleEngine(gw, config=cfg)
+
+    our = BattleTroop(
+        position=1, player_name="p", user_id=100, general_name="Triệu Vân",
+        general_id=1, city_id=1001, formation_id=1, morale=100,
+        soldiers=1000, initial_soldiers=1000, flag=0x10,
+    )
+    boss = BattleTroop(
+        position=11, player_name="npc", user_id=0, general_name="Mạnh Hoạch",
+        general_id=99, city_id=0, formation_id=1, morale=100,
+        soldiers=5000, initial_soldiers=5000, flag=0x20, is_boss=True,
+    )
+    boss_state = BattleState(
+        ret=0,
+        site="Trại Man",
+        map_id=0,
+        bout=1,
+        bout_left=20,
+        attack_total=1000,
+        defend_total=5000,
+        our_troops=[our],
+        enemy_troops=[boss],
+        boss_troops=[boss],
+    )
+    monkeypatch.setattr(engine, "get_battle_info", lambda bid: boss_state if bid == 777 else None)
+    monkeypatch.setattr(engine, "execute_stratagems", lambda *a, **kw: None)
+    monkeypatch.setattr(engine, "assign_combat_orders", lambda *a, **kw: None)
+
+    engine.track_battle(777, max_bouts=1, sleep_fn=lambda _s: None)
+    assert captured.get("on_web_event") is cfg.on_web_event
