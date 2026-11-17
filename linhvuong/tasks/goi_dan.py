@@ -16,11 +16,12 @@ Reverse engineered chính xác từ ZMan.exe:
   2. Bổ sung quân số: OPT.ashx?id=6 (lGeneralID, lSoldierType, lAmount, tid).
 """
 
+import math
 import time
 from typing import Any, Callable, Optional
 
 from ..battle import BattleEngine, BattleReport, BattleState, CombatConfig
-from ..coords import coords_from_mid, mid_from_coords
+from ..coords import MAP_MAX, MAP_MIN, coords_from_mid, mid_from_coords
 from ..locks import LockReason
 from ..roster import Army, fetch_roster
 from ..scan import Target
@@ -38,6 +39,8 @@ from .morale import MoraleTrainer
 
 VONG_LINH = 301
 VONG_LINH_TALISMAN_ID = 268
+NEAR_CITY_RADIUS = 6
+VONG_LINH_NEAR_RADIUS = 10
 
 
 class GoiDan:
@@ -102,57 +105,351 @@ class GoiDan:
         else:
             self.mode = "dan"
 
-    def _get_call_payload(self, t_type: int) -> dict:
-        if t_type == VONG_LINH or (self.mode == "vong_linh" and len(self.target_types) == 1):
-            return {
-                "type": "33",
-                "param1": str(VONG_LINH_TALISMAN_ID),
-                "param2": "0",
-                "paytype": "1",
-                "_": "",
-            }
-        else:
-            mid = mid_from_coords(*self.origin)
-            return {
-                "type": "63",
-                "param1": str(t_type),
-                "param2": str(mid),
-                "paytype": "1",
-                "_": "",
-            }
+    @property
+    def origin_id(self) -> int:
+        return int(self.city_id or 0)
 
-    def _scan_with_retry(self, curr_type: int) -> Optional[Target]:
+    def _invalidate_map_cache(self) -> None:
+        invalidate = getattr(self.ctx.gateway, "invalidate_map_cache", None)
+        if callable(invalidate):
+            invalidate()
+
+    def _release_lock(self, target_id: int) -> None:
+        release_fn = getattr(self.ctx.locks, "release", None)
+        if callable(release_fn):
+            release_fn(target_id, owner=self.origin_id)
+
+    def _find_nearest_uncached(self, scan_radius: int, target_types: list[int]) -> Optional[Target]:
+        try:
+            return self.ctx.scanner.find_nearest(
+                *self.origin,
+                scan_radius,
+                target_types,
+                skip_capital_radius=self.skip_capital_radius,
+                owner_id=self.origin_id,
+                use_cache=False,
+            )
+        except TypeError:
+            return self.ctx.scanner.find_nearest(
+                *self.origin,
+                scan_radius,
+                target_types,
+                skip_capital_radius=self.skip_capital_radius,
+                owner_id=self.origin_id,
+            )
+
+    def _is_vong_linh(self, t_type: int) -> bool:
+        return t_type == VONG_LINH or (self.mode == "vong_linh" and len(self.target_types) == 1)
+
+    def _find_empty_mids_near_origin(self, max_dist: int = 5) -> list[int]:
+        """Tìm danh sách MID ô đất trống (tile_type=1, owner=0, chưa có Man/thành) sát thành nhất."""
+        ox, oy = self.origin
+        origin_mid = mid_from_coords(ox, oy)
+        map_view = getattr(self.ctx.gateway, "map_view", None)
+        data = {}
+        if callable(map_view):
+            try:
+                data = map_view(origin_mid, cache_ttl=0.0) or {}
+            except TypeError:
+                data = map_view(origin_mid) or {}
+
+        occupied: set[int] = {origin_mid}
+        for row in data.get("infos") or []:
+            if not isinstance(row, (list, tuple)) or len(row) < 6:
+                continue
+            try:
+                tile_type = int(row[1])
+                owner = int(row[5])
+                if tile_type != 1 or owner != 0:
+                    occupied.add(int(row[0]))
+            except (ValueError, TypeError):
+                continue
+
+        for npc in data.get("npc_tent") or []:
+            if not isinstance(npc, (list, tuple)) or len(npc) < 3:
+                continue
+            try:
+                occupied.add(int(npc[2]))
+            except (ValueError, TypeError):
+                continue
+
+        for city in data.get("citys") or []:
+            if not isinstance(city, (list, tuple)) or len(city) < 4:
+                continue
+            try:
+                occupied.add(int(city[3]))
+            except (ValueError, TypeError):
+                continue
+
+        candidates: list[tuple[float, int, int]] = []
+        if data.get("infos"):
+            for row in data["infos"]:
+                if not isinstance(row, (list, tuple)) or len(row) < 6:
+                    continue
+                try:
+                    m_mid = int(row[0])
+                    tile_type = int(row[1])
+                    owner = int(row[5])
+                except (ValueError, TypeError):
+                    continue
+                if tile_type != 1 or owner != 0 or m_mid in occupied:
+                    continue
+                tx, ty = coords_from_mid(m_mid)
+                if self.skip_capital_radius > 0 and max(abs(tx), abs(ty)) <= self.skip_capital_radius:
+                    continue
+                dx, dy = tx - ox, ty - oy
+                dist = math.hypot(dx, dy)
+                if 0 < dist <= max_dist:
+                    candidates.append((dist, abs(dx) + abs(dy), m_mid))
+
+        if not candidates:
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if dx == 0 and dy == 0:
+                        continue
+                    tx, ty = ox + dx, oy + dy
+                    if not (MAP_MIN <= tx <= MAP_MAX and MAP_MIN <= ty <= MAP_MAX):
+                        continue
+                    if self.skip_capital_radius > 0 and max(abs(tx), abs(ty)) <= self.skip_capital_radius:
+                        continue
+                    m_mid = mid_from_coords(tx, ty)
+                    if m_mid in occupied:
+                        continue
+                    dist = math.hypot(dx, dy)
+                    if dist <= max_dist:
+                        candidates.append((dist, abs(dx) + abs(dy), m_mid))
+
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        return [item[2] for item in candidates]
+
+    def _find_pullable_man(self, curr_type: int) -> Optional[Target]:
+        """Quét mở rộng tìm một đạo quân Thất Man đang có trên bản đồ để dùng Man Tộc Lệnh (type=63) kéo về sát thành."""
+        scan_radii = sorted({25, 50, max(25, self.radius)})
+        for scan_radius in scan_radii:
+            target = self._find_nearest_uncached(scan_radius, [curr_type])
+            if target is not None:
+                return target
+        return None
+
+    def _scan_with_retry(self, curr_type: int, scan_radius: Optional[int] = None) -> Optional[Target]:
         """Quét tìm mục tiêu vừa gọi quanh thành, thử lại với trễ và mở rộng bán kính nếu là Vong Linh."""
-        effective_radius = max(self.radius, 10) if curr_type == VONG_LINH else self.radius
+        is_vl = self._is_vong_linh(curr_type)
+        base_radius = scan_radius if scan_radius is not None else self.radius
+        effective_radius = max(base_radius, VONG_LINH_NEAR_RADIUS) if is_vl else base_radius
         target = None
         for attempt in range(3):
             if attempt > 0:
                 self.sleep_fn(1.5)
-            r = self.radius if (attempt == 0 and curr_type != VONG_LINH) else effective_radius
-            try:
-                target = self.ctx.scanner.find_nearest(
-                    *self.origin,
-                    r,
-                    [curr_type],
-                    skip_capital_radius=self.skip_capital_radius,
-                    owner_id=int(self.city_id or 0),
-                    use_cache=False,
-                )
-            except TypeError:
-                target = self.ctx.scanner.find_nearest(
-                    *self.origin,
-                    r,
-                    [curr_type],
-                    skip_capital_radius=self.skip_capital_radius,
-                    owner_id=int(self.city_id or 0),
-                )
+            r = base_radius if (attempt == 0 and not is_vl) else effective_radius
+            target = self._find_nearest_uncached(r, [curr_type])
             if target is not None:
                 break
         return target
 
+    def _notify_call_error(
+        self,
+        curr_type: int,
+        ret_call: int,
+        source_target: Optional[Target] = None,
+    ) -> None:
+        if not self.ctx.notify:
+            return
+        if source_target is not None:
+            if ret_call == 208:
+                self.ctx.notify(
+                    f"⚠️ Đạo quân Thất Man ID {source_target.target_id} (loại {curr_type}) không tồn tại hoặc đã bị tiêu diệt (mã lỗi: 208)."
+                )
+            elif ret_call == 209:
+                self.ctx.notify(
+                    f"⚠️ Đạo quân Thất Man ID {source_target.target_id} (loại {curr_type}) đang đóng băng di chuyển hoặc đang giao chiến, không thể kéo về thành (mã lỗi: 209)."
+                )
+            elif ret_call == 236:
+                self.ctx.notify(f"⚠️ Gọi mục tiêu {curr_type} thất bại: Sự kiện chưa mở (mã lỗi 236).")
+            elif ret_call == 90:
+                self.ctx.notify(
+                    f"❌ Hết Man Tộc Lệnh trong túi đồ (mã lỗi 90) khi kéo mục tiêu {curr_type}!"
+                )
+            else:
+                self.ctx.notify(
+                    f"⚠️ Kéo Man {curr_type} (#{source_target.target_id}) thất bại (mã lỗi: {ret_call})."
+                )
+            return
+
+        is_vl = self._is_vong_linh(curr_type)
+        if ret_call == 236:
+            if is_vl:
+                self.ctx.notify(
+                    "⚠️ Gọi Vong Linh thất bại: Máy chủ chưa mở sự kiện Vong Linh (mã lỗi 236: 当前没有相关活动)."
+                )
+            else:
+                self.ctx.notify(f"⚠️ Gọi mục tiêu {curr_type} thất bại: Sự kiện chưa mở (mã lỗi 236).")
+        elif ret_call == 90:
+            if is_vl:
+                self.ctx.notify("❌ Hết Bùa Vong Linh (追风铁令) trong túi đồ (mã lỗi 90)!")
+            else:
+                self.ctx.notify(f"❌ Hết đạo cụ gọi mục tiêu {curr_type} trong túi đồ (mã lỗi 90)!")
+        elif ret_call == 39:
+            self.ctx.notify(
+                f"⚠️ Vị trí quanh thành đang bị chiếm dụng (mã lỗi 39) khi gọi mục tiêu {curr_type}."
+            )
+        else:
+            self.ctx.notify(f"⚠️ Gọi mục tiêu {curr_type} thất bại (mã lỗi: {ret_call}).")
+
+    def _verify_called_target(
+        self,
+        idx: int,
+        curr_type: int,
+        total_types: int,
+        resp_call: Optional[dict] = None,
+        pulled_info: Optional[tuple[Target, int, int]] = None,
+    ) -> tuple[Optional[Target], Optional[str]]:
+        ox, oy = self.origin
+        if resp_call and "new_target_id" in resp_call:
+            x, y = coords_from_mid(int(resp_call["new_target_mid"]))
+            pulled = Target(
+                x, y, int(resp_call["new_target_id"]), int(resp_call.get("new_target_type", curr_type))
+            )
+            if pulled_info is not None and math.hypot(x - ox, y - oy) > NEAR_CITY_RADIUS:
+                if self.ctx.notify:
+                    self.ctx.notify(
+                        f"⚠️ Đã kéo mục tiêu {curr_type} nhưng tọa độ ({x}, {y}) chưa nằm sát thành."
+                    )
+                return None, "target_not_found_after_call"
+            self._current_type_idx = (idx + 1) % total_types
+            self.target_type = curr_type
+            if pulled_info is not None and self.ctx.notify:
+                source_target, _, _ = pulled_info
+                self.ctx.notify(
+                    f"📣 Đã kéo mục tiêu {curr_type} (ID {pulled.target_id}) từ ({source_target.x}, {source_target.y}) về sát thành ({pulled.x}, {pulled.y})."
+                )
+            return pulled, None
+
+        self._invalidate_map_cache()
+        scan_radius = NEAR_CITY_RADIUS if pulled_info is not None else None
+        target = self._scan_with_retry(curr_type, scan_radius=scan_radius)
+        if pulled_info is not None:
+            source_target, _, _ = pulled_info
+            if target is None or math.hypot(target.x - ox, target.y - oy) > NEAR_CITY_RADIUS:
+                if target is not None:
+                    self._release_lock(target.target_id)
+                if self.ctx.notify:
+                    self.ctx.notify(
+                        f"⚠️ Đã dùng đạo cụ kéo mục tiêu {curr_type} (ID {source_target.target_id}) nhưng chưa xác nhận được vị trí sát thành."
+                    )
+                return None, "target_not_found_after_call"
+            self._current_type_idx = (idx + 1) % total_types
+            self.target_type = curr_type
+            if self.ctx.notify:
+                self.ctx.notify(
+                    f"📣 Đã kéo mục tiêu {curr_type} (ID {target.target_id}) từ ({source_target.x}, {source_target.y}) về sát thành ({target.x}, {target.y})."
+                )
+            return target, None
+
+        if target is None:
+            if self.ctx.notify:
+                self.ctx.notify(
+                    f"⚠️ Đã kích hoạt gọi mục tiêu {curr_type} thành công nhưng chưa định vị được trên bản đồ."
+                )
+            return None, "target_not_found_after_call"
+        self._current_type_idx = (idx + 1) % total_types
+        self.target_type = curr_type
+        return target, None
+
+    def _call_vong_linh(self, idx: int, curr_type: int, total_types: int) -> tuple[Optional[Target], Optional[str], int]:
+        """Kích hoạt Bùa Vong Linh (type=33, param1=268) tại thành chính."""
+        call_payload = {
+            "type": "33",
+            "param1": str(VONG_LINH_TALISMAN_ID),
+            "param2": "0",
+            "paytype": "1",
+            "_": "",
+        }
+        resp_call = self.ctx.gateway.call("OPT.ashx", 69, call_payload) or {}
+        ret_call = resp_call.get("ret", RET_OK)
+        if ret_call == 110 or ret_call == RET_CAPTCHA_REQUIRED:
+            raise CaptchaRequired()
+        if ret_call == 209:
+            if self.ctx.notify:
+                self.ctx.notify(f"⚠️ Mục tiêu {curr_type} đang bận hoặc đã tồn tại, tiến hành quét tìm...")
+            target, err = self._verify_called_target(idx, curr_type, total_types)
+            return target, err, RET_OK
+        if ret_call != RET_OK:
+            self._notify_call_error(curr_type, ret_call)
+            return None, "api_error", ret_call
+
+        target, err = self._verify_called_target(idx, curr_type, total_types, resp_call=resp_call)
+        return target, err, RET_OK
+
+    def _pull_man_to_city(self, idx: int, curr_type: int, total_types: int) -> tuple[Optional[Target], Optional[str], int]:
+        """Tìm Man trên bản đồ rồi dùng Man Tộc Lệnh (type=63) kéo về ô đất trống gần thành."""
+        if self.ctx.notify:
+            self.ctx.notify(f"🔍 Đang tìm Man cấp {curr_type} trên bản đồ để kéo về gần thành...")
+        source_target = self._find_pullable_man(curr_type)
+        if source_target is None:
+            if self.ctx.notify:
+                self.ctx.notify(
+                    f"⚠️ Không tìm thấy Man cấp {curr_type} nào còn trống trong bán kính 50 ô để kéo về."
+                )
+            return None, "no_pullable_target", RET_OK
+
+        self.ctx.locks.try_lock(source_target.target_id, LockReason.CLAIMED, owner=self.origin_id)
+        release_source_lock = True
+        try:
+            empty_mids = self._find_empty_mids_near_origin()
+            if not empty_mids:
+                if self.ctx.notify:
+                    self.ctx.notify(
+                        f"⚠️ Không tìm thấy ô đất trống quanh thành để kéo Man {curr_type} về."
+                    )
+                return None, "no_empty_tile", 39
+
+            for dest_mid in empty_mids[:5]:
+                dest_x, dest_y = coords_from_mid(dest_mid)
+                call_payload = {
+                    "type": "63",
+                    "param1": str(source_target.target_id),
+                    "param2": str(dest_mid),
+                    "paytype": "1",
+                    "_": "",
+                }
+                resp_call = self.ctx.gateway.call("OPT.ashx", 69, call_payload) or {}
+                ret_call = resp_call.get("ret", RET_OK)
+                if ret_call == 110 or ret_call == RET_CAPTCHA_REQUIRED:
+                    raise CaptchaRequired()
+                if ret_call == 39:
+                    if self.ctx.notify:
+                        self.ctx.notify(
+                            f"⚠️ Ô ({dest_x}, {dest_y}) hoặc xung quanh đang bị chiếm dụng (mã lỗi 39), thử ô trống khác..."
+                        )
+                    continue
+                if ret_call != RET_OK:
+                    self._notify_call_error(curr_type, ret_call, source_target=source_target)
+                    return None, "api_error", ret_call
+
+                target, err = self._verify_called_target(
+                    idx,
+                    curr_type,
+                    total_types,
+                    resp_call=resp_call,
+                    pulled_info=(source_target, dest_x, dest_y),
+                )
+                if target is not None:
+                    if target.target_id == source_target.target_id:
+                        release_source_lock = False
+                return target, err, RET_OK
+
+            if self.ctx.notify:
+                self.ctx.notify(
+                    f"⚠️ Tất cả các ô quanh thành đều bị chiếm dụng (mã lỗi 39) khi kéo Man {curr_type}."
+                )
+            return None, "api_error", 39
+        finally:
+            if release_source_lock:
+                self._release_lock(source_target.target_id)
+
     def call_target(self) -> tuple[Optional[Target], Optional[str]]:
-        """Kích hoạt API gọi quái theo đúng chế độ đã cấu hình, xoay vòng qua target_types."""
-        # Chuyển focus thành nếu có city_id
+        """Kích hoạt API gọi/kéo Man theo đúng chế độ đã cấu hình, xoay vòng qua target_types."""
+        # Chuyển focus thành nếu có city_id (giữ nguyên City.ashx?id=50 cho S1-S57 và test mock cũ)
         if self.city_id:
             resp_move = self.ctx.gateway.call("City.ashx", 50, {"tid": str(self.city_id), "_": ""}) or {}
             ret_move = resp_move.get("ret", RET_OK)
@@ -171,75 +468,39 @@ class GoiDan:
                 return None, f"call_failed:{ret_move}"
 
         total_types = len(self.target_types)
+        start_idx = self._current_type_idx
         last_ret = RET_OK
+        last_err: Optional[str] = None
         for attempt in range(total_types):
-            idx = (self._current_type_idx + attempt) % total_types
+            idx = (start_idx + attempt) % total_types
             curr_type = self.target_types[idx]
-            call_payload = self._get_call_payload(curr_type)
 
-            resp_call = self.ctx.gateway.call("OPT.ashx", 69, call_payload) or {}
-            ret_call = resp_call.get("ret", RET_OK)
-            if ret_call == 110 or ret_call == RET_CAPTCHA_REQUIRED:
-                raise CaptchaRequired()
-            if ret_call == 209:
-                if self.ctx.notify:
-                    self.ctx.notify(f"⚠️ Mục tiêu {curr_type} đang bận hoặc đã tồn tại, tiến hành quét tìm...")
-                self._current_type_idx = (idx + 1) % total_types
-                self.target_type = curr_type
-                invalidate = getattr(self.ctx.gateway, "invalidate_map_cache", None)
-                if callable(invalidate):
-                    invalidate()
-                target = self._scan_with_retry(curr_type)
-                if target is None:
-                    return None, "target_not_found_after_call"
+            if self._is_vong_linh(curr_type):
+                target, err, ret_code = self._call_vong_linh(idx, curr_type, total_types)
+            else:
+                target, err, ret_code = self._pull_man_to_city(idx, curr_type, total_types)
+
+            if target is not None and err is None:
                 return target, None
-            elif ret_call == 236:
-                if self.ctx.notify:
-                    if curr_type == VONG_LINH:
-                        self.ctx.notify("⚠️ Gọi Vong Linh thất bại: Máy chủ chưa mở sự kiện Vong Linh (mã lỗi 236: 当前没有相关活动).")
-                    else:
-                        self.ctx.notify(f"⚠️ Gọi mục tiêu {curr_type} thất bại: Sự kiện chưa mở (mã lỗi 236).")
-                last_ret = ret_call
-                continue
-            elif ret_call == 90:
-                if self.ctx.notify:
-                    if curr_type == VONG_LINH:
-                        self.ctx.notify("❌ Hết Bùa Vong Linh (追风铁令) trong túi đồ (mã lỗi 90)!")
-                    else:
-                        self.ctx.notify(f"❌ Hết đạo cụ gọi mục tiêu {curr_type} trong túi đồ (mã lỗi 90)!")
-                last_ret = ret_call
-                continue
-            elif ret_call == 39:
-                if self.ctx.notify:
-                    self.ctx.notify(f"⚠️ Vị trí quanh thành đang bị chiếm dụng (mã lỗi 39) khi gọi mục tiêu {curr_type}.")
-                last_ret = ret_call
-                continue
-            elif ret_call != RET_OK:
-                if self.ctx.notify:
-                    self.ctx.notify(f"⚠️ Gọi mục tiêu {curr_type} thất bại (mã lỗi: {ret_call}).")
-                last_ret = ret_call
-                continue
 
-            # Thành công gọi
-            self._current_type_idx = (idx + 1) % total_types
-            self.target_type = curr_type
+            if err == "no_pullable_target":
+                if last_err is None:
+                    last_err = "no_target"
+                continue
+            if err == "no_empty_tile":
+                last_ret = 39
+                last_err = "call_failed:39"
+                continue
+            if err == "target_not_found_after_call":
+                if last_err is None or last_err == "no_target":
+                    last_err = err
+                continue
+            if ret_code != RET_OK:
+                last_ret = ret_code
+                last_err = f"call_failed:{last_ret}"
 
-            # Nếu server trả về trực tiếp thông tin mục tiêu
-            if "new_target_id" in resp_call:
-                x, y = coords_from_mid(int(resp_call["new_target_mid"]))
-                return Target(x, y, int(resp_call["new_target_id"]), int(resp_call.get("new_target_type", curr_type))), None
-
-            # Quét tìm mục tiêu vừa xuất hiện quanh thành (vô hiệu hóa cache bản đồ vì mới gọi quái)
-            invalidate = getattr(self.ctx.gateway, "invalidate_map_cache", None)
-            if callable(invalidate):
-                invalidate()
-            target = self._scan_with_retry(curr_type)
-            if target is None:
-                if self.ctx.notify:
-                    self.ctx.notify(f"⚠️ Đã kích hoạt gọi mục tiêu {curr_type} thành công nhưng chưa định vị được trên bản đồ.")
-                return None, "target_not_found_after_call"
-            return target, None
-
+        if last_err:
+            return None, last_err
         return None, f"call_failed:{last_ret}"
 
     def recover_generals(self) -> None:
@@ -358,55 +619,65 @@ class GoiDan:
                     target_morale=self.min_morale,
                     base_gens=city_gens,
                     on_notify=self.ctx.notify,
-                    stop_event=getattr(self.ctx, "stop_event", None),
+                    stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
                     refresh_from_server=troops_added,
                 )
                 if not ready:
                     return "waiting_morale"
 
-        # 2. Tìm mục tiêu có sẵn quanh thành trước
-        target = self.ctx.scanner.find_nearest(
-            *self.origin,
-            self.radius,
-            self.target_types,
-            skip_capital_radius=self.skip_capital_radius,
-            owner_id=int(self.city_id or 0),
-        )
+        # 2. Chỉ đánh trực tiếp nếu đã có mục tiêu nằm sát thành; nếu ở xa phải gọi/kéo về trước
+        target = self._find_existing_near_target()
         if target is not None:
-            self.ctx.locks.try_lock(target.target_id, LockReason.CLAIMED, owner=int(self.city_id or 0))
-            result = attack(
-                self.ctx,
-                target,
-                self.generals,
-                sleep_fn=self.sleep_fn,
-                origin_id=int(self.city_id or 0),
-            )
-            if result == "attacked" and self.city_id:
-                self._track_active_battle()
-            if self.auto_recover:
-                self.recover_generals()
-            return result
+            return self._attack_and_recover(target)
 
-        # 2. Không có mục tiêu sẵn có -> Kích hoạt gọi mới
+        # 3. Không có mục tiêu sẵn có -> Kích hoạt gọi/kéo mới
         target, err = self.call_target()
         if err is not None:
             return err
         if target is None:
             return "no_target"
 
-        self.ctx.locks.try_lock(target.target_id, LockReason.CLAIMED)
+        result = self._attack_and_recover(target)
+        return "called_and_attacked" if result == "attacked" else result
+
+    def _find_existing_near_target(self) -> Optional[Target]:
+        """Chỉ nhận mục tiêu có sẵn nếu nó thực sự nằm sát thành (không hành quân xa)."""
+        all_vong_linh = all(self._is_vong_linh(t) for t in self.target_types)
+        scan_radius = VONG_LINH_NEAR_RADIUS if all_vong_linh else NEAR_CITY_RADIUS
+        target = self.ctx.scanner.find_nearest(
+            *self.origin,
+            scan_radius,
+            self.target_types,
+            skip_capital_radius=self.skip_capital_radius,
+            owner_id=self.origin_id,
+        )
+        if target is None:
+            return None
+        ox, oy = self.origin
+        max_dist = VONG_LINH_NEAR_RADIUS if self._is_vong_linh(target.man_type) else NEAR_CITY_RADIUS
+        if math.hypot(target.x - ox, target.y - oy) > max_dist:
+            self._release_lock(target.target_id)
+            return None
+        return target
+
+    def _attack_and_recover(self, target: Target) -> str:
+        self.ctx.locks.try_lock(target.target_id, LockReason.CLAIMED, owner=self.origin_id)
         result = attack(
             self.ctx,
             target,
             self.generals,
             sleep_fn=self.sleep_fn,
-            origin_id=int(self.city_id or 0),
+            origin_id=self.origin_id,
         )
+        if result == "taken":
+            self._invalidate_map_cache()
+        elif result.startswith("attack_failed:"):
+            self._release_lock(target.target_id)
         if result == "attacked" and self.city_id:
             self._track_active_battle()
         if self.auto_recover:
             self.recover_generals()
-        return "called_and_attacked" if result == "attacked" else result
+        return result
 
 
 # Định danh chuẩn theo mô hình miền GLOSSARY

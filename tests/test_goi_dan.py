@@ -76,11 +76,39 @@ def test_goi_dan_vong_linh_uses_item_268():
 
 
 def test_goi_dan_thuong_calculates_mid_and_uses_type_63():
-    mid = mid_from_coords(5, 5)
+    origin_mid = mid_from_coords(5, 5)
+    dest_mid = mid_from_coords(5, 6)
+    distant_mid = mid_from_coords(12, 12)
     server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_mid, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            distant_mid: {
+                "npc_tent": [man(12, 12, 999, 10)],
+            },
+        },
         handlers={
             "City.ashx?id=50": {"ret": 0},
-            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(5, 5, 999, 10)]}}) or {"ret": 0},
+            "OPT.ashx?id=69": lambda: (
+                server.map_views.update(
+                    {
+                        origin_mid: {
+                            "infos": [
+                                [origin_mid, 1, 0, 0, 0, 123],
+                                [dest_mid, 1, 0, 0, 0, 0],
+                            ],
+                            "npc_tent": [man(5, 6, 999, 10)],
+                        },
+                        distant_mid: {"npc_tent": []},
+                    }
+                )
+                or {"ret": 0}
+            ),
             "OPT.ashx?id=53": {"ret": 0},
         },
     )
@@ -89,11 +117,11 @@ def test_goi_dan_thuong_calculates_mid_and_uses_type_63():
     out = task.run_once()
     assert out == "called_and_attacked"
 
-    # Kiểm tra payload gọi dân thường (type 63, param1 target_type, param2 mid)
+    # Kiểm tra payload kéo Man về ô đất trống gần thành (type=63, param1=target_id, param2=dest_mid)
     call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
     assert call_69["type"] == "63"
-    assert call_69["param1"] == "10"
-    assert call_69["param2"] == str(mid)
+    assert call_69["param1"] == "999"
+    assert call_69["param2"] == str(dest_mid)
 
 
 def test_goi_dan_auto_recover_triggers_heal_and_refill():
@@ -147,11 +175,39 @@ def test_goi_dan_stops_on_captcha_at_call():
 def test_goi_man_level_selection_uses_correct_target_type():
     from linhvuong.tasks.goi_dan import GoiMan
 
-    mid = mid_from_coords(3, 3)
+    origin_mid = mid_from_coords(3, 3)
+    dest_mid = mid_from_coords(4, 3)
+    distant_mid = mid_from_coords(10, 10)
     server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_mid, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            distant_mid: {
+                "npc_tent": [man(10, 10, 777, 7)],
+            },
+        },
         handlers={
             "City.ashx?id=50": {"ret": 0},
-            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(3, 3, 777, 7)]}}) or {"ret": 0},
+            "OPT.ashx?id=69": lambda: (
+                server.map_views.update(
+                    {
+                        origin_mid: {
+                            "infos": [
+                                [origin_mid, 1, 0, 0, 0, 123],
+                                [dest_mid, 1, 0, 0, 0, 0],
+                            ],
+                            "npc_tent": [man(4, 3, 777, 7)],
+                        },
+                        distant_mid: {"npc_tent": []},
+                    }
+                )
+                or {"ret": 0}
+            ),
             "OPT.ashx?id=53": {"ret": 0},
         },
     )
@@ -163,7 +219,8 @@ def test_goi_man_level_selection_uses_correct_target_type():
 
     call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
     assert call_69["type"] == "63"
-    assert call_69["param1"] == "7"
+    assert call_69["param1"] == "777"
+    assert call_69["param2"] == str(dest_mid)
 
 
 def test_goi_man_vong_linh_special_type_301():
@@ -191,13 +248,27 @@ def test_goi_man_vong_linh_special_type_301():
 def test_goi_man_multiple_target_types_round_robin():
     from linhvuong.tasks.goi_dan import GoiMan
 
-    mid = mid_from_coords(4, 4)
+    origin_mid = mid_from_coords(4, 4)
+    dest_mid = mid_from_coords(5, 4)
+    mid_7 = mid_from_coords(11, 11)
+    mid_8 = mid_from_coords(18, 18)
     server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_mid, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            mid_7: {"npc_tent": [man(11, 11, 7001, 7)]},
+            mid_8: {"npc_tent": [man(18, 18, 8001, 8)]},
+        },
         handlers={
             "City.ashx?id=50": {"ret": 0},
             "OPT.ashx?id=69": [
-                {"ret": 0, "new_target_id": 7001, "new_target_mid": mid, "new_target_type": 7},
-                {"ret": 0, "new_target_id": 8001, "new_target_mid": mid, "new_target_type": 8},
+                {"ret": 0, "new_target_id": 7001, "new_target_mid": dest_mid, "new_target_type": 7},
+                {"ret": 0, "new_target_id": 8001, "new_target_mid": dest_mid, "new_target_type": 8},
             ],
             "OPT.ashx?id=53": {"ret": 0},
         },
@@ -205,29 +276,45 @@ def test_goi_man_multiple_target_types_round_robin():
     ctx, _ = ctx_for(server)
     task = GoiMan(ctx, generals=[10], origin=(4, 4), radius=5, target_types=[7, 8], city_id=123)
 
-    # Lượt 1: Triệu hồi loại 7
+    # Lượt 1: Kéo loại 7 (#7001)
     res1 = task.run_once()
     assert res1 == "called_and_attacked"
     calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
-    assert calls_69[0]["param1"] == "7"
+    assert calls_69[0]["param1"] == "7001"
+    assert calls_69[0]["param2"] == str(dest_mid)
 
-    # Lượt 2: Triệu hồi xoay vòng sang loại 8
+    # Lượt 2: Xoay vòng kéo loại 8 (#8001)
     res2 = task.run_once()
     assert res2 == "called_and_attacked"
     calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
-    assert calls_69[1]["param1"] == "8"
+    assert calls_69[1]["param1"] == "8001"
+    assert calls_69[1]["param2"] == str(dest_mid)
 
 
 def test_goi_man_multiple_target_types_fallback_on_failure():
     from linhvuong.tasks.goi_dan import GoiMan
 
-    mid = mid_from_coords(4, 4)
+    origin_mid = mid_from_coords(4, 4)
+    dest_mid = mid_from_coords(5, 4)
+    mid_7 = mid_from_coords(25, 25)
+    mid_8 = mid_from_coords(18, 18)
     server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_mid, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            mid_7: {"npc_tent": [man(25, 25, 7001, 7)]},
+            mid_8: {"npc_tent": [man(18, 18, 8002, 8)]},
+        },
         handlers={
             "City.ashx?id=50": {"ret": 0},
             "OPT.ashx?id=69": [
-                {"ret": 201},  # Lượt đầu gọi loại 7 thất bại (hết lệnh bài)
-                {"ret": 0, "new_target_id": 8002, "new_target_mid": mid, "new_target_type": 8},  # Fallback sang loại 8 thành công
+                {"ret": 201},  # Lượt đầu kéo loại 7 thất bại
+                {"ret": 0, "new_target_id": 8002, "new_target_mid": dest_mid, "new_target_type": 8},  # Fallback sang loại 8 thành công
             ],
             "OPT.ashx?id=53": {"ret": 0},
         },
@@ -239,8 +326,8 @@ def test_goi_man_multiple_target_types_fallback_on_failure():
     assert out == "called_and_attacked"
     calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
     assert len(calls_69) == 2
-    assert calls_69[0]["param1"] == "7"
-    assert calls_69[1]["param1"] == "8"
+    assert calls_69[0]["param1"] == "7001"
+    assert calls_69[1]["param1"] == "8002"
 
 
 def test_goi_dan_idle_check_returns_generals_busy():
@@ -259,7 +346,7 @@ def test_goi_dan_idle_check_returns_generals_busy():
     out = task.run_once()
     assert out == "generals_busy"
     assert any("đang bận" in a for a in alerts)
-    # Không phát sinh request gọi quái hay đánh
+    # Không phát sinh request gọi Man hay đánh
     assert [k for k, _ in server.calls if k != "Common.ashx?id=32"] == []
 
 
@@ -723,6 +810,282 @@ def test_goi_dan_runner_stops_on_call_failed_236_and_90():
     assert task90.calls == 1
     assert any("90" in l for l in logs90)
     assert "Hết đạo cụ" in statuses90
+
+
+def test_goi_man_returns_no_target_when_no_pullable_man_exists():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = GoiMan(ctx, generals=[10], origin=(5, 5), radius=5, target_type=10, city_id=123)
+    out = task.run_once()
+    assert out == "no_target"
+    assert [d for k, d in server.calls if k == "OPT.ashx?id=69"] == []
+    assert any("Không tìm thấy Man cấp 10" in a for a in alerts)
+
+
+def test_goi_man_retries_another_empty_tile_when_ret_39():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    origin_mid = mid_from_coords(5, 5)
+    dest_1 = mid_from_coords(5, 6)
+    dest_2 = mid_from_coords(6, 5)
+    dest_3 = mid_from_coords(5, 4)
+    dest_4 = mid_from_coords(4, 5)
+    distant_mid = mid_from_coords(12, 12)
+    server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_1, 1, 0, 0, 0, 0],
+                    [dest_2, 1, 0, 0, 0, 0],
+                    [dest_3, 1, 0, 0, 0, 0],
+                    [dest_4, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            distant_mid: {"npc_tent": [man(12, 12, 999, 10)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": [
+                {"ret": 39},
+                {"ret": 39},
+                {"ret": 39},
+                {"ret": 0, "new_target_id": 999, "new_target_mid": dest_4, "new_target_type": 10},
+            ],
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiMan(ctx, generals=[10], origin=(5, 5), radius=5, target_type=10, city_id=123)
+    out = task.run_once()
+    assert out == "called_and_attacked"
+    calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert len(calls_69) == 4
+    assert {c["param2"] for c in calls_69} == {str(dest_1), str(dest_2), str(dest_3), str(dest_4)}
+
+
+def test_goi_man_releases_pull_lock_when_pull_fails():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    origin_mid = mid_from_coords(5, 5)
+    dest_mid = mid_from_coords(5, 6)
+    distant_mid = mid_from_coords(12, 12)
+    server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_mid, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            distant_mid: {"npc_tent": [man(12, 12, 7001, 7)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 90},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiMan(ctx, generals=[10], origin=(5, 5), radius=5, target_type=7, city_id=123)
+    out = task.run_once()
+    assert out == "call_failed:90"
+    assert not ctx.locks.is_locked(7001)
+
+
+def test_goi_man_round_robin_falls_back_when_target_not_found_after_call():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    origin_mid = mid_from_coords(4, 4)
+    dest_mid = mid_from_coords(5, 4)
+    mid_7 = mid_from_coords(25, 25)
+    mid_8 = mid_from_coords(18, 18)
+    server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_mid, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            mid_7: {"npc_tent": [man(25, 25, 7001, 7)]},
+            mid_8: {"npc_tent": [man(18, 18, 8002, 8)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": [
+                {"ret": 0},  # Loại 7 gọi xong nhưng không thấy Man trên bản đồ
+                {"ret": 0, "new_target_id": 8002, "new_target_mid": dest_mid, "new_target_type": 8},
+            ],
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiMan(ctx, generals=[10], origin=(4, 4), radius=5, target_types=[7, 8], city_id=123, sleep_fn=lambda _: None)
+    out = task.run_once()
+    assert out == "called_and_attacked"
+    calls_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert [c["param1"] for c in calls_69] == ["7001", "8002"]
+
+
+def test_goi_man_fallback_empty_tiles_respect_map_bounds():
+    from linhvuong.coords import MAP_MAX, MAP_MIN, coords_from_mid
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    server = FakeServer()
+    ctx, _ = ctx_for(server)
+    task = GoiMan(ctx, generals=[10], origin=(MAP_MAX, MAP_MAX), radius=5, city_id=123)
+    mids = task._find_empty_mids_near_origin()
+    assert mids
+    for mid in mids:
+        x, y = coords_from_mid(mid)
+        assert MAP_MIN <= x <= MAP_MAX
+        assert MAP_MIN <= y <= MAP_MAX
+
+
+def test_goi_man_taken_invalidates_map_cache_and_locks_with_owner():
+    from linhvuong.tasks.base import RET_TAKEN_BY_OTHER
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    origin_mid = mid_from_coords(4, 4)
+    dest_mid = mid_from_coords(5, 4)
+    distant_mid = mid_from_coords(11, 11)
+    server = FakeServer(
+        map_views={
+            origin_mid: {
+                "infos": [
+                    [origin_mid, 1, 0, 0, 0, 123],
+                    [dest_mid, 1, 0, 0, 0, 0],
+                ],
+                "npc_tent": [],
+            },
+            distant_mid: {"npc_tent": [man(11, 11, 8002, 8)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": {"ret": 0, "new_target_id": 8002, "new_target_mid": dest_mid, "new_target_type": 8},
+            "OPT.ashx?id=53": {"ret": RET_TAKEN_BY_OTHER},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    invalidate_calls = []
+    ctx.gateway.invalidate_map_cache = lambda: invalidate_calls.append(True)
+
+    task = GoiMan(ctx, generals=[10], origin=(4, 4), radius=5, target_type=8, city_id=123)
+    out = task.run_once()
+    assert out == "taken"
+    assert len(invalidate_calls) == 1
+    # Chủ sở hữu khóa phải là city_id=123 -> owner=999 bị coi là đang khóa bởi người khác
+    assert ctx.locks.is_locked_by_other(8002, owner=999)
+    assert not ctx.locks.is_locked_by_other(8002, owner=123)
+
+
+def test_goi_man_refuses_attack_if_pulled_target_not_near_city():
+    """Chỉ xuất quân sau khi đã xác nhận Man thực sự nằm sát thành (dist <= 6)."""
+    origin_mid = mid_from_coords(20, 20)
+    far_mid = mid_from_coords(34, 20)
+    empty_mid = mid_from_coords(21, 20)
+    server = FakeServer(
+        map_views={
+            origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]},
+            far_mid: {"npc_tent": [man(34, 20, 1107, 1)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            # Server báo ret=0 nhưng trả tọa độ vẫn ở xa thành
+            "OPT.ashx?id=69": {"ret": 0, "new_target_id": 1107, "new_target_mid": far_mid, "new_target_type": 1},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(ctx, generals=[10], origin=(20, 20), radius=5, mode="dan", target_type=1, city_id=123)
+    out = task.run_once()
+
+    assert out == "target_not_found_after_call"
+    assert not [k for k, _ in server.calls if k == "OPT.ashx?id=53"]
+    assert not ctx.locks.is_locked(1107)
+
+
+def test_goi_dan_large_radius_pulls_distant_man_to_city_before_attack():
+    """Khi đặt bán kính quét lớn (vd radius=100), phải dùng đạo cụ kéo Man ở xa về sát thành rồi mới xuất quân."""
+    origin_mid = mid_from_coords(180, 67)
+    far_mid = mid_from_coords(250, 67)  # 70 ô (10 * step=7)
+    empty_mid = mid_from_coords(181, 67)
+
+    def handle_call_69():
+        server.map_views[far_mid] = {"npc_tent": []}
+        server.map_views[origin_mid] = {"npc_tent": [man(181, 67, 2201, 1)]}
+        return {"ret": 0}
+
+    server = FakeServer(
+        map_views={
+            origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]},
+            far_mid: {"npc_tent": [man(250, 67, 2201, 1)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": handle_call_69,
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(ctx, generals=[6330], origin=(180, 67), radius=100, mode="dan", target_type=1, city_id=10254)
+    out = task.run_once()
+
+    assert out == "called_and_attacked"
+    api_seq = [k for k, _ in server.calls if k in ("OPT.ashx?id=69", "OPT.ashx?id=53")]
+    assert api_seq == ["OPT.ashx?id=69", "OPT.ashx?id=53"]
+    call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
+    assert call_69["param1"] == "2201"
+    assert call_69["param2"] == str(empty_mid)
+    call_53 = [d for k, d in server.calls if k == "OPT.ashx?id=53"][0]
+    assert call_53["lDestID"] == str(empty_mid)
+
+
+def test_goi_dan_existing_man_outside_near_city_radius_is_pulled_not_marched():
+    """Man nằm trong viewport gốc nhưng ngoài ngưỡng sát thành (dist > 6) cũng phải kéo về sát thành trước khi đánh."""
+    origin_mid = mid_from_coords(180, 67)
+    empty_mid = mid_from_coords(181, 67)
+
+    def handle_call_69():
+        server.map_views[origin_mid] = {"npc_tent": [man(181, 67, 2202, 1)]}
+        return {"ret": 0}
+
+    server = FakeServer(
+        map_views={
+            origin_mid: {
+                "npc_tent": [man(189, 67, 2202, 1)],  # Cách 9 ô (> 6 ô)
+                "infos": [[empty_mid, 1, 0, 0, 0, 0]],
+            },
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": handle_call_69,
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    ctx.scanner.workers = 1
+    task = GoiDan(ctx, generals=[6330], origin=(180, 67), radius=5, mode="dan", target_type=1, city_id=10254)
+    out = task.run_once()
+
+    assert out == "called_and_attacked"
+    call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
+    assert call_69["param1"] == "2202"
+    assert call_69["param2"] == str(empty_mid)
+    call_53 = [d for k, d in server.calls if k == "OPT.ashx?id=53"][0]
+    assert call_53["lDestID"] == str(empty_mid)
+
+
 
 
 
