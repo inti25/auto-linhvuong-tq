@@ -652,13 +652,20 @@ def _assign_tacticians_for_city(
         return
 
     # Chỉ lấy Văn quan cùng thành đang rảnh rỗi (hoặc vừa được tháo ra),
-    # loại trừ hoàn toàn Thái thú (special_status == 1) và Văn quan đang làm nhiệm vụ khác (status != 0).
+    # loại trừ hoàn toàn Thái thú (special_status == 1), Văn quan đang bận (status != 0),
+    # và mọi Văn quan vẫn đang là Mưu sĩ của Võ tướng khác chưa tháo.
+    still_assigned_tac_ids = {
+        g.tactician_id
+        for g in roster.generals_of(city_id)
+        if g.role == "vo" and g.tactician_id > 0 and g.tactician_id not in freed_civ_ids
+    }
     available_civs = [
         c
         for c in roster.generals_of(city_id)
         if c.role == "van"
         and c.status == 0
         and c.special_status != 1
+        and c.id not in still_assigned_tac_ids
         and (c.special_status == 0 or c.id in freed_civ_ids)
     ]
 

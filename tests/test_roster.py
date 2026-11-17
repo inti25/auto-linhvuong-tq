@@ -237,3 +237,78 @@ def test_fetch_roster_only_queries_specified_base_ids():
     assert str(troop_calls[0][1]["cityTentId"]) == "15230"
     gens = r.generals_of(15230)
     assert len(gens) > 0
+
+
+def test_fetch_roster_resolves_tacticians_for_zero_troop_martial_generals():
+    """Server 58 pagemytroopslist bỏ qua Võ tướng không có lính -> phải truy vấn Common.ashx?id=14 qua Văn quan special_status=3."""
+    class TacticianSession(FakeSession):
+        def __init__(self):
+            super().__init__()
+            self.post_calls = []
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/city/list":
+                return Resp({
+                    "ret": 0,
+                    "data": {
+                        "items": [
+                            {"m_ltype": 1, "m_lid": 10254, "m_szname": "TT", "m_lx_pos": 180, "m_ly_pos": 67, "m_llevel": 4},
+                        ]
+                    },
+                })
+            if path == "/api/city/pageofficial":
+                if int(p.get("heroType", 2)) == 1:
+                    return Resp({
+                        "ret": 0,
+                        "list": [[10254, "TT", 180, 67, [
+                            [15061, "TT", "公孙渊", 1, 1, 0, 77, 100, 312, 870, 58, 70, 75, 770, 219],
+                            [6201, "I_01", "吕蒙", 1, 0, 0, 233, 100, 2600, 2600, 166, 234, 192, 2330, 765],
+                            [6331, "I_05", "神魔·诸葛亮", 1, 3, 0, 101, 100, 1978, 1978, 343, 732, 600, 1010, 0],
+                            [6332, "I_06", "神魔·诸葛亮", 1, 3, 0, 101, 100, 1988, 1988, 350, 694, 620, 1010, 0],
+                        ]]],
+                    })
+                return Resp({
+                    "ret": 0,
+                    "list": [[10254, "TT", 180, 67, [
+                        [6330, "I_01", "神魔·曹操", 2, 0, 0, 102, 100, 2160, 2160, 890, 136, 746, 1020, 3],
+                        [6341, "I_06", "神魔·曹操", 2, 0, 0, 101, 100, 2070, 2070, 864, 145, 710, 1010, 0],
+                        [6346, "I_08", "神魔·曹操", 2, 0, 0, 101, 100, 1800, 1800, 815, 113, 720, 1010, 0],
+                    ]]],
+                })
+            if path == "/api/city/pagemytroopslist":
+                # Võ 6330 có lính và đã gắn 6332 -> không cần hỏi id=14 cho 6332;
+                # Võ 6346 có 0 lính nên vắng mặt trong pagemytroopslist, nhưng Văn 6331 (special_status=3) đang theo 6346.
+                return Resp({
+                    "ret": 0,
+                    "list": [[10254, "TT", [
+                        [6330, "I_01", 6332, "I_06", 0, 149, 99, 149, 0, 100, 0],
+                    ]]],
+                })
+            return Resp(None)
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            self.post_calls.append((url, dict(data or {})))
+            if "Common.ashx?id=14" in url:
+                gid = str((data or {}).get("lGeneralID", ""))
+                if gid == "6331":
+                    return Resp({"ret": 0, "type": 1, "job": 3, "partner_id": 6346, "partner_name": "I_08"})
+                if gid == "6332":
+                    return Resp({"ret": 0, "type": 1, "job": 3, "partner_id": 6330, "partner_name": "I_01"})
+            return Resp({"ret": 1})
+
+    session = TacticianSession()
+    gw = GatewayClient(58, session, sleep=lambda s: None)
+    r = fetch_roster(gw)
+    by_id = {g.id: g for g in r.generals_of(10254)}
+
+    assert by_id[6330].tactician_id == 6332
+    assert by_id[6330].tactician_name == "I_06"
+    assert by_id[6346].tactician_id == 6331
+    assert by_id[6346].tactician_name == "I_05"
+    assert by_id[6341].tactician_id == 0
+    assert r.active_tactician_ids() == {6331, 6332}
+    # Chỉ gọi Common.ashx?id=14 cho Văn quan chưa xuất hiện trong pagemytroopslist (6331)
+    assert [d["lGeneralID"] for _, d in session.post_calls] == ["6331"]

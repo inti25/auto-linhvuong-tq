@@ -359,8 +359,9 @@ def test_configure_tacticians_remove_sequential_and_camp_warning():
     camp = _make_city(-10, "TienDon", base_type="Doanh trại")
     vo1 = _make_gen(1, "Vo1", "vo", city_id=-10, level=10, tactician_id=10, tactician_name="Van1")
     vo2 = _make_gen(2, "Vo2", "vo", city_id=-10, level=20)
-    van1 = _make_gen(10, "Van1", "van", city_id=-10, level=15)
-    roster = Roster(cities=[], camps=[camp], _generals={-10: [vo1, vo2, van1]})
+    van1 = _make_gen(10, "Van1", "van", city_id=-10, level=15, special_status=3)
+    van2 = _make_gen(11, "Van2", "van", city_id=-10, level=15, special_status=0)
+    roster = Roster(cities=[], camps=[camp], _generals={-10: [vo1, vo2, van1, van2]})
 
     # Sequential mode on camp
     gw_seq = FakeGateway()
@@ -377,6 +378,45 @@ def test_configure_tacticians_remove_sequential_and_camp_warning():
     assert gw_rem.calls == [
         ("OPT.ashx", 5, {"lGeneralID": "10", "lType": "0", "lFollowGeneralID": "0", "lCityID": "-10", "_": ""})
     ]
+
+
+def test_configure_tacticians_never_steals_active_tactician_and_runtime_calls_selected_ids(tmp_path, monkeypatch):
+    """Không cướp Mưu sĩ đang gắn cho Võ tướng khác và AccountSession.run_tactician_action truyền đúng selected_general_ids."""
+    c1 = _make_city(100, "ThanhA")
+    vo_unselected = _make_gen(1, "Vo1", "vo", city_id=100, level=50, tactician_id=10, tactician_name="VanBusyTac")
+    vo_target = _make_gen(2, "Vo2", "vo", city_id=100, level=40)
+    # Giả sử special_status bị trễ đồng bộ = 0 nhưng vo_unselected vẫn đang giữ tactician_id=10
+    van_tac_stale = _make_gen(10, "VanBusyTac", "van", city_id=100, level=60, special_status=0)
+    roster = Roster(cities=[c1], camps=[], _generals={100: [vo_unselected, vo_target, van_tac_stale]})
+
+    gw = FakeGateway()
+    summary = configure_tacticians(gw, roster, [2], mode=MODE_BY_LEVEL, reassign_existing=False)
+    assert summary.assigned == 0
+    assert summary.no_available_civilian == 1
+    assert gw.calls == []
+
+    # Kiểm tra seam AccountSession.run_tactician_action -> configure_tacticians (tránh lỗi TypeError target_vo_ids)
+    import linhvuong.runtime as runtime_mod
+    from linhvuong.runtime import WorkspaceManager
+
+    monkeypatch.setattr(runtime_mod, "login", lambda *a, **kw: None)
+    monkeypatch.setattr(runtime_mod, "fetch_roster", lambda _gw: roster)
+    monkeypatch.setattr(runtime_mod.AccountSession, "start_aux_loop", lambda self: None)
+
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    try:
+        sess = wm.login_account(server_id=58, username="u", password="p")
+        sess.gateway = gw  # type: ignore[assignment]
+        sess.run_tactician_action(MODE_BY_LEVEL, [2], reassign=False)
+        import time as _t
+
+        deadline = _t.monotonic() + 2.0
+        while sess._tac_running and _t.monotonic() < deadline:
+            _t.sleep(0.02)
+        assert "❌ Lỗi:" not in sess._tac_status, sess._tac_status
+        assert "Hoàn tất:" in sess._tac_status
+    finally:
+        wm.graceful_shutdown()
 
 
 def test_classify_item_role_and_fetch_equipment_inventory():

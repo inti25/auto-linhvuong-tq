@@ -220,6 +220,7 @@
     } else if (event === "roster_updated") {
       state.snapshot.roster = payload;
       renderActiveTab();
+      if (typeof renderTacticianModalBody === "function" && $("tac-tbody")) renderTacticianModalBody();
     } else if (event === "techs_updated") {
       state.snapshot.tech_levels = payload.levels || {};
       state.snapshot.tech_current = payload.current || null;
@@ -494,6 +495,7 @@
       goidan: "log-goidan",
       battle: "log-battle",
       nienthu: "log-nienthu",
+      tactician: "log-tactician",
     };
     const box = $(map[channel]);
     if (box) {
@@ -547,6 +549,8 @@
       const a = aux.nien_thu_announcement;
       ntAnn.textContent = `Kênh thế giới: ${a.vi_name} (${a.state_name}) - ${a.server_time || "?"}`;
     }
+    const tacLbl = $("tac-status-lbl");
+    if (tacLbl) tacLbl.textContent = aux.tactician_status || "Sẵn sàng";
   }
 
   function updateRunningButtonsOnly() {
@@ -1771,31 +1775,124 @@
     };
   }
 
+  let renderTacticianModalBody = null;
+
   function openTacticianModal() {
-    const vos = (state.snapshot.roster.generals || []).filter((g) => g.role === "vo");
     const bases = state.snapshot.roster.bases || [];
+    const allGens = state.snapshot.roster.generals || [];
+    const selectedTacIds = new Set(allGens.filter((g) => g.role === "vo" && (g.tactician_id || 0) <= 0).map((g) => g.id));
+    if (!selectedTacIds.size) allGens.filter((g) => g.role === "vo").forEach((g) => selectedTacIds.add(g.id));
+    const initCity = state.selectedOverviewCityId && bases.some((b) => b.id === state.selectedOverviewCityId)
+      ? String(state.selectedOverviewCityId)
+      : "all";
+
     openModal(
       "🧠 Thiết Lập Mưu Sĩ Cho Võ Tướng",
-      `<div class="form-row"><label><input id="tac-reassign" type="checkbox"/> Đổi mưu sĩ (tháo Mưu sĩ hiện tại để chia lại)</label></div>
-       <div class="table-wrap" style="max-height:280px;">
-         <table><thead><tr><th><input id="tac-all" type="checkbox" checked/></th><th>Võ tướng</th><th>Thành</th><th>Cấp</th><th>Mưu sĩ hiện tại</th></tr></thead>
-         <tbody>${vos.map((g) => `<tr><td><input type="checkbox" class="tac-chk" data-gid="${g.id}" checked/></td><td>${esc(g.name)}</td><td>${esc(bases.find((b) => b.id === g.city_id)?.name || g.city_id)}</td><td>${g.level}</td><td>${esc(g.tactician_name || "-")}</td></tr>`).join("")}</tbody></table>
+      `<div class="form-row">
+         <label>Thành / Trại <select id="tac-city">
+           <option value="all">🌟 Tất cả các thành</option>
+           ${bases.map((b) => `<option value="${b.id}" ${String(b.id) === initCity ? "selected" : ""}>${esc(b.display_name || b.name)}</option>`).join("")}
+         </select></label>
+         <button id="btn-tac-all" class="btn-sm">☑ Tất cả</button>
+         <button id="btn-tac-none" class="btn-sm">☐ Bỏ chọn</button>
+         <button id="btn-tac-unassigned" class="btn-sm">✨ Chỉ chưa có MS</button>
+         <button id="btn-tac-reload" class="btn-sm">🔄 Làm mới</button>
        </div>
-       <div class="log-box" style="height:120px;margin-top:10px;">${esc((state.snapshot.logs.tactician || []).join("\n"))}</div>`,
+       <div id="tac-summary" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+       <div class="form-row"><label><input id="tac-reassign" type="checkbox"/> Đổi mưu sĩ (tháo Mưu sĩ hiện tại để chia lại; trừ Thái thú / bận)</label></div>
+       <div class="table-wrap" style="max-height:260px;">
+         <table><thead><tr><th><input id="tac-all" type="checkbox"/></th><th>Võ tướng</th><th>Thành / Trại</th><th>Cấp</th><th>Mưu sĩ hiện tại</th><th>Trạng thái</th></tr></thead>
+         <tbody id="tac-tbody"></tbody></table>
+       </div>
+       <div id="tac-status-lbl" style="font-size:12px;color:var(--accent);margin-top:6px;">${esc(state.snapshot.aux?.tactician_status || "Sẵn sàng")}</div>
+       <div id="log-tactician" class="log-box" style="height:120px;margin-top:6px;">${esc((state.snapshot.logs.tactician || []).join("\n"))}</div>`,
       `<button class="btn-success btn-sm tac-run" data-mode="by_level">📈 Theo cấp</button>
        <button class="btn-sm tac-run" data-mode="by_name">🏷️ Theo tên</button>
        <button class="btn-sm tac-run" data-mode="sequential">🔢 Tuần tự</button>
        <button class="btn-warning btn-sm tac-run" data-mode="remove">🔓 Tháo MS</button>
        <button id="btn-tac-stop" class="btn-danger btn-sm">⏹ Dừng</button>`
     );
-    $("tac-all").onchange = () => document.querySelectorAll(".tac-chk").forEach((c) => (c.checked = $("tac-all").checked));
+
+    const getVisibleVos = () => {
+      const cityVal = $("tac-city")?.value || "all";
+      const gens = state.snapshot.roster.generals || [];
+      return gens.filter((g) => g.role === "vo" && (cityVal === "all" || String(g.city_id) === cityVal));
+    };
+
+    const updateSummary = () => {
+      const cityVal = $("tac-city")?.value || "all";
+      const gens = state.snapshot.roster.generals || [];
+      const vos = getVisibleVos();
+      const freeCivs = gens.filter(
+        (g) =>
+          g.role === "van" &&
+          (cityVal === "all" || String(g.city_id) === cityVal) &&
+          (g.is_available_tactician ?? (g.status === 0 && !g.is_mayor && !g.is_tactician))
+      ).length;
+      const selVisible = vos.filter((g) => selectedTacIds.has(g.id)).length;
+      const sumEl = $("tac-summary");
+      if (sumEl) {
+        sumEl.textContent = `Võ tướng hiển thị: ${vos.length} • Đang chọn: ${selVisible} (Tổng: ${selectedTacIds.size}) • Văn quan sẵn sàng làm Mưu sĩ: ${freeCivs}`;
+      }
+      const allChk = $("tac-all");
+      if (allChk) allChk.checked = vos.length > 0 && selVisible === vos.length;
+    };
+
+    renderTacticianModalBody = () => {
+      const tbody = $("tac-tbody");
+      if (!tbody) return;
+      const curBases = state.snapshot.roster.bases || [];
+      const vos = getVisibleVos();
+      tbody.innerHTML = vos
+        .map((g) => {
+          const bname = curBases.find((b) => b.id === g.city_id)?.name || g.city_id;
+          const chk = selectedTacIds.has(g.id) ? "checked" : "";
+          return `<tr><td><input type="checkbox" class="tac-chk" data-gid="${g.id}" ${chk}/></td><td>${esc(g.name)}</td><td>${esc(bname)}</td><td>${g.level}</td><td>${esc(g.tactician_name || "-")}</td><td>${esc(g.status_text || "-")}</td></tr>`;
+        })
+        .join("");
+      tbody.querySelectorAll(".tac-chk").forEach((c) => {
+        c.onchange = () => {
+          const gid = Number(c.dataset.gid);
+          if (c.checked) selectedTacIds.add(gid);
+          else selectedTacIds.delete(gid);
+          updateSummary();
+        };
+      });
+      updateSummary();
+    };
+
+    $("tac-city").onchange = renderTacticianModalBody;
+    $("tac-all").onchange = () => {
+      const checked = $("tac-all").checked;
+      getVisibleVos().forEach((g) => (checked ? selectedTacIds.add(g.id) : selectedTacIds.delete(g.id)));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-all").onclick = () => {
+      getVisibleVos().forEach((g) => selectedTacIds.add(g.id));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-none").onclick = () => {
+      getVisibleVos().forEach((g) => selectedTacIds.delete(g.id));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-unassigned").onclick = () => {
+      getVisibleVos().forEach((g) => ((g.tactician_id || 0) <= 0 ? selectedTacIds.add(g.id) : selectedTacIds.delete(g.id)));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-reload").onclick = () => {
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/roster/reload`, { method: "POST" })
+        .then(() => showToast("Làm mới", "Đã đồng bộ danh sách tướng & Mưu sĩ."))
+        .catch((e) => showToast("Lỗi", e.message, "error"));
+    };
     document.querySelectorAll(".tac-run").forEach((b) => (b.onclick = () => {
-      const ids = [...document.querySelectorAll(".tac-chk:checked")].map((c) => Number(c.dataset.gid));
+      const ids = [...selectedTacIds];
       api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tactician/run`, {
         method: "POST", body: { mode: b.dataset.mode, general_ids: ids, reassign: $("tac-reassign").checked },
       }).then(() => showToast("Mưu sĩ", "Đang xử lý trong nền...")).catch((e) => showToast("Lỗi", e.message, "error"));
     }));
     $("btn-tac-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tactician/stop`, { method: "POST" });
+
+    renderTacticianModalBody();
   }
 
   async function openEquipModal() {

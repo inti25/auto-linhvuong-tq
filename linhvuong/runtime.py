@@ -193,6 +193,8 @@ def serialize_roster(roster: Optional[Roster]) -> dict:
                 "tactician_id": getattr(g, "tactician_id", 0),
                 "tactician_name": g.tactician_name,
                 "is_mayor": bool(getattr(g, "is_mayor", False)),
+                "is_tactician": bool(getattr(g, "is_tactician", False)),
+                "is_available_tactician": bool(getattr(g, "is_available_tactician", False)),
                 "upgrading_time": getattr(g, "upgrading_time", 0),
                 "army": {
                     "infantry": army.infantry if army else 0,
@@ -2318,7 +2320,7 @@ class AccountSession:
                 summary = configure_tacticians(
                     self.gateway,
                     roster=fresh,
-                    target_vo_ids=list(general_ids),
+                    selected_general_ids=list(general_ids),
                     mode=mode,
                     reassign_existing=reassign,
                     stop_event=self._tac_stop,
