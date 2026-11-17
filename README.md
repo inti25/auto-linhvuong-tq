@@ -5,6 +5,8 @@ Công cụ tự động hóa cho game web Linh Vương, hỗ trợ vận hành �
 ## Auto dành cho Game Linh vương server Trung Quốc
 - http://sg.dipan.com/
 
+### [Tải về tại đây](https://github.com/inti25/auto-linhvuong-tq/releases)
+
 ### Phiên bản auto 1.x.x dành cho server 57 trở về trước
 
 ### Phiên bản auto 2.x.x dành cho server 58
