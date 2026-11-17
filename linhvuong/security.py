@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
-from .paths import atomic_write_text, get_data_dir, vault_path, web_auth_path
+from .paths import atomic_write_text, get_data_dir, vault_key_path, vault_path, web_auth_path
 
 VAULT_KEY_ENV = "LINHVUONG_VAULT_KEY"
 WEB_USERNAME_ENV = "LINHVUONG_WEB_USERNAME"
@@ -61,6 +61,24 @@ def _derive_fernet_key(master_key: str, salt: bytes) -> bytes:
     """Sinh khóa Fernet 32-byte URL-safe base64 từ `LINHVUONG_VAULT_KEY`."""
     dk = hashlib.pbkdf2_hmac("sha256", master_key.encode("utf-8"), salt, 200_000, dklen=32)
     return base64.urlsafe_b64encode(dk)
+
+
+def resolve_or_create_vault_key(data_dir: Optional[Union[str, Path]] = None) -> str:
+    """Lấy khóa chủ từ `LINHVUONG_VAULT_KEY` hoặc tự sinh tệp `.vault.key` (chmod 600)."""
+    env_key = os.environ.get(VAULT_KEY_ENV, "").strip()
+    if env_key:
+        return env_key
+    key_file = vault_key_path(data_dir)
+    if key_file.exists():
+        try:
+            existing = key_file.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+        except OSError:
+            pass
+    generated = secrets.token_urlsafe(32)
+    atomic_write_text(key_file, generated, mode=0o600)
+    return generated
 
 
 class CredentialVault:

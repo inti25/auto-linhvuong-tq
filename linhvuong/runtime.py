@@ -59,7 +59,7 @@ from .profile import BaseBinhManConfig, CityCraftConfig, Profile, ProfileStore
 from .proxy import DEFAULT_FREE_PROXY_URL, ProxyPool
 from .roster import Roster, fetch_roster
 from .scan import BasePeer, Scanner
-from .security import CredentialVault, VaultError
+from .security import CredentialVault, VaultError, resolve_or_create_vault_key
 from .tasks.base import CaptchaRequired, TaskContext
 from .tasks.binh_man import MAN_TARGET_OPTIONS, BinhMan
 from .tasks.building import (
@@ -100,6 +100,29 @@ RESUMABLE_TASKS = (
     "resource_monitor",
     "crafting",
 )
+
+AUTO_START_TASK_LABELS = (
+    ("building", "🏛️ Xây dựng"),
+    ("research", "🔬 Nghiên cứu"),
+    ("resource_monitor", "🌾 An dân / Tài nguyên"),
+    ("thaophat", "⚔️ Thảo phạt"),
+    ("binhman", "🏕️ Bình man"),
+    ("goidan", "🧛 Gọi man"),
+    ("nienthu", "🧧 Niên thú"),
+    ("crafting", "🛡️ Chế tạo quân giới"),
+)
+
+
+def _normalize_auto_start_tasks(raw: Any) -> list[str]:
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    allowed = set(RESUMABLE_TASKS)
+    out: list[str] = []
+    for item in raw:
+        name = str(item or "").strip()
+        if name in allowed and name not in out:
+            out.append(name)
+    return out
 
 LOG_CHANNELS = (
     "global",
@@ -2301,7 +2324,10 @@ class WorkspaceManager:
         if self._dir_lock is not None:
             self._dir_lock.acquire()
 
-        self.vault = CredentialVault(data_dir=self.data_dir, master_key=vault_key)
+        effective_vault_key = (
+            resolve_or_create_vault_key(self.data_dir) if vault_key is None else vault_key
+        )
+        self.vault = CredentialVault(data_dir=self.data_dir, master_key=effective_vault_key)
         self._lock = threading.RLock()
         self.accounts: dict[str, dict] = {}
         self.sessions: dict[str, AccountSession] = {}
@@ -2355,6 +2381,7 @@ class WorkspaceManager:
                         "proxy_user": v.get("proxy_user", ""),
                         "proxy_pass": v.get("proxy_pass", ""),
                         "auto_resume": bool(v.get("auto_resume", True)),
+                        "auto_start_tasks": _normalize_auto_start_tasks(v.get("auto_start_tasks")),
                     }
         elif data.get("username"):
             srv = data.get("server", "")
@@ -2368,6 +2395,7 @@ class WorkspaceManager:
                 "proxy_user": data.get("proxy_user", ""),
                 "proxy_pass": data.get("proxy_pass", ""),
                 "auto_resume": True,
+                "auto_start_tasks": [],
             }
         self.last_account = str(data.get("last_account", "") or "")
 
@@ -2387,6 +2415,7 @@ class WorkspaceManager:
                     "proxy_user": v.get("proxy_user", ""),
                     "proxy_pass": v.get("proxy_pass", ""),
                     "auto_resume": bool(v.get("auto_resume", True)),
+                    "auto_start_tasks": _normalize_auto_start_tasks(v.get("auto_start_tasks")),
                 }
             last_acc = self.last_account if self.last_account in clean_accounts else next(iter(clean_accounts.keys()), "")
             first_acc = next(iter(clean_accounts.values()), {})
@@ -2443,6 +2472,7 @@ class WorkspaceManager:
         proxy_user: str = "",
         proxy_pass: str = "",
         auto_resume: bool = True,
+        auto_start_tasks: Optional[list[str]] = None,
         old_key: Optional[str] = None,
     ) -> dict:
         sid = parse_server_id(str(server_id))
@@ -2451,12 +2481,18 @@ class WorkspaceManager:
             raise ValueError("Tên tài khoản không được để trống.")
         canonical = f"{usr} @ S{sid}"
         with self._lock:
+            existing_cfg = self.accounts.get(canonical) or (self.accounts.get(old_key) if old_key else None) or {}
             if old_key and old_key != canonical and old_key in self.accounts:
                 self.accounts.pop(old_key, None)
                 if old_key in self.sessions:
                     self.sessions[canonical] = self.sessions.pop(old_key)
                     self.sessions[canonical].account_key = canonical
                 self.vault.rename_entry(old_key, canonical)
+            resolved_tasks = (
+                _normalize_auto_start_tasks(auto_start_tasks)
+                if auto_start_tasks is not None
+                else _normalize_auto_start_tasks(existing_cfg.get("auto_start_tasks"))
+            )
             self.accounts[canonical] = {
                 "server": sid,
                 "username": usr,
@@ -2465,11 +2501,68 @@ class WorkspaceManager:
                 "proxy_user": proxy_user.strip(),
                 "proxy_pass": proxy_pass,
                 "auto_resume": bool(auto_resume),
+                "auto_start_tasks": resolved_tasks,
             }
             self.last_account = canonical
             self.persist_settings()
         self._broadcast(canonical, "accounts_changed", {"accounts": self.list_accounts()})
         return next(a for a in self.list_accounts() if a["account_key"] == canonical)
+
+    def set_account_vault_password(
+        self,
+        account_key: str,
+        *,
+        save: bool,
+        password: str = "",
+        auto_resume: Optional[bool] = None,
+    ) -> dict:
+        """Lưu hoặc xóa mật khẩu game trong Két Mật Khẩu Mã Hóa cho một tài khoản."""
+        with self._lock:
+            acc = self.accounts.get(account_key)
+            if not acc:
+                raise KeyError(f"Không tìm thấy tài khoản '{account_key}'.")
+            if save:
+                sess = self.sessions.get(account_key)
+                pwd = password or (sess._password if sess else "") or (
+                    self.vault.get_password(account_key) if self.vault.is_unlocked() else ""
+                )
+                if not pwd:
+                    raise ValueError("Vui lòng nhập mật khẩu game để lưu vào Két.")
+                eff_resume = bool(acc.get("auto_resume", True)) if auto_resume is None else bool(auto_resume)
+                self.vault.set_entry(account_key, pwd, auto_resume=eff_resume)
+            else:
+                self.vault.remove_entry(account_key)
+        accounts = self.list_accounts()
+        self._broadcast(account_key, "accounts_changed", {"accounts": accounts})
+        return next(a for a in accounts if a["account_key"] == account_key)
+
+    def update_account_autostart(
+        self,
+        account_key: str,
+        *,
+        auto_resume: Optional[bool] = None,
+        auto_start_tasks: Optional[list[str]] = None,
+    ) -> dict:
+        """Cập nhật tùy chọn tự động khởi chạy khi server/bot khởi động."""
+        with self._lock:
+            acc = self.accounts.get(account_key)
+            if not acc:
+                raise KeyError(f"Không tìm thấy tài khoản '{account_key}'.")
+            if auto_resume is not None:
+                acc["auto_resume"] = bool(auto_resume)
+            if auto_start_tasks is not None:
+                acc["auto_start_tasks"] = _normalize_auto_start_tasks(auto_start_tasks)
+            self.persist_settings()
+            if auto_resume is not None and self.vault.is_unlocked() and self.vault.has_vault_file():
+                try:
+                    entry = self.vault.get_entry(account_key)
+                    if entry and entry.get("password"):
+                        self.vault.set_entry(account_key, entry["password"], auto_resume=bool(acc["auto_resume"]))
+                except VaultError:
+                    pass
+        accounts = self.list_accounts()
+        self._broadcast(account_key, "accounts_changed", {"accounts": accounts})
+        return next(a for a in accounts if a["account_key"] == account_key)
 
     def delete_account(self, account_key: str) -> None:
         self.logout_account(account_key)
@@ -2508,6 +2601,7 @@ class WorkspaceManager:
         proxy_pass: str = "",
         save_to_vault: bool = False,
         auto_resume: bool = True,
+        auto_start_tasks: Optional[list[str]] = None,
         old_key: Optional[str] = None,
         fetch_initial_roster: bool = True,
     ) -> AccountSession:
@@ -2555,6 +2649,7 @@ class WorkspaceManager:
             proxy_user=p_user,
             proxy_pass=p_pass,
             auto_resume=auto_resume,
+            auto_start_tasks=auto_start_tasks,
             old_key=old_key,
         )
 
@@ -2671,12 +2766,15 @@ class WorkspaceManager:
                     auto_resume=bool(acc.get("auto_resume", True)),
                 )
                 restored.append(key)
+                tasks_to_start = list(_normalize_auto_start_tasks(acc.get("auto_start_tasks")))
                 if acc.get("auto_resume", True) and entry.get("auto_resume", True):
-                    tasks_to_resume = saved_state.get(key, {}).get("running_tasks", [])
-                    if tasks_to_resume:
-                        resumed = sess.resume_tasks(tasks_to_resume)
-                        if resumed:
-                            resumed_tasks[key] = resumed
+                    for tname in saved_state.get(key, {}).get("running_tasks", []):
+                        if tname not in tasks_to_start:
+                            tasks_to_start.append(tname)
+                if tasks_to_start:
+                    resumed = sess.resume_tasks(tasks_to_start)
+                    if resumed:
+                        resumed_tasks[key] = resumed
             except Exception as exc:
                 logger.warning(f"Tự khôi phục đăng nhập tài khoản '{key}' thất bại: {exc}")
 

@@ -11,7 +11,13 @@ from linhvuong.paths import (
     settings_path,
 )
 from linhvuong.profile import ProfileStore
-from linhvuong.security import CredentialVault, VaultError, WebAdminAuth, is_loopback_host
+from linhvuong.security import (
+    CredentialVault,
+    VaultError,
+    WebAdminAuth,
+    is_loopback_host,
+    resolve_or_create_vault_key,
+)
 
 
 def test_data_dir_resolution(tmp_path, monkeypatch):
@@ -112,3 +118,15 @@ def test_log_viewer_helpers_and_path_traversal_guard(tmp_path):
         read_log_tail("../secret.txt", log_dir=ldir)
     with pytest.raises(ValueError):
         read_log_tail("config.json", log_dir=ldir)
+
+
+def test_resolve_or_create_vault_key_and_env_override(tmp_path, monkeypatch):
+    monkeypatch.delenv("LINHVUONG_VAULT_KEY", raising=False)
+    k1 = resolve_or_create_vault_key(tmp_path)
+    assert k1
+    assert (tmp_path / ".vault.key").exists()
+    k2 = resolve_or_create_vault_key(tmp_path)
+    assert k2 == k1
+
+    monkeypatch.setenv("LINHVUONG_VAULT_KEY", "env-master-key")
+    assert resolve_or_create_vault_key(tmp_path) == "env-master-key"

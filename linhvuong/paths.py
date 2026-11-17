@@ -43,6 +43,11 @@ def vault_path(data_dir: Optional[Union[str, Path]] = None) -> Path:
     return get_data_dir(data_dir) / "vault.enc"
 
 
+def vault_key_path(data_dir: Optional[Union[str, Path]] = None) -> Path:
+    """Đường dẫn tệp khóa chủ tự sinh cho Két Mật Khẩu Mã Hóa (`.vault.key`)."""
+    return get_data_dir(data_dir) / ".vault.key"
+
+
 def web_auth_path(data_dir: Optional[Union[str, Path]] = None) -> Path:
     """Đường dẫn tệp cấu hình Phiên Quản Trị Web (`web_auth.json`)."""
     return get_data_dir(data_dir) / "web_auth.json"

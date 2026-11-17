@@ -17,7 +17,7 @@ from ..battle import ATTACK_ACTION_COMBO_OPTIONS, FORMATION_NAMES, STRATAGEMS
 from ..logger import list_log_files, read_log_tail
 from ..paths import logs_dir
 from ..proxy import DEFAULT_FREE_PROXY_URL
-from ..runtime import LOG_CHANNELS, AccountSession, WorkspaceManager
+from ..runtime import AUTO_START_TASK_LABELS, LOG_CHANNELS, AccountSession, WorkspaceManager
 from ..security import SESSION_COOKIE_NAME, VaultError, WebAdminAuth
 from ..tasks.binh_man import MAN_TARGET_OPTIONS
 from ..tasks.building import BUILDING_NAMES, CHEST_MAPPING, chest_needs_city_switch
@@ -52,11 +52,14 @@ class AdminPasswordChangeRequest(BaseModel):
 class AccountConfigRequest(BaseModel):
     server_id: int
     username: str
+    password: str = ""
     proxy_url: str = ""
     proxy: str = ""
     proxy_user: str = ""
     proxy_pass: str = ""
+    save_to_vault: Optional[bool] = None
     auto_resume: bool = True
+    auto_start_tasks: Optional[list[str]] = None
     old_key: Optional[str] = None
 
 
@@ -70,7 +73,20 @@ class GameLoginRequest(BaseModel):
     proxy_pass: str = ""
     save_to_vault: bool = False
     auto_resume: bool = True
+    auto_start_tasks: Optional[list[str]] = None
     old_key: Optional[str] = None
+
+
+class VaultUpdateRequest(BaseModel):
+    save: bool = True
+    password: str = ""
+
+
+class AutoStartUpdateRequest(BaseModel):
+    auto_resume: bool = True
+    auto_start_tasks: list[str] = []
+    save_to_vault: Optional[bool] = None
+    password: str = ""
 
 
 class ProxyTestRequest(BaseModel):
@@ -270,6 +286,7 @@ def create_app(
             "stratagems": [{"id": k, "name": v} for k, v in sorted(STRATAGEMS.items())],
             "default_free_proxy_url": DEFAULT_FREE_PROXY_URL,
             "log_channels": list(LOG_CHANNELS),
+            "auto_start_task_options": [{"id": tid, "label": lbl} for tid, lbl in AUTO_START_TASK_LABELS],
             "vault_unlocked": ws_manager.vault.is_unlocked(),
         }
 
@@ -283,9 +300,56 @@ def create_app(
     @app.post("/api/accounts", dependencies=[Depends(require_admin)])
     def save_account_config(payload: AccountConfigRequest) -> dict:
         try:
-            acc = ws_manager.add_or_update_account(**payload.model_dump())
+            data = payload.model_dump()
+            pwd = data.pop("password", "")
+            save_vault = data.pop("save_to_vault", None)
+            acc = ws_manager.add_or_update_account(**data)
+            if save_vault is not None:
+                acc = ws_manager.set_account_vault_password(
+                    acc["account_key"],
+                    save=bool(save_vault),
+                    password=pwd,
+                    auto_resume=payload.auto_resume,
+                )
             return {"ok": True, "account": acc}
-        except ValueError as exc:
+        except (ValueError, VaultError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/vault", dependencies=[Depends(require_admin)])
+    def update_account_vault(account_key: str, payload: VaultUpdateRequest) -> dict:
+        key = urllib.parse.unquote(account_key)
+        try:
+            acc = ws_manager.set_account_vault_password(
+                key,
+                save=payload.save,
+                password=payload.password,
+            )
+            return {"ok": True, "account": acc}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, VaultError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/accounts/{account_key}/autostart", dependencies=[Depends(require_admin)])
+    def update_account_autostart(account_key: str, payload: AutoStartUpdateRequest) -> dict:
+        key = urllib.parse.unquote(account_key)
+        try:
+            acc = ws_manager.update_account_autostart(
+                key,
+                auto_resume=payload.auto_resume,
+                auto_start_tasks=payload.auto_start_tasks,
+            )
+            if payload.save_to_vault is not None:
+                acc = ws_manager.set_account_vault_password(
+                    key,
+                    save=bool(payload.save_to_vault),
+                    password=payload.password,
+                    auto_resume=payload.auto_resume,
+                )
+            return {"ok": True, "account": acc}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, VaultError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/accounts/proxy-test", dependencies=[Depends(require_admin)])

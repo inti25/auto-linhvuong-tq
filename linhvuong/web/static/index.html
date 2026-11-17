@@ -71,6 +71,19 @@
         </div>
       </header>
 
+      <div id="profile-header-bar" class="profile-bar hidden">
+        <div class="profile-bar-left">
+          <span>📁 Hồ sơ: <strong id="hdr-profile-name">-</strong></span>
+          <a id="hdr-profile-export" class="btn btn-sm" href="#" target="_blank">💾 Tải JSON</a>
+          <label class="btn btn-sm" style="margin:0;">📂 Nạp JSON <input id="hdr-profile-import" type="file" accept=".json" class="hidden" /></label>
+        </div>
+        <div class="profile-bar-right">
+          <label class="hdr-check" title="Lưu mật khẩu mã hóa vào Két để tự động đăng nhập lại khi server khởi động"><input id="hdr-save-vault" type="checkbox" /> 🔐 Lưu mật khẩu</label>
+          <label class="hdr-check" title="Tự động đăng nhập lại và chạy tiếp các tác vụ đang chạy trước khi tắt/restart"><input id="hdr-auto-resume" type="checkbox" /> 🔄 Tự chạy lại khi restart</label>
+          <button id="btn-autostart-cfg" class="btn-sm">🚀 Tự khởi chạy (<span id="hdr-autostart-count">0</span>)</button>
+        </div>
+      </div>
+
       <div id="captcha-banner" class="captcha-banner hidden">
         <div>
           <strong>⚠️ CẦN GIẢI CAPTCHA:</strong>
@@ -119,9 +132,15 @@
                 <input id="gl-proxy-pass" type="password" />
               </div>
             </div>
-            <div id="gl-vault-box" class="form-row hidden" style="margin-top:4px;">
-              <label><input id="gl-save-vault" type="checkbox" /> Lưu vào Két Mật Khẩu Mã Hóa</label>
-              <label><input id="gl-auto-resume" type="checkbox" checked /> Tự chạy lại tác vụ khi reboot</label>
+            <div id="gl-vault-box" class="hidden" style="margin-top:6px;">
+              <div class="form-row" style="margin-bottom:6px;">
+                <label><input id="gl-save-vault" type="checkbox" checked /> 🔐 Lưu mật khẩu</label>
+                <label><input id="gl-auto-resume" type="checkbox" checked /> 🔄 Tự chạy lại tác vụ khi restart</label>
+              </div>
+              <div class="field" style="margin-bottom:4px;">
+                <label>🚀 Tự động khởi chạy tác vụ khi server khởi động (tùy chọn)</label>
+                <div id="gl-autostart-tasks" class="autostart-grid"></div>
+              </div>
             </div>
             <div id="gl-status" style="color:#fbbf24;font-size:12px;margin:8px 0;"></div>
             <div class="form-row" style="margin-bottom:0;">
