@@ -418,6 +418,11 @@ class LogisticsProfile:
     explore_use_whip: bool = False
     explore_use_coin: bool = False
     explore_turns: str = "1"
+    # ADR-0042: hàng đợi Chuyển quân giới chạy lặp + Cống quận tự động
+    transfer_orders: list[dict] = field(default_factory=list)  # {from_city_id,to_city_id,army_id,amount}
+    transfer_interval: str = "60"
+    tribute_enabled: bool = False
+    tribute_building_gid: int = 1  # 1: Quan Phủ, 2: Tường Thành
 
     @classmethod
     def from_dict(cls, data: dict) -> "LogisticsProfile":
@@ -427,7 +432,30 @@ class LogisticsProfile:
         use_coin = bool(data.get("explore_use_coin", False))
         if use_whip and use_coin:
             use_coin = False
+        orders: list[dict] = []
+        raw_orders = data.get("transfer_orders")
+        if isinstance(raw_orders, list):
+            for o in raw_orders:
+                try:
+                    orders.append({
+                        "from_city_id": int(o["from_city_id"]),
+                        "to_city_id": int(o["to_city_id"]),
+                        "army_id": int(o["army_id"]),
+                        "amount": max(1, int(o["amount"])),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+        try:
+            t_gid = int(data.get("tribute_building_gid", 1))
+        except (TypeError, ValueError):
+            t_gid = 1
+        if t_gid not in (1, 2):
+            t_gid = 1
         return cls(
+            transfer_orders=orders,
+            transfer_interval=str(data.get("transfer_interval", "60")),
+            tribute_enabled=bool(data.get("tribute_enabled", False)),
+            tribute_building_gid=t_gid,
             army_type_idx=int(data.get("army_type_idx", 0)),
             amount=str(data.get("amount", "1000")),
             auto_daily_reward=bool(data.get("auto_daily_reward", True)),

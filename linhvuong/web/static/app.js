@@ -11,6 +11,8 @@
     ws: null,
     selectedBldCityId: null,
     selectedBldPid: null,
+    selectedBldGid: null,
+    selectedXferIdx: -1,
     expandedBldGroups: new Set(),
     selectedOverviewCityId: null,
     selectedOverviewGenId: null,
@@ -19,7 +21,17 @@
     selectedCraftCityId: null,
     selectedBmBaseId: null,
     selectedResTechId: null,
+    moraleCityFilter: "all",
+    selectedDtCampId: null,
+    logiFromId: null,
+    logiToId: null,
+    logiType: "1",
+    chestType: null,
+    chestCityId: null,
     battleIdInput: "0",
+    selectedBattleOurPos: null,
+    btManualForm: null,
+    btManualStrat: null,
     saveTimer: null,
     pendingProfilePatch: null,
     pendingSelfProfileUpdates: 0,
@@ -228,6 +240,10 @@
     } else if (event === "roster_updated") {
       state.snapshot.roster = payload;
       renderActiveTab();
+      if (typeof renderTacticianModalBody === "function" && $("tac-tbody")) renderTacticianModalBody();
+      if (typeof renderEquipModalBody === "function" && $("eq-tbody")) renderEquipModalBody();
+      if (typeof renderArmamentModalBody === "function" && $("arm-tbody")) renderArmamentModalBody();
+      if (typeof renderRenameModalBody === "function" && $("ren-tbody")) renderRenameModalBody();
     } else if (event === "techs_updated") {
       state.snapshot.tech_levels = payload.levels || {};
       state.snapshot.tech_current = payload.current || null;
@@ -273,8 +289,42 @@
         $("sidebar").classList.remove("open");
         selectAccount(el.dataset.key);
       });
+      el.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showAccountContextMenu(e.clientX, e.clientY, el.dataset.key);
+      });
     });
     list.scrollTop = prevScrollTop;
+  }
+
+  function hideAccountContextMenu() {
+    const old = document.getElementById("acc-ctx-menu");
+    if (old) old.remove();
+  }
+
+  function showAccountContextMenu(x, y, key) {
+    hideAccountContextMenu();
+    const menu = document.createElement("div");
+    menu.id = "acc-ctx-menu";
+    menu.className = "ctx-menu";
+    menu.style.left = `${Math.min(x, window.innerWidth - 190)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - 90)}px`;
+    menu.innerHTML = `<button data-act="logout">🚪 Đăng xuất</button><button data-act="delete" class="danger">🗑️ Xóa tài khoản</button>`;
+    document.body.appendChild(menu);
+    menu.querySelector('[data-act="logout"]').onclick = async () => {
+      hideAccountContextMenu();
+      try {
+        await api(`/api/accounts/${encodeURIComponent(key)}/logout`, { method: "POST" });
+        showToast("Đăng xuất", `Đã đăng xuất ${key}`);
+      } catch (err) { showToast("Lỗi", err.message, "error"); }
+    };
+    menu.querySelector('[data-act="delete"]').onclick = async () => {
+      hideAccountContextMenu();
+      if (!confirm(`Xóa tài khoản '${key}'?`)) return;
+      try {
+        await api(`/api/accounts/${encodeURIComponent(key)}`, { method: "DELETE" });
+      } catch (err) { showToast("Lỗi", err.message, "error"); }
+    };
   }
 
   async function selectAccount(key) {
@@ -318,6 +368,7 @@
     { id: "goidan", label: "🧛 Gọi man" },
     { id: "nienthu", label: "🧧 Niên thú" },
     { id: "crafting", label: "🛡️ Chế tạo quân giới" },
+    { id: "transfer_loop", label: "🚚 Chuyển quân giới lặp" },
   ];
 
   function getAutoStartOptions() {
@@ -355,6 +406,7 @@
     $("btn-rotate-proxy").classList.add("hidden");
     $("btn-notify-settings").classList.add("hidden");
     $("btn-account-logout").classList.add("hidden");
+    $("btn-relogin").classList.add("hidden");
 
     const cfg = acc?.config || {};
     $("ws-title").textContent = acc ? acc.account_key : "Thêm tài khoản mới";
@@ -363,6 +415,7 @@
     $("ws-proxy-pill").classList.add("hidden");
 
     $("gl-server").value = cfg.server || "";
+    updateServerHint();
     $("gl-user").value = cfg.username || "";
     $("gl-pass").value = "";
     $("gl-proxy-url").value = cfg.proxy_url || "";
@@ -376,6 +429,26 @@
     renderAutoStartCheckboxes("gl-autostart-tasks", cfg.auto_start_tasks || [], "gl-as-chk");
     $("btn-delete-acc").classList.toggle("hidden", !acc);
     $("gl-status").textContent = "";
+  }
+
+  function updateServerHint() {
+    const el = $("gl-server-hint");
+    if (!el) return;
+    const sid = Number($("gl-server").value);
+    el.textContent = sid > 0 ? `Cổng game: http://sg${sid}.dipan.com/` : "";
+  }
+
+  // Tự tách chuỗi proxy ip:port:user:pass (giống Desktop _on_proxy_change)
+  function autoSplitProxyInput() {
+    const raw = $("gl-proxy").value.trim();
+    if (!raw || raw.includes("://") || raw.includes("@")) return;
+    const parts = raw.split(":");
+    if (parts.length === 4 && /^\d+$/.test(parts[1])) {
+      $("gl-proxy").value = `${parts[0]}:${parts[1]}`;
+      $("gl-proxy-user").value = parts[2];
+      $("gl-proxy-pass").value = parts[3];
+      $("gl-status").textContent = "Đã tự tách host:port / user / pass từ chuỗi proxy.";
+    }
   }
 
   function renderHeaderProfileBar() {
@@ -399,6 +472,7 @@
     $("btn-reload-roster").classList.remove("hidden");
     $("btn-notify-settings").classList.remove("hidden");
     $("btn-account-logout").classList.remove("hidden");
+    $("btn-relogin").classList.remove("hidden");
     renderTopbar();
     renderHeaderProfileBar();
     renderActiveTab();
@@ -520,7 +594,18 @@
       goidan: "log-goidan",
       battle: "log-battle",
       nienthu: "log-nienthu",
+      tactician: "log-tactician",
+      equip: "log-equip",
+      armament: "log-armament",
+      rename: "log-rename",
     };
+    if (channel === "building" || channel === "logistics") {
+      const mb = $("log-modal-box");
+      if (mb) {
+        mb.textContent += (mb.textContent ? "\n" : "") + line;
+        mb.scrollTop = mb.scrollHeight;
+      }
+    }
     const box = $(map[channel]);
     if (box) {
       const stickBottom = isNearBottom(box);
@@ -574,6 +659,28 @@
       const a = aux.nien_thu_announcement;
       ntAnn.textContent = `Kênh thế giới: ${a.vi_name} (${a.state_name}) - ${a.server_time || "?"}`;
     }
+    const tacLbl = $("tac-status-lbl");
+    if (tacLbl) tacLbl.textContent = aux.tactician_status || "Sẵn sàng";
+    const xferLbl = $("xfer-status-lbl");
+    if (xferLbl) xferLbl.textContent = aux.transfer_status || "Sẵn sàng";
+    const armLbl = $("arm-status-lbl");
+    if (armLbl) armLbl.textContent = aux.armament_status || "Sẵn sàng";
+    const renLbl = $("ren-status-lbl");
+    if (renLbl) renLbl.textContent = `${aux.rename_status || "Sẵn sàng"}${aux.rename_progress?.total ? ` (${aux.rename_progress.done}/${aux.rename_progress.total})` : ""}`;
+    const eqLbl = $("eq-status-lbl");
+    if (eqLbl) eqLbl.textContent = aux.equip_status || "Sẵn sàng";
+    const ntSt = $("nt-status-lbl");
+    if (ntSt) ntSt.textContent = ntStatusText();
+  }
+
+  function ntStatusText() {
+    const t = state.snapshot?.summary?.tasks?.nienthu;
+    if (!t) return "Chưa chạy";
+    if (t.running) return "Đang chạy";
+    const st = String(t.status || "");
+    if (st.includes("Captcha")) return "Tạm dừng (Captcha)";
+    if (st.includes("玉兔") || st.toLowerCase().includes("hoàn")) return "Đã hoàn tất (玉兔呈祥)";
+    return st && st !== "idle" ? st : "Đã dừng";
   }
 
   function updateRunningButtonsOnly() {
@@ -592,6 +699,7 @@
     bindBtn("btn-tgl-gd", t.goidan?.running, "⏹️ Dừng Gọi Man", "▶️ Bắt đầu Gọi Man");
     bindBtn("btn-tgl-nt", t.nienthu?.running, "⏹️ Dừng Niên Thú", "▶️ Bắt đầu Niên Thú");
     bindBtn("btn-tgl-craft", t.crafting?.running, "⏹️ Dừng Chế Tạo", "▶️ Chạy Chế Tạo");
+    bindBtn("btn-tgl-xfer", t.transfer_loop?.running, "⏹️ Dừng lặp", "▶️ Chạy lặp");
   }
 
   function fmtSec(s) {
@@ -735,10 +843,13 @@
       "24: Dân Sinh Bảo Đỉnh",
       "35: Bạch Kim Tài Nguyên Lễ Hộp",
     ];
-    const chestOpts = (state.meta?.chests || []).map((c) => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("");
-    const baseOpts = bases.map((b) => `<option value="${b.id}">${esc(b.display_name)}</option>`).join("");
-    const cityOpts = cities.map((c) => `<option value="${c.id}">${esc(c.display_name)}</option>`).join("");
-    const campOpts = camps.map((c) => `<option value="${c.id}">${esc(c.display_name)}</option>`).join("");
+    const mkOpts = (list, selId, lbl = "display_name") => list.map((x) => `<option value="${x.id}" ${String(x.id) === String(selId) ? "selected" : ""}>${esc(x[lbl])}</option>`).join("");
+    const chestSel = state.chestType || state.meta?.chests?.[0]?.name || "";
+    const chestOpts = (state.meta?.chests || []).map((c) => `<option value="${esc(c.name)}" ${c.name === chestSel ? "selected" : ""}>${esc(c.name)}</option>`).join("");
+    const baseOptsFrom = mkOpts(bases, state.logiFromId ?? bases[0]?.id);
+    const baseOptsTo = mkOpts(bases, state.logiToId ?? bases[1]?.id ?? bases[0]?.id);
+    const cityOpts = mkOpts(cities, state.chestCityId ?? cities[0]?.id);
+    const campOpts = mkOpts(camps, state.selectedDtCampId ?? camps[0]?.id);
 
     // Group building plans by gid preserving order (ADR-0016)
     const groupedOrder = [];
@@ -767,7 +878,7 @@
         const lvls = plots.map((x) => Number(x.cur_lvl || 0));
         const maxTgt = Math.max(...plots.map((x) => Number(x.target_level || 20)));
         const isOpen = state.expandedBldGroups.has(gid);
-        bldRowsHtml += `<tr style="background:#1c2136;" data-group="${gid}">
+        bldRowsHtml += `<tr class="row-clickable" style="background:${state.selectedBldGid === gid ? "rgba(108,123,255,.28)" : "#1c2136"};" data-group="${gid}">
           <td><input type="checkbox" class="bld-grp-chk" data-gid="${gid}" ${allEn ? "checked" : ""}/></td>
           <td><button class="btn-sm bld-grp-exp" data-gid="${gid}">${isOpen ? "▾" : "▸"}</button> <strong>${esc(plots[0].name)} (${plots.length} ô)</strong></td>
           <td>Nhóm</td>
@@ -777,7 +888,7 @@
         if (isOpen) {
           for (const p of plots) {
             const done = Number(p.cur_lvl || 0) >= Number(p.target_level || 20);
-            bldRowsHtml += `<tr class="${done ? "row-done" : ""}" data-pid="${p.pid}">
+            bldRowsHtml += `<tr class="${done ? "row-done" : ""} ${state.selectedBldPid === p.pid ? "selected" : ""}" data-pid="${p.pid}">
               <td><input type="checkbox" class="bld-chk" data-pid="${p.pid}" ${p.enabled ? "checked" : ""}/></td>
               <td style="padding-left:26px;">↳ Ô ${p.pid}</td>
               <td>${p.pid}</td>
@@ -794,6 +905,14 @@
       : (state.meta?.tech_names || []).map((t) => ({ id: t.id, name: t.name, enabled: false, target_level: 20, current_level: snap.tech_levels[t.id] ?? "-" }));
 
     const mergedLogs = [...(snap.logs.building || []), ...(snap.logs.logistics || [])].slice(-250);
+    const ARMY_NAMES = { 1: "Bộ binh", 2: "Kỵ binh", 3: "Cung binh" };
+    const baseNameOf = (id) => bases.find((b) => b.id === Number(id))?.name || id;
+    const xferOrders = logi.transfer_orders || [];
+    const xferRows = xferOrders.length
+      ? xferOrders.map((o, i) => `<tr class="xfer-row row-clickable ${i === state.selectedXferIdx ? "selected" : ""}" data-idx="${i}"><td>${esc(baseNameOf(o.from_city_id))} ➔ ${esc(baseNameOf(o.to_city_id))}</td><td>${o.amount}</td><td>${esc(ARMY_NAMES[o.army_id] || o.army_id)}</td></tr>`).join("")
+      : '<tr><td colspan="3" style="color:var(--muted);">Chưa có lệnh. Chọn Từ ➔ Đến, loại quân, SL rồi bấm Add.</td></tr>';
+    const tc = snap.tech_current;
+    const techCurHtml = tc ? ` <small style="color:var(--info);font-weight:400;">• Đang NC: ${esc(tc.name)} (${esc(tc.cur)} ➔ ${esc(tc.next)}, còn ${esc(tc.left)})</small>` : "";
 
     root.innerHTML = `
       <div class="grid-internal">
@@ -809,6 +928,10 @@
             <div class="form-row" style="margin-bottom:0;">
               <button id="btn-bld-all-on" class="btn-sm">☑ Chọn hết thành</button>
               <button id="btn-bld-all-off" class="btn-sm">☐ Bỏ hết</button>
+            </div>
+            <div class="form-row" style="margin:8px 0 0;">
+              <button id="btn-nc-clear" class="btn-sm">✖ Bỏ NC</button>
+              <button class="btn-sm btn-view-log">🔍 Xem Log</button>
             </div>
           </div>
 
@@ -836,12 +959,13 @@
           <div class="card">
             <div class="card-title">🏕️ Di Trại Độc Lập</div>
             <div class="field"><label>Doanh trại</label><select id="dt-camp">${campOpts}</select></div>
+            <div id="dt-origin-lbl" style="font-size:12px;font-weight:700;color:var(--accent);margin-bottom:6px;">Vị trí: (---, ---)</div>
             <div class="form-row">
               <label>Đích X <input id="dt-x" type="number" value="${esc(dt.dest_x)}" style="width:70px;"/></label>
               <label>Y <input id="dt-y" type="number" value="${esc(dt.dest_y)}" style="width:70px;"/></label>
             </div>
             <div class="form-row">
-              <button id="btn-dt-start" class="btn-success btn-sm">▶ Dịch Trại</button>
+              <button id="btn-dt-start" class="btn-success btn-sm">▶ Di Trại</button>
               <button id="btn-dt-stop" class="btn-danger btn-sm">⏹ Dừng</button>
             </div>
             <div id="dt-status-lbl" style="font-size:12px;color:var(--info);">Sẵn sàng</div>
@@ -864,6 +988,14 @@
               <label><input id="bld-even" type="checkbox" ${bld.even_upgrade ? "checked" : ""}/> Nâng đồng đều</label>
             </div>
             <div class="form-row">
+              <label>Cấp mục tiêu <input id="bld-tgt-lvl" type="number" value="20" min="0" max="40" style="width:58px;"/></label>
+              <button id="btn-bld-up-lvl" class="btn-success btn-sm">Nâng</button>
+              <button id="btn-bld-down-lvl" class="btn-danger btn-sm">Hạ</button>
+              <button id="btn-bld-mv-up" class="btn-sm" title="Đưa lên ưu tiên cao hơn">↑</button>
+              <button id="btn-bld-mv-down" class="btn-sm" title="Đưa xuống ưu tiên thấp hơn">↓</button>
+              <span style="color:var(--muted);font-size:11px;">(bấm chọn dòng hoặc nhóm; 0 = dỡ bỏ)</span>
+            </div>
+            <div class="form-row">
               <button id="btn-bld-all-chk" class="btn-sm">☑ Chọn tất cả</button>
               <button id="btn-bld-none-chk" class="btn-sm">☐ Bỏ chọn</button>
               <input id="bld-batch-lvl" type="number" value="20" min="0" max="35" style="width:60px;"/>
@@ -880,7 +1012,7 @@
 
           <div class="card">
             <div class="card-title">
-              <span>🔬 Kỹ Thuật Đại Học (29 Kỹ Thuật)</span>
+              <span>🔬 Kỹ Thuật Đại Học (29 Kỹ Thuật)${techCurHtml}</span>
               <button id="btn-res-fetch" class="btn-primary btn-sm">🔄 Tải kỹ thuật</button>
             </div>
             <div class="form-row">
@@ -935,7 +1067,7 @@
             </div>
             <div class="form-row">
               <label><input id="aux-daily" type="checkbox" ${logi.auto_daily_reward ? "checked" : ""}/> Thưởng ngày</label>
-              <label><input id="aux-comfort" type="checkbox" ${bld.auto_comfort ? "checked" : ""}/> Tự an ủi</label>
+              <label><input id="aux-comfort" type="checkbox" ${bld.auto_comfort ? "checked" : ""}/> Tự An Dân</label>
               <label><input id="aux-boost" type="checkbox" ${bld.auto_boost ? "checked" : ""}/> DS kiến trúc <span id="aux-boost-lbl" style="color:#4ade80;"></span></label>
             </div>
             <div class="form-row">
@@ -944,6 +1076,17 @@
               <label><input id="aux-coin" type="checkbox" ${logi.explore_use_coin ? "checked" : ""}/> Coin</label>
               <input id="aux-turns" type="number" value="${esc(logi.explore_turns)}" style="width:52px;" title="Số lượt"/>
               <button id="btn-run-explore" class="btn-sm">🧭 Thám bảo</button>
+            </div>
+            <div class="form-row">
+              <label><input id="aux-tribute" type="checkbox" ${logi.tribute_enabled ? "checked" : ""}/> Cống quận</label>
+              <select id="aux-tribute-gid">
+                <option value="1" ${Number(logi.tribute_building_gid) === 1 ? "selected" : ""}>官府 (Quan Phủ)</option>
+                <option value="2" ${Number(logi.tribute_building_gid) === 2 ? "selected" : ""}>城墙 (Tường Thành)</option>
+              </select>
+              <button id="btn-tribute-now" class="btn-sm">🏛️ Cống quận ngay</button>
+            </div>
+            <div class="form-row" style="margin-bottom:0;">
+              <button id="btn-apply-rsrc" class="btn-primary btn-sm">✅ Áp Dụng Thiết Lập</button>
             </div>
           </div>
 
@@ -961,12 +1104,25 @@
             <div class="progress-track"><div id="chest-progress-fill" class="progress-fill"></div></div>
             <div id="chest-progress-lbl" style="font-size:12px;color:var(--muted);margin:4px 0 8px;">Sẵn sàng</div>
 
+            <div class="card-title" style="margin-top:6px;">🚚 Chuyển Quân Giới</div>
             <div class="form-row">
-              <select id="logi-from">${baseOpts}</select> ➔ <select id="logi-to">${baseOpts}</select>
-              <select id="logi-type"><option value="1">1: Bộ binh</option><option value="2">2: Kỵ binh</option><option value="3">3: Cung binh</option></select>
-              <input id="logi-amt" type="number" value="${esc(logi.amount)}" style="width:75px;"/>
-              <button id="btn-logi-xfer" class="btn-sm">🚚 Chuyển quân</button>
-              <button id="btn-logi-comfort" class="btn-sm">🕊️ An dân</button>
+              <select id="logi-from">${baseOptsFrom}</select> ➔ <select id="logi-to">${baseOptsTo}</select>
+              <select id="logi-type"><option value="1" ${state.logiType === "1" ? "selected" : ""}>1: Bộ binh</option><option value="2" ${state.logiType === "2" ? "selected" : ""}>2: Kỵ binh</option><option value="3" ${state.logiType === "3" ? "selected" : ""}>3: Cung binh</option></select>
+              <input id="logi-amt" type="number" value="${esc(logi.amount)}" style="width:75px;" title="SL"/>
+              <button id="btn-xfer-add" class="btn-sm">➕ Add</button>
+              <button id="btn-xfer-del" class="btn-sm">🗑️ Xóa</button>
+            </div>
+            <div class="table-wrap" style="max-height:120px;">
+              <table><thead><tr><th>Từ – Đến</th><th>SL</th><th>Quân giới</th></tr></thead><tbody>${xferRows}</tbody></table>
+            </div>
+            <div class="form-row" style="margin-top:6px;">
+              <label>Lặp lại (giây) <input id="xfer-int" type="number" min="3" value="${esc(logi.transfer_interval)}" style="width:62px;"/></label>
+              <button id="btn-tgl-xfer" class="btn-success btn-sm">▶️ Chạy lặp</button>
+              <button id="btn-logi-xfer" class="btn-sm" title="Chuyển ngay một lần theo lựa chọn đang nhập">🚚 Chuyển ngay</button>
+            </div>
+            <div id="xfer-status-lbl" style="font-size:12px;color:var(--info);margin-bottom:6px;">Sẵn sàng</div>
+            <div class="form-row" style="margin-bottom:0;">
+              <button id="btn-logi-comfort" class="btn-sm">🕊️ An Dân</button>
               <button id="btn-logi-daily" class="btn-sm">🎁 Điểm danh</button>
             </div>
           </div>
@@ -974,7 +1130,7 @@
           <div class="card">
             <div class="card-title">
               <span>📜 Nhật ký Nội Chính & Hậu Cần</span>
-              <button id="btn-clr-int-log" class="btn-sm">🗑️ Xóa</button>
+              <span><button class="btn-sm btn-view-log">🔍 Xem Log</button> <button id="btn-clr-int-log" class="btn-sm">🗑️ Xóa</button></span>
             </div>
             <div id="log-internal" class="log-box">${esc(mergedLogs.join("\n"))}</div>
           </div>
@@ -1099,9 +1255,58 @@
       tr.onclick = (e) => {
         if (e.target.tagName === "INPUT") return;
         state.selectedBldPid = Number(tr.dataset.pid);
+        state.selectedBldGid = null;
         renderActiveTab();
       };
     });
+    root.querySelectorAll("tr[data-group]").forEach((tr) => {
+      tr.onclick = (e) => {
+        if (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON") return;
+        state.selectedBldGid = Number(tr.dataset.group);
+        state.selectedBldPid = null;
+        renderActiveTab();
+      };
+    });
+
+    // Thanh Cấp mục tiêu: Nâng / Hạ / ↑ / ↓ (chuẩn Desktop)
+    const selectedBldPlans = () => {
+      if (state.selectedBldGid != null) return plans.filter((p) => Number(p.gid) === state.selectedBldGid);
+      if (state.selectedBldPid != null) return plans.filter((p) => Number(p.pid) === state.selectedBldPid);
+      return [];
+    };
+    const applyBldTarget = (rawLvl) => {
+      const lvl = Number(rawLvl);
+      if (!Number.isInteger(lvl) || lvl < 0 || lvl > 40) return showToast("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 40 (0: dỡ bỏ)!", "error");
+      const sel = selectedBldPlans();
+      if (!sel.length) return showToast("Cảnh báo", "Vui lòng chọn 1 công trình hoặc nhóm trong bảng!", "warn");
+      sel.forEach((p) => { p.target_level = lvl; p.enabled = true; });
+      scheduleProfileSave({ building: { cities: bld.cities } });
+      renderActiveTab();
+    };
+    $("btn-bld-up-lvl").onclick = () => applyBldTarget($("bld-tgt-lvl").value);
+    $("btn-bld-down-lvl").onclick = () => applyBldTarget($("bld-tgt-lvl").value);
+    const moveBld = (dir) => {
+      let gid = state.selectedBldGid;
+      if (gid == null && state.selectedBldPid != null) gid = Number(plans.find((p) => Number(p.pid) === state.selectedBldPid)?.gid);
+      if (gid == null || Number.isNaN(gid)) return;
+      const order = [];
+      const map = {};
+      for (const p of plans) {
+        const g = Number(p.gid || 1);
+        if (!map[g]) { map[g] = []; order.push(g); }
+        map[g].push(p);
+      }
+      const i = order.indexOf(gid);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= order.length) return;
+      [order[i], order[j]] = [order[j], order[i]];
+      const flat = order.flatMap((g) => map[g]);
+      plans.splice(0, plans.length, ...flat);
+      scheduleProfileSave({ building: { cities: bld.cities } });
+      renderActiveTab();
+    };
+    $("btn-bld-mv-up").onclick = () => moveBld(-1);
+    $("btn-bld-mv-down").onclick = () => moveBld(1);
     $("btn-bld-all-chk").onclick = () => { plans.forEach((p) => (p.enabled = true)); scheduleProfileSave({ building: { cities: bld.cities } }); renderActiveTab(); };
     $("btn-bld-none-chk").onclick = () => { plans.forEach((p) => (p.enabled = false)); scheduleProfileSave({ building: { cities: bld.cities } }); renderActiveTab(); };
     $("btn-bld-set-all").onclick = () => {
@@ -1111,9 +1316,11 @@
       renderActiveTab();
     };
     $("btn-bld-demolish").onclick = () => {
-      if (!state.selectedBldPid) return showToast("Chọn công trình", "Nhấp vào 1 ô công trình trước khi đặt cấp 0.", "warn");
-      const p = plans.find((x) => Number(x.pid) === state.selectedBldPid);
-      if (p) { p.target_level = 0; p.enabled = true; }
+      if (state.selectedBldPid == null && state.selectedBldGid == null) return showToast("Chọn công trình", "Nhấp vào 1 ô hoặc nhóm công trình trước khi đặt cấp 0.", "warn");
+      const sel = state.selectedBldGid != null
+        ? plans.filter((x) => Number(x.gid) === state.selectedBldGid)
+        : plans.filter((x) => Number(x.pid) === state.selectedBldPid);
+      sel.forEach((p) => { p.target_level = 0; p.enabled = true; });
       scheduleProfileSave({ building: { cities: bld.cities } });
       renderActiveTab();
     };
@@ -1167,11 +1374,14 @@
         explore_use_coin: $("aux-coin").checked,
         explore_turns: $("aux-turns").value,
         amount: $("logi-amt").value,
+        transfer_interval: $("xfer-int").value,
+        tribute_enabled: $("aux-tribute").checked,
+        tribute_building_gid: Number($("aux-tribute-gid").value),
       },
       ditrai: { dest_x: $("dt-x").value, dest_y: $("dt-y").value },
     });
     ["rsrc-gold", "rsrc-wood", "rsrc-iron", "rsrc-stone", "rsrc-food", "rsrc-gbox", "rsrc-tnbox",
-      "aux-daily", "aux-explore", "aux-whip", "aux-coin", "aux-turns", "logi-amt", "dt-x", "dt-y"].forEach((id) => {
+      "aux-daily", "aux-explore", "aux-whip", "aux-coin", "aux-turns", "logi-amt", "dt-x", "dt-y", "xfer-int", "aux-tribute", "aux-tribute-gid"].forEach((id) => {
       $(id).onchange = () => {
         if (id === "aux-whip" && $("aux-whip").checked) $("aux-coin").checked = false;
         if (id === "aux-coin" && $("aux-coin").checked) $("aux-whip").checked = false;
@@ -1187,7 +1397,7 @@
       try {
         await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/chests/start`, {
           method: "POST",
-          body: { chest_name: $("chest-type").value, times: Number($("chest-times").value || 1), city_id: Number($("chest-city").value || 0) },
+          body: { chest_name: $("chest-type").value, times: Number($("chest-times").value || 1), city_id: $("chest-city").disabled ? 0 : Number($("chest-city").value || 0) },
         });
       } catch (e) { showToast("Lỗi mở rương", e.message, "error"); }
     };
@@ -1213,6 +1423,79 @@
       } catch (e) { showToast("Lỗi Di Trại", e.message, "error"); }
     };
     $("btn-dt-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/ditrai/stop`, { method: "POST" });
+    // Bỏ NC / Xem Log
+    $("btn-nc-clear").onclick = () => {
+      res.city_id = null;
+      scheduleProfileSave({ research: { city_id: null } });
+      renderActiveTab();
+    };
+    root.querySelectorAll(".btn-view-log").forEach((b) => (b.onclick = openInternalLogModal));
+
+    // Di Trại: hiển thị vị trí hiện tại của Doanh trại
+    const updateDtOrigin = () => {
+      state.selectedDtCampId = $("dt-camp").value;
+      const camp = camps.find((c) => String(c.id) === state.selectedDtCampId);
+      $("dt-origin-lbl").textContent = camp ? `Vị trí: (${camp.pos_x}, ${camp.pos_y})` : "Vị trí: (---, ---)";
+    };
+    $("dt-camp").onchange = updateDtOrigin;
+    updateDtOrigin();
+
+    $("logi-from").onchange = () => { state.logiFromId = $("logi-from").value; };
+    $("logi-to").onchange = () => { state.logiToId = $("logi-to").value; };
+    $("logi-type").onchange = () => { state.logiType = $("logi-type").value; };
+    $("chest-city").onchange = () => { state.chestCityId = $("chest-city").value; };
+
+    // Rương cấp tài khoản không cần chọn Thành
+    const syncChestCity = () => {
+      state.chestType = $("chest-type").value;
+      const meta = (state.meta?.chests || []).find((c) => c.name === state.chestType);
+      $("chest-city").disabled = meta ? !meta.needs_city : false;
+    };
+    $("chest-type").onchange = syncChestCity;
+    syncChestCity();
+
+    // Áp Dụng Thiết Lập (lưu ngay ngưỡng tài nguyên & phụ trợ)
+    $("btn-apply-rsrc").onclick = async () => {
+      try {
+        saveResCfg();
+        saveBldMeta();
+        await saveProfileImmediate({});
+        showToast("Đã áp dụng", "Thiết lập ngưỡng tài nguyên & phụ trợ đã được lưu.");
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+
+    // Cống quận ngay (chỉ Thành, bỏ qua Doanh trại)
+    $("btn-tribute-now").onclick = async () => {
+      const cid = Number(curBldCid);
+      if (!cid || cid < 0) return showToast("Cống quận", "Vui lòng chọn một Thành (không phải Doanh trại) trong danh sách bên trái.", "warn");
+      try {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/tribute`, {
+          method: "POST", body: { city_id: cid, building_gid: Number($("aux-tribute-gid").value) },
+        });
+        showToast("Cống quận", "Đã gửi lệnh Cống quận.");
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+
+    // Bảng Chuyển quân giới (hàng đợi lặp)
+    root.querySelectorAll(".xfer-row").forEach((tr) => (tr.onclick = () => { state.selectedXferIdx = Number(tr.dataset.idx); renderActiveTab(); }));
+    $("btn-xfer-add").onclick = () => {
+      const from = Number($("logi-from").value);
+      const to = Number($("logi-to").value);
+      if (!from || !to || from === to) return showToast("Cảnh báo", "Vui lòng chọn thành đi và thành đến khác nhau!", "warn");
+      const amt = Math.max(1, Number($("logi-amt").value || 1));
+      logi.transfer_orders = [...(logi.transfer_orders || []), { from_city_id: from, to_city_id: to, army_id: Number($("logi-type").value), amount: amt }];
+      scheduleProfileSave({ logistics: { transfer_orders: logi.transfer_orders } });
+      renderActiveTab();
+    };
+    $("btn-xfer-del").onclick = () => {
+      const i = state.selectedXferIdx;
+      if (i < 0 || i >= (logi.transfer_orders || []).length) return showToast("Cảnh báo", "Vui lòng chọn 1 lệnh chuyển quân trong bảng để xóa!", "warn");
+      logi.transfer_orders = logi.transfer_orders.filter((_, k) => k !== i);
+      state.selectedXferIdx = -1;
+      scheduleProfileSave({ logistics: { transfer_orders: logi.transfer_orders } });
+      renderActiveTab();
+    };
+    $("btn-tgl-xfer").onclick = () => toggleTask("transfer_loop");
     $("btn-clr-int-log").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/logs/clear`, { method: "POST", body: { channel: "building" } });
   }
 
@@ -1228,7 +1511,7 @@
     root.innerHTML = `
       <div class="card">
         <div class="form-row">
-          <label>Thành trì <select id="tp-city">${bases.map((b) => `<option value="${b.id}" ${b.id === cid ? "selected" : ""}>${esc(b.display_name)}</option>`).join("")}</select></label>
+          <label>Căn cứ <select id="tp-city">${bases.map((b) => `<option value="${b.id}" ${b.id === cid ? "selected" : ""}>${esc(b.display_name)}</option>`).join("")}</select></label>
           <label>Chiến dịch <select id="tp-mission">${missions.map((m) => `<option value="${m.idx}" ${Number(tp.mission_idx) === m.idx ? "selected" : ""}>${esc(m.name)} (ID: ${m.id})</option>`).join("")}</select></label>
           <label>Bộ <input id="tp-inf" type="number" value="${esc(tp.target_infantry)}" style="width:70px;"/></label>
           <label>Kỵ <input id="tp-cav" type="number" value="${esc(tp.target_cavalry)}" style="width:70px;"/></label>
@@ -1237,10 +1520,11 @@
           <button id="btn-tgl-tp" class="btn-success btn-sm">▶️ Bắt đầu Thảo Phạt</button>
         </div>
         <div class="form-row" style="margin-bottom:0;">
-          <label><input id="tp-rec" type="checkbox" ${tp.auto_recruit ? "checked" : ""}/> Tự bổ sung lính</label>
-          <label><input id="tp-mor" type="checkbox" ${tp.auto_morale ? "checked" : ""}/> Tự nâng sĩ khí</label>
+          <label><input id="tp-rec" type="checkbox" ${tp.auto_recruit ? "checked" : ""}/> Biên chế quân tự động</label>
+          <label><input id="tp-mor" type="checkbox" ${tp.auto_morale ? "checked" : ""}/> Luyện sĩ khí tự động</label>
           <label>Sĩ khí ≥ <input id="tp-minm" type="number" value="${esc(tp.min_morale)}" style="width:58px;"/></label>
           <label>Chu kỳ <input id="tp-int" type="number" value="${esc(tp.interval)}" style="width:58px;"/>s</label>
+          <span style="color:var(--muted);font-style:italic;font-size:12px;">(Tự động tính toán thời gian hành quân để xuất quân tối ưu)</span>
         </div>
       </div>
       <div class="card">
@@ -1286,22 +1570,29 @@
     const cities = snap.roster.cities || [];
     if (!state.selectedBmBaseId && bases.length) state.selectedBmBaseId = bm.current_base_id || bases[0].id;
     const bid = state.selectedBmBaseId;
+    const curBase = bases.find((b) => b.id === bid) || null;
     const bcfg = bm.bases[String(bid)] || {
-      name: bases.find((b) => b.id === bid)?.name || "",
-      enabled: false, mode: 1, radius: "5", threshold: "30", camp_id: String(bid), parent_city_id: String(cities[0]?.id || ""),
+      name: curBase?.name || "",
+      enabled: false, mode: curBase?.is_camp === false ? 2 : 1, radius: "5", threshold: "30",
+      camp_id: String(bid || ""), parent_city_id: String(cities[0]?.id || ""),
       target_types: [7, 8, 9, 10], generals: [], target_infantry: "0", target_cavalry: "0", target_archers: "0",
       auto_recruit: true, auto_morale: true, min_morale: "95", action_combo_idx: 0,
     };
     bm.bases[String(bid)] = bcfg;
-    const gens = (snap.roster.generals || []).filter((g) => g.city_id === bid && g.role === "vo");
+    const allGens = snap.roster.generals || [];
+    const gens = allGens.filter((g) => g.city_id === bid && g.role === "vo");
     const manOpts = state.meta?.man_targets || [];
     const actOpts = state.meta?.attack_action_options || [];
+    const isMode2 = Number(bcfg.mode) === 2;
+    const selGenIds = new Set((bcfg.generals || []).map(Number));
+    const selCount = gens.filter((g) => selGenIds.has(g.id)).length;
+    const waveCount = selCount > 0 ? Math.ceil(selCount / 3) : 0;
 
     root.innerHTML = `
-      <div class="grid-2" style="grid-template-columns: 320px 1fr;">
+      <div class="grid-2" style="grid-template-columns: 340px 1fr;">
         <div>
           <div class="card">
-            <div class="card-title">🏰 Căn Cứ Bình Man</div>
+            <div class="card-title">🏰 Danh Sách Căn Cứ Bình Man</div>
             <div class="form-row">
               <button id="btn-bm-all" class="btn-sm">✅ Chọn tất cả</button>
               <button id="btn-bm-none" class="btn-sm">❌ Bỏ tất cả</button>
@@ -1309,15 +1600,18 @@
             </div>
             <div class="table-wrap" style="max-height:280px;">
               <table>
-                <thead><tr><th>Chạy</th><th>Căn cứ</th><th>Tọa độ</th><th>Tướng</th></tr></thead>
+                <thead><tr><th>Chạy</th><th>Căn cứ</th><th>Loại</th><th>Tọa độ</th><th>Tướng</th></tr></thead>
                 <tbody>
                   ${bases.map((b) => {
                     const c = bm.bases[String(b.id)] || {};
-                    return `<tr class="bm-base-row ${b.id === bid ? "selected" : ""}" data-bid="${b.id}">
+                    const totVo = allGens.filter((g) => g.city_id === b.id && g.role === "vo").length;
+                    const chosenVo = (c.generals || []).length;
+                    return `<tr class="bm-base-row row-clickable ${b.id === bid ? "selected" : ""}" data-bid="${b.id}">
                       <td><input type="checkbox" class="bm-base-chk" data-bid="${b.id}" ${c.enabled ? "checked" : ""}/></td>
                       <td>${esc(b.name)}</td>
+                      <td>${esc(b.type || (b.is_camp ? "Doanh trại" : "Thành"))}</td>
                       <td>${b.pos_x},${b.pos_y}</td>
-                      <td>${(c.generals || []).length}</td>
+                      <td>${chosenVo}/${totVo}</td>
                     </tr>`;
                   }).join("")}
                 </tbody>
@@ -1333,34 +1627,45 @@
         <div>
           <div class="card">
             <div class="card-title">
-              <span>⚙️ Cấu hình: ${esc(bases.find((b) => b.id === bid)?.name || bid)}</span>
+              <span>⚙️ Cấu hình: ${esc(curBase?.name || bid)}</span>
               <button id="btn-bm-prov-one" class="btn-sm">⚔️ Biên chế căn cứ này</button>
             </div>
             <div class="form-row">
-              <label><input type="radio" name="bm-mode" value="1" ${Number(bcfg.mode) === 1 ? "checked" : ""}/> 1: Di Doanh trại</label>
-              <label><input type="radio" name="bm-mode" value="2" ${Number(bcfg.mode) === 2 ? "checked" : ""}/> 2: Từ Thành</label>
-              <label>Thành mẹ <select id="bm-parent">${cities.map((c) => `<option value="${c.id}" ${String(bcfg.parent_city_id) === String(c.id) ? "selected" : ""}>${esc(c.display_name)}</option>`).join("")}</select></label>
+              <label><input type="radio" name="bm-mode" value="1" ${!isMode2 ? "checked" : ""}/> 1: Di Doanh trại đến cạnh Man</label>
+              <label><input type="radio" name="bm-mode" value="2" ${isMode2 ? "checked" : ""}/> 2: Xuất quân thẳng từ Thành</label>
             </div>
             <div class="form-row">
+              <label>${isMode2 ? "Thành xuất phát" : "Doanh trại xuất phát"} <select id="bm-base-sel">${bases.map((b) => `<option value="${b.id}" ${b.id === bid ? "selected" : ""}>${esc(b.display_name)}</option>`).join("")}</select></label>
+              <label>Thành mẹ (Hồi quân) <select id="bm-parent" ${isMode2 ? "disabled" : ""}>${cities.map((c) => `<option value="${c.id}" ${String(bcfg.parent_city_id) === String(c.id) ? "selected" : ""}>${esc(c.display_name)}</option>`).join("")}</select></label>
+              <label>Doanh trại ID <input id="bm-camp-id" type="text" value="${esc(bcfg.camp_id || bid || "")}" style="width:90px;" ${isMode2 ? "disabled" : ""}/></label>
+            </div>
+            <div class="form-row">
+              <label>Ngưỡng An Toàn (%) <input id="bm-thresh" type="number" value="${esc(bcfg.threshold)}" style="width:58px;"/></label>
               <label>Bán kính <input id="bm-rad" type="number" value="${esc(bcfg.radius)}" style="width:55px;"/></label>
-              <label>Ngưỡng TL/Quân <input id="bm-thresh" type="number" value="${esc(bcfg.threshold)}" style="width:58px;"/></label>
-              <label>Chiêu đánh <select id="bm-act">${actOpts.map((o, i) => `<option value="${i}" ${Number(bcfg.action_combo_idx) === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>
+              <label>Chiêu tấn công <select id="bm-act">${actOpts.map((o, i) => `<option value="${i}" ${Number(bcfg.action_combo_idx) === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>
             </div>
             <div class="form-row">
               <label>Bộ <input id="bm-inf" type="number" value="${esc(bcfg.target_infantry)}" style="width:65px;"/></label>
               <label>Kỵ <input id="bm-cav" type="number" value="${esc(bcfg.target_cavalry)}" style="width:65px;"/></label>
               <label>Cung <input id="bm-arc" type="number" value="${esc(bcfg.target_archers)}" style="width:65px;"/></label>
-              <label><input id="bm-rec" type="checkbox" ${bcfg.auto_recruit ? "checked" : ""}/> Bù lính</label>
-              <label><input id="bm-mor" type="checkbox" ${bcfg.auto_morale ? "checked" : ""}/> Sĩ khí ≥</label>
+              <label><input id="bm-rec" type="checkbox" ${bcfg.auto_recruit ? "checked" : ""}/> Biên chế quân tự động</label>
+              <label><input id="bm-mor" type="checkbox" ${bcfg.auto_morale ? "checked" : ""}/> Luyện sĩ khí tự động ≥</label>
               <input id="bm-minm" type="number" value="${esc(bcfg.min_morale)}" style="width:55px;"/>
             </div>
             <div class="form-row" style="margin-bottom:0;">
-              <span style="color:var(--muted);">Loại Man:</span>
+              <span style="color:var(--muted);">Loại Man mục tiêu:</span>
               ${manOpts.map((m) => `<label style="font-size:12px;"><input type="checkbox" class="bm-mtype" value="${m.id}" ${(bcfg.target_types || []).includes(m.id) ? "checked" : ""}/> ${esc(m.label)}</label>`).join("")}
             </div>
           </div>
           <div class="card">
-            <div class="card-title">Võ tướng căn cứ này</div>
+            <div class="card-title">
+              <span>Võ tướng căn cứ này</span>
+              <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <button id="btn-bm-gen-all" class="btn-sm">✅ Chọn tất cả</button>
+                <button id="btn-bm-gen-none" class="btn-sm">❌ Bỏ chọn tất cả</button>
+                <span id="bm-gen-count-lbl" style="font-size:12px;color:var(--accent);">Đã chọn: ${selCount} tướng (${waveCount} đợt xuất kích)</span>
+              </span>
+            </div>
             <div class="table-wrap" style="max-height:200px;">${renderGeneralSelectTable(gens, bcfg.generals, "bm-gen")}</div>
           </div>
           <div class="card">
@@ -1373,6 +1678,7 @@
     const syncBm = () => {
       bcfg.mode = Number(root.querySelector('input[name="bm-mode"]:checked')?.value || 1);
       bcfg.parent_city_id = $("bm-parent").value;
+      bcfg.camp_id = $("bm-camp-id").value.trim();
       bcfg.radius = $("bm-rad").value;
       bcfg.threshold = $("bm-thresh").value;
       bcfg.action_combo_idx = Number($("bm-act").value);
@@ -1387,9 +1693,13 @@
       bcfg.generals = [...root.querySelectorAll(".bm-gen-chk:checked")].map((x) => Number(x.dataset.gid));
       bm.current_base_id = bid;
       bm.interval = $("bm-int").value;
+      const cnt = bcfg.generals.length;
+      const lbl = $("bm-gen-count-lbl");
+      if (lbl) lbl.textContent = `Đã chọn: ${cnt} tướng (${cnt > 0 ? Math.ceil(cnt / 3) : 0} đợt xuất kích)`;
       scheduleProfileSave({ binh_man: { interval: bm.interval, current_base_id: bid, bases: bm.bases } });
     };
 
+    $("bm-base-sel").onchange = () => { state.selectedBmBaseId = Number($("bm-base-sel").value); renderActiveTab(); };
     root.querySelectorAll(".bm-base-row").forEach((tr) => (tr.onclick = (e) => {
       if (e.target.tagName === "INPUT") return;
       state.selectedBmBaseId = Number(tr.dataset.bid);
@@ -1402,8 +1712,11 @@
     }));
     $("btn-bm-all").onclick = () => { bases.forEach((b) => { bm.bases[String(b.id)] = { ...(bm.bases[String(b.id)] || {}), enabled: true }; }); scheduleProfileSave({ binh_man: { bases: bm.bases } }); renderActiveTab(); };
     $("btn-bm-none").onclick = () => { bases.forEach((b) => { bm.bases[String(b.id)] = { ...(bm.bases[String(b.id)] || {}), enabled: false }; }); scheduleProfileSave({ binh_man: { bases: bm.bases } }); renderActiveTab(); };
-    root.querySelectorAll('input[name="bm-mode"], .bm-mtype, .bm-gen-chk').forEach((el) => (el.onchange = syncBm));
-    ["bm-int", "bm-parent", "bm-rad", "bm-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-mor", "bm-minm"].forEach((id) => ($(id).onchange = syncBm));
+    $("btn-bm-gen-all").onclick = () => { root.querySelectorAll(".bm-gen-chk").forEach((c) => (c.checked = true)); syncBm(); renderActiveTab(); };
+    $("btn-bm-gen-none").onclick = () => { root.querySelectorAll(".bm-gen-chk").forEach((c) => (c.checked = false)); syncBm(); renderActiveTab(); };
+    root.querySelectorAll('input[name="bm-mode"]').forEach((el) => (el.onchange = () => { syncBm(); renderActiveTab(); }));
+    root.querySelectorAll(".bm-mtype, .bm-gen-chk").forEach((el) => (el.onchange = syncBm));
+    ["bm-int", "bm-parent", "bm-camp-id", "bm-rad", "bm-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-mor", "bm-minm"].forEach((id) => ($(id).onchange = syncBm));
     $("btn-tgl-bm").onclick = () => toggleTask("binhman");
     $("btn-bm-once").onclick = async () => {
       await saveProfileImmediate(state.snapshot.profile);
@@ -1455,7 +1768,14 @@
         </div>
       </div>
       <div class="card">
-        <div class="card-title">Võ tướng xuất kích</div>
+        <div class="card-title">
+          <span>Võ tướng xuất kích</span>
+          <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <button id="btn-gd-gen-all" class="btn-sm">✅ Chọn tất cả</button>
+            <button id="btn-gd-gen-none" class="btn-sm">❌ Bỏ chọn tất cả</button>
+            <span id="gd-gen-count-lbl" style="font-size:12px;color:var(--accent);">Đã chọn: ${(gd.generals || []).filter((id) => gens.some((g) => g.id === id)).length} tướng (${(() => { const n = (gd.generals || []).filter((id) => gens.some((g) => g.id === id)).length; return n > 0 ? Math.ceil(n / 3) : 0; })()} đợt xuất kích)</span>
+          </span>
+        </div>
         <div class="table-wrap">${renderGeneralSelectTable(gens, gd.generals, "gd-gen")}</div>
       </div>
       <div class="card">
@@ -1465,6 +1785,9 @@
 
     const syncGd = () => {
       const types = [...root.querySelectorAll(".gd-mtype:checked")].map((x) => Number(x.value));
+      const gids = [...root.querySelectorAll(".gd-gen-chk:checked")].map((x) => Number(x.dataset.gid));
+      const lbl = $("gd-gen-count-lbl");
+      if (lbl) lbl.textContent = `Đã chọn: ${gids.length} tướng (${gids.length > 0 ? Math.ceil(gids.length / 3) : 0} đợt xuất kích)`;
       scheduleProfileSave({
         goi_dan: {
           city_id: Number($("gd-city").value),
@@ -1486,6 +1809,8 @@
     };
     $("gd-city").onchange = () => { syncGd(); renderActiveTab(); };
     ["gd-rad", "gd-int", "gd-act", "gd-inf", "gd-cav", "gd-arc", "gd-rec", "gd-mor", "gd-minm"].forEach((id) => ($(id).onchange = syncGd));
+    $("btn-gd-gen-all").onclick = () => { root.querySelectorAll(".gd-gen-chk").forEach((c) => (c.checked = true)); syncGd(); };
+    $("btn-gd-gen-none").onclick = () => { root.querySelectorAll(".gd-gen-chk").forEach((c) => (c.checked = false)); syncGd(); };
     root.querySelectorAll(".gd-mtype, .gd-gen-chk").forEach((c) => (c.onchange = syncGd));
     $("btn-tgl-gd").onclick = () => toggleTask("goidan");
     $("btn-gd-once").onclick = async () => {
@@ -1519,6 +1844,20 @@
     const craftCities = snap.profile.crafting.cities || {};
     const curCraft = craftCities[String(state.selectedCraftCityId)] || { city_id: state.selectedCraftCityId, weapon_ids: [101], amount: "1000", interval: "5", enabled: false };
     const weapons = state.meta?.weapons || [];
+    const moFilteredGens = state.moraleCityFilter === "all"
+      ? armyGens
+      : armyGens.filter((g) => String(g.city_id) === String(state.moraleCityFilter));
+    const weaponCats = [
+      ["🗡️ Binh khí", "Binh khí"],
+      ["🏹 Cung nỗ", "Cung nỗ"],
+      ["🛡️ Khôi giáp", "Khôi giáp"],
+      ["🐎 Chiến mã", "Chiến mã"],
+      ["🚜 Xe ném đá", "Xe ném đá"],
+    ];
+    const wNameById = Object.fromEntries(weapons.map((w) => [w.id, w.name]));
+    const craftLabelOf = (wids) => (wids || [101]).map((id) => wNameById[id] || `#${id}`).join(", ");
+    const roleLabel = (g) => (g.is_mayor ? "Thái thú" : (g.role === "van" ? "Văn quan" : "Võ tướng"));
+    const maxArm = selGen ? Math.max(1, selGen.army?.infantry || 0, selGen.army?.cavalry || 0, selGen.army?.archers || 0) : 1;
 
     root.innerHTML = `
       <div class="card">
@@ -1526,6 +1865,8 @@
           <button id="btn-reward-all" class="btn-success btn-sm">🎁 Ban Thưởng Toàn Bộ</button>
           <button id="btn-open-tactician" class="btn-sm">🧠 Thiết Lập Mưu Sĩ</button>
           <button id="btn-open-equip" class="btn-sm">🛡️ Trang Bị Tướng</button>
+          <button id="btn-open-armament" class="btn-sm">⚔️ Quân Giới Tướng</button>
+          <button id="btn-open-rename" class="btn-sm">✏️ Đổi Tên Tướng</button>
         </div>
       </div>
 
@@ -1533,26 +1874,26 @@
         <div class="card">
           <div class="card-title">Thành & Doanh trại</div>
           <div class="table-wrap" style="max-height:220px;">
-            <table><thead><tr><th>Tên</th><th>Loại</th><th>Tọa độ</th></tr></thead>
-            <tbody>${bases.map((b) => `<tr class="ov-base ${b.id === state.selectedOverviewCityId ? "selected" : ""}" data-bid="${b.id}"><td>${esc(b.name)}</td><td>${esc(b.type)}</td><td>${b.pos_x},${b.pos_y}</td></tr>`).join("")}</tbody></table>
+            <table><thead><tr><th>Tên</th><th>Loại</th><th>ID</th><th>Tọa độ</th></tr></thead>
+            <tbody>${bases.map((b) => `<tr class="ov-base row-clickable ${b.id === state.selectedOverviewCityId ? "selected" : ""}" data-bid="${b.id}"><td>${esc(b.name)}</td><td>${esc(b.type)}</td><td>${b.id}</td><td>${b.pos_x},${b.pos_y}</td></tr>`).join("")}</tbody></table>
           </div>
         </div>
         <div class="card">
           <div class="card-title">Tướng đồn trú</div>
           <div class="table-wrap" style="max-height:220px;">
-            <table><thead><tr><th>Tên</th><th>Hệ</th><th>Cấp</th><th>TL</th><th>TT</th><th>Mưu sĩ</th><th>Trạng thái</th></tr></thead>
-            <tbody>${gens.map((g) => `<tr class="ov-gen ${selGen && g.id === selGen.id ? "selected" : ""}" data-gid="${g.id}"><td>${esc(g.name)}</td><td>${g.role === "van" ? "Văn" : "Võ"}</td><td>${g.level}</td><td>${g.stamina}/${g.stamina_max}</td><td>${g.loyalty}</td><td>${esc(g.tactician_name || "-")}</td><td>${esc(g.status_text)}</td></tr>`).join("")}</tbody></table>
+            <table><thead><tr><th>Tên tướng</th><th>Chức vụ</th><th>Cấp</th><th>Thể lực</th><th>TT</th><th>Mưu sĩ</th><th>Trạng thái</th></tr></thead>
+            <tbody>${gens.map((g) => `<tr class="ov-gen row-clickable ${selGen && g.id === selGen.id ? "selected" : ""}" data-gid="${g.id}"><td>${esc(g.name)}</td><td>${esc(roleLabel(g))}</td><td>${g.level}</td><td>${g.stamina}/${g.stamina_max}</td><td>${g.loyalty}</td><td>${esc(g.tactician_name || "-")}</td><td>${esc(g.status_text)}</td></tr>`).join("")}</tbody></table>
           </div>
         </div>
         <div class="card">
           <div class="card-title">Chi tiết biên chế</div>
           ${selGen ? `
-            <div style="font-size:16px;font-weight:700;color:var(--accent);">${esc(selGen.name)} (Lv.${selGen.level})</div>
-            <div style="color:var(--muted);font-size:12px;margin:4px 0 10px;">Sĩ khí: ${selGen.morale}/100 | Thể lực: ${selGen.stamina}/${selGen.stamina_max} | Trung thành: ${selGen.loyalty}</div>
-            <div>Bộ binh: <strong>${(selGen.army?.infantry || 0).toLocaleString()}</strong></div>
-            <div>Kỵ binh: <strong>${(selGen.army?.cavalry || 0).toLocaleString()}</strong></div>
-            <div>Cung binh: <strong>${(selGen.army?.archers || 0).toLocaleString()}</strong></div>
-            <div style="margin-top:8px;color:var(--accent);font-weight:700;">Tổng quân: ${(selGen.army?.total || 0).toLocaleString()}</div>
+            <div style="font-size:16px;font-weight:700;color:var(--accent);">${esc(selGen.name)} (${esc(roleLabel(selGen))} Lv.${selGen.level})</div>
+            <div style="color:var(--muted);font-size:12px;margin:4px 0 12px;">Sĩ khí: ${selGen.morale}/100 | Thể lực: ${selGen.stamina}/${selGen.stamina_max} | Trung thành: ${selGen.loyalty} | Mưu sĩ: ${esc(selGen.tactician_name || "-")}</div>
+            <div class="bar-row"><span>Bộ binh</span><div class="bar-track"><div class="bar-fill" style="width:${Math.round(((selGen.army?.infantry || 0) / maxArm) * 100)}%"></div></div><strong style="text-align:right;">${(selGen.army?.infantry || 0).toLocaleString()}</strong></div>
+            <div class="bar-row"><span>Kỵ binh</span><div class="bar-track"><div class="bar-fill cav" style="width:${Math.round(((selGen.army?.cavalry || 0) / maxArm) * 100)}%"></div></div><strong style="text-align:right;">${(selGen.army?.cavalry || 0).toLocaleString()}</strong></div>
+            <div class="bar-row"><span>Cung binh</span><div class="bar-track"><div class="bar-fill arc" style="width:${Math.round(((selGen.army?.archers || 0) / maxArm) * 100)}%"></div></div><strong style="text-align:right;">${(selGen.army?.archers || 0).toLocaleString()}</strong></div>
+            <div style="margin-top:10px;color:var(--accent);font-weight:700;">Tổng quân: ${(selGen.army?.total || 0).toLocaleString()}</div>
           ` : '<div style="color:var(--muted);">Chọn một tướng để xem.</div>'}
         </div>
       </div>
@@ -1561,18 +1902,25 @@
         <div class="card">
           <div class="card-title">⚔️ Luyện Sĩ Khí Quân Đội (Đa Thành)</div>
           <div class="form-row">
+            <label>Căn cứ <select id="mo-city">
+              <option value="all" ${state.moraleCityFilter === "all" ? "selected" : ""}>🌟 Tất cả căn cứ</option>
+              ${bases.map((b) => `<option value="${b.id}" ${String(state.moraleCityFilter) === String(b.id) ? "selected" : ""}>${esc(b.display_name)}</option>`).join("")}
+            </select></label>
             <label>Đích <select id="mo-target">${[100, 95, 90, 85].map((x) => `<option value="${x}">${x}</option>`).join("")}</select></label>
             <button id="btn-mo-all" class="btn-sm">☑ Tất cả</button>
-            <button id="btn-mo-none" class="btn-sm">☐ Bỏ</button>
+            <button id="btn-mo-none" class="btn-sm">☐ Bỏ chọn</button>
+          </div>
+          <div class="form-row">
             <button id="btn-mo-start" class="btn-primary btn-sm">⚔️ Luyện Sĩ Khí</button>
             <button id="btn-mo-stop" class="btn-danger btn-sm">⏹️ Dừng</button>
+            <span id="morale-status-lbl" style="font-size:12px;color:var(--muted);"></span>
           </div>
-          <div id="morale-status-lbl" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
           <div class="table-wrap" style="max-height:220px;">
-            <table><thead><tr><th>Chọn</th><th>Tướng</th><th>Thành</th><th>SK</th><th>Quân</th><th>Trạng thái</th></tr></thead>
-            <tbody>${armyGens.map((g) => {
+            <table><thead><tr><th>Chọn</th><th>Tên tướng</th><th>Căn cứ</th><th>Sĩ khí</th><th>Quân số</th><th>Chi tiết</th><th>Trạng thái</th></tr></thead>
+            <tbody>${moFilteredGens.map((g) => {
               const bname = bases.find((b) => b.id === g.city_id)?.name || g.city_id;
-              return `<tr><td><input type="checkbox" class="mo-chk" data-gid="${g.id}" ${state.selectedMoraleGens.has(g.id) ? "checked" : ""}/></td><td>${esc(g.name)}</td><td>${esc(bname)}</td><td>${g.morale}/100</td><td>${(g.army?.total || 0).toLocaleString()}</td><td>${esc(snap.aux?.morale_gen_status?.[g.id] || "Chờ")}</td></tr>`;
+              const a = g.army || {};
+              return `<tr><td><input type="checkbox" class="mo-chk" data-gid="${g.id}" ${state.selectedMoraleGens.has(g.id) ? "checked" : ""}/></td><td>${esc(g.name)}</td><td>${esc(bname)}</td><td>${g.morale}/100</td><td>${(a.total || 0).toLocaleString()}</td><td>B:${a.infantry || 0} K:${a.cavalry || 0} C:${a.archers || 0}</td><td>${esc(snap.aux?.morale_gen_status?.[g.id] || "Chờ")}</td></tr>`;
             }).join("")}</tbody></table>
           </div>
         </div>
@@ -1583,14 +1931,18 @@
             <label>Thành <select id="cr-city">${cities.map((c) => `<option value="${c.id}" ${c.id === state.selectedCraftCityId ? "selected" : ""}>${esc(c.display_name)}</option>`).join("")}</select></label>
             <label>SL/mẻ <input id="cr-amt" type="number" value="${esc(curCraft.amount)}" style="width:70px;"/></label>
             <label>Chu kỳ (phút) <input id="cr-int" type="number" value="${esc(curCraft.interval)}" style="width:55px;"/></label>
-            <label><input id="cr-en" type="checkbox" ${curCraft.enabled ? "checked" : ""}/> Bật thành</label>
+            <label><input id="cr-en" type="checkbox" ${curCraft.enabled ? "checked" : ""}/> Bật thành này</label>
           </div>
-          <div class="form-row">
-            <label style="flex:1;">Quân giới (giữ Ctrl để chọn nhiều)
-              <select id="cr-weapons" multiple size="3" style="width:100%;">
-                ${weapons.map((w) => `<option value="${w.id}" ${(curCraft.weapon_ids || []).includes(w.id) ? "selected" : ""}>${w.id}. ${esc(w.name)} (${esc(w.category)})</option>`).join("")}
-              </select>
-            </label>
+          <div class="field" style="margin-bottom:8px;">
+            <label>Quân giới (<span id="cr-sel-summary">${esc(craftLabelOf(curCraft.weapon_ids))}</span>)</label>
+            <div class="grp-menu" id="cr-weapons-menu">
+              ${weaponCats.map(([title, cat]) => {
+                const items = weapons.filter((w) => w.category === cat);
+                return `<details><summary>${title} (${items.filter((w) => (curCraft.weapon_ids || []).includes(w.id)).length}/${items.length})</summary>
+                  ${items.map((w) => `<label><input type="checkbox" class="cr-w-chk" value="${w.id}" ${(curCraft.weapon_ids || []).includes(w.id) ? "checked" : ""}/> ${w.id}. ${esc(w.name)}</label>`).join("")}
+                </details>`;
+              }).join("")}
+            </div>
           </div>
           <div class="form-row">
             <button id="btn-cr-now" class="btn-sm">⚡ Chế tạo ngay</button>
@@ -1598,10 +1950,18 @@
             <span id="craft-status-lbl" style="font-size:12px;color:var(--muted);"></span>
           </div>
           <div class="table-wrap" style="max-height:150px;">
-            <table><thead><tr><th>Bật</th><th>Thành</th><th>SL</th><th>Phút</th><th>Trạng thái</th></tr></thead>
+            <table><thead><tr><th>Bật</th><th>Thành</th><th>Quân Giới</th><th>Số lượng</th><th>Chu kỳ (phút)</th><th>Trạng thái</th></tr></thead>
             <tbody>${cities.map((c) => {
               const cfg = craftCities[String(c.id)] || {};
-              return `<tr><td>${cfg.enabled ? "☑" : "☐"}</td><td>${esc(c.name)}</td><td>${esc(cfg.amount || 1000)}</td><td>${esc(cfg.interval || 5)}</td><td>${esc(snap.aux?.craft_statuses?.[c.id] || (cfg.enabled ? "Sẵn sàng" : "Tắt"))}</td></tr>`;
+              const wids = cfg.weapon_ids?.length ? cfg.weapon_ids : [cfg.weapon_id || 101];
+              return `<tr class="cr-row row-clickable ${c.id === state.selectedCraftCityId ? "selected" : ""}" data-cid="${c.id}">
+                <td class="cr-tgl-cell" style="text-align:center;">${cfg.enabled ? "☑" : "☐"}</td>
+                <td>${esc(c.name)}</td>
+                <td>${esc(craftLabelOf(wids))}</td>
+                <td>${esc(cfg.amount || 1000)}</td>
+                <td>${esc(cfg.interval || 5)}</td>
+                <td>${esc(snap.aux?.craft_statuses?.[c.id] || (cfg.enabled ? "Sẵn sàng" : "Tắt"))}</td>
+              </tr>`;
             }).join("")}</tbody></table>
           </div>
         </div>
@@ -1620,32 +1980,54 @@
     };
     $("btn-open-tactician").onclick = openTacticianModal;
     $("btn-open-equip").onclick = openEquipModal;
+    $("btn-open-armament").onclick = openArmamentModal;
+    $("btn-open-rename").onclick = openRenameModal;
 
+    $("mo-city").onchange = () => { state.moraleCityFilter = $("mo-city").value; renderActiveTab(); };
     root.querySelectorAll(".mo-chk").forEach((c) => (c.onchange = () => {
       const gid = Number(c.dataset.gid);
       if (c.checked) state.selectedMoraleGens.add(gid); else state.selectedMoraleGens.delete(gid);
     }));
-    $("btn-mo-all").onclick = () => { armyGens.forEach((g) => state.selectedMoraleGens.add(g.id)); renderActiveTab(); };
-    $("btn-mo-none").onclick = () => { state.selectedMoraleGens.clear(); renderActiveTab(); };
+    $("btn-mo-all").onclick = () => { moFilteredGens.forEach((g) => state.selectedMoraleGens.add(g.id)); renderActiveTab(); };
+    $("btn-mo-none").onclick = () => { moFilteredGens.forEach((g) => state.selectedMoraleGens.delete(g.id)); renderActiveTab(); };
     $("btn-mo-start").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/morale/start`, {
       method: "POST", body: { general_ids: [...state.selectedMoraleGens], target_morale: Number($("mo-target").value) },
     }).catch((e) => showToast("Lỗi", e.message, "error"));
     $("btn-mo-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/morale/stop`, { method: "POST" });
 
     const syncCraft = () => {
-      const wids = [...$("cr-weapons").selectedOptions].map((o) => Number(o.value));
+      const wids = [...root.querySelectorAll(".cr-w-chk:checked")].map((x) => Number(x.value));
+      const finalWids = wids.length ? wids : [101];
       craftCities[String(state.selectedCraftCityId)] = {
         city_id: state.selectedCraftCityId,
-        weapon_id: wids[0] || 101,
-        weapon_ids: wids.length ? wids : [101],
+        weapon_id: finalWids[0],
+        weapon_ids: finalWids,
         amount: $("cr-amt").value,
         interval: $("cr-int").value,
         enabled: $("cr-en").checked,
       };
+      const sum = $("cr-sel-summary");
+      if (sum) sum.textContent = craftLabelOf(finalWids);
       scheduleProfileSave({ crafting: { cities: craftCities } });
     };
     $("cr-city").onchange = () => { state.selectedCraftCityId = Number($("cr-city").value); renderActiveTab(); };
-    ["cr-amt", "cr-int", "cr-en", "cr-weapons"].forEach((id) => ($(id).onchange = syncCraft));
+    ["cr-amt", "cr-int", "cr-en"].forEach((id) => ($(id).onchange = syncCraft));
+    root.querySelectorAll(".cr-w-chk").forEach((c) => (c.onchange = syncCraft));
+    root.querySelectorAll(".cr-row").forEach((tr) => {
+      tr.onclick = (e) => {
+        const cid = Number(tr.dataset.cid);
+        if (e.target.classList.contains("cr-tgl-cell")) {
+          const cur = craftCities[String(cid)] || { city_id: cid, weapon_id: 101, weapon_ids: [101], amount: "1000", interval: "5", enabled: false };
+          cur.enabled = !cur.enabled;
+          craftCities[String(cid)] = cur;
+          scheduleProfileSave({ crafting: { cities: craftCities } });
+          renderActiveTab();
+          return;
+        }
+        state.selectedCraftCityId = cid;
+        renderActiveTab();
+      };
+    });
     $("btn-cr-now").onclick = async () => {
       await saveProfileImmediate(state.snapshot.profile);
       api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tasks/crafting/now`, { method: "POST", body: { city_id: state.selectedCraftCityId } });
@@ -1660,9 +2042,11 @@
     const bs = snap.aux?.battle_state;
     const bid = snap.aux?.battle_id || state.battleIdInput || "0";
     const actOpts = state.meta?.attack_action_options || [];
-    const stratOpts = ["0: Tự động", "92: Kim thiền thoát xác", "93: Phản khách vi chủ", "94: Quan môn tróc tặc", "95: Cầm tặc cầm vương"];
-    const formOpts = state.meta?.formations || [];
-    const manualStratOpts = state.meta?.stratagems || [];
+    const stratOpts = ["0. Không dùng", "93. Phản khách vi chủ", "95. Cầm tặc cầm vương", "94. Quan môn tróc tặc"];
+    const basicForms = (state.meta?.formations || []).filter((f) => f.id >= 1 && f.id <= 5);
+    const formOpts = basicForms.length ? basicForms : (state.meta?.formations || []);
+    const manualStratOpts = (state.meta?.stratagems || []).filter((s) => s.id !== 0);
+    const selPos = state.selectedBattleOurPos ?? (bs?.our_troops?.[0]?.position ?? 1);
 
     root.innerHTML = `
       <div class="card">
@@ -1674,39 +2058,44 @@
           <span class="pill warn">Đếm ngược: ${bs?.bout_left ?? "-"}s</span>
         </div>
         <div class="form-row">
-          <label><input id="cb-counter" type="checkbox" ${cb.auto_counter_formation ? "checked" : ""}/> Tự đổi trận cuối hiệp (≤</label>
-          <input id="cb-win" type="number" value="${esc(cb.formation_window_seconds)}" style="width:52px;"/>s)
-          <label>Chiêu <select id="cb-act">${actOpts.map((o, i) => `<option value="${i}" ${Number(cb.action_combo_idx) === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>
-          <label>Mưu kế <select id="cb-strat">${stratOpts.map((o, i) => `<option value="${i}" ${Number(cb.stratagem_combo_idx) === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>
+          <label><input id="cb-counter" type="checkbox" ${cb.auto_counter_formation ? "checked" : ""}/> Tự đổi trận ngũ hành (Cửa sổ ≤</label>
+          <input id="cb-win" type="number" value="${esc(cb.formation_window_seconds)}" style="width:52px;"/>s cuối hiệp)
+          <label><input id="cb-boss" type="checkbox" ${cb.leave_boss_last ? "checked" : ""}/> Giữ BOSS bắt sống (Thủ khi chỉ còn BOSS)</label>
+          <label><input id="cb-cleanse" type="checkbox" ${cb.auto_cleanse_confusion ? "checked" : ""}/> Tự giải Hỗn loạn (96)</label>
+        </div>
+        <div class="form-row">
+          <label>Chiêu tấn công <select id="cb-act">${actOpts.map((o, i) => `<option value="${i}" ${Number(cb.action_combo_idx) === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>
+          <label><input id="cb-skip" type="checkbox" ${cb.skip_confused_enemy ? "checked" : ""}/> Bỏ qua địch hỗn loạn</label>
+          <label>Mưu kế Hiệp 1 <select id="cb-strat">${stratOpts.map((o, i) => `<option value="${i}" ${Number(cb.stratagem_combo_idx) === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>
+          <label>Rút lui khẩn cấp (mưu 92 khi lính < %) <input id="cb-retreat" type="number" value="${esc(cb.emergency_retreat_threshold)}" style="width:65px;"/></label>
         </div>
         <div class="form-row" style="margin-bottom:0;">
-          <label><input id="cb-skip" type="checkbox" ${cb.skip_confused_enemy ? "checked" : ""}/> Tránh đánh địch Hỗn loạn</label>
-          <label><input id="cb-boss" type="checkbox" ${cb.leave_boss_last ? "checked" : ""}/> Giữ BOSS sống (Cô lập)</label>
-          <label><input id="cb-cleanse" type="checkbox" ${cb.auto_cleanse_confusion ? "checked" : ""}/> Tự giải Hỗn loạn (96)</label>
-          <label>Rút khẩn cấp khi quân < <input id="cb-retreat" type="number" value="${esc(cb.emergency_retreat_threshold)}" style="width:65px;"/></label>
+          <label><input id="cb-autocap" type="checkbox" ${cb.auto_capture_boss ? "checked" : ""}/> Tự động bắt sống BOSS bằng Coin</label>
+          <label>khi Sĩ khí &lt; <input id="cb-capmor" type="number" value="${esc(cb.capture_boss_max_morale)}" style="width:58px;"/> điểm</label>
+          <button id="btn-bt-notify" class="btn-sm">🔔 Cài Đặt Thông Báo & Bắt Sống BOSS</button>
         </div>
       </div>
 
       <div class="grid-2">
         <div class="card">
-          <div class="card-title">🛡️ Quân Ta</div>
+          <div class="card-title">🛡️ Phe Ta (Quân đội & Tướng lĩnh)</div>
           <div class="table-wrap">${renderBattleTroopsTable(bs?.our_troops || [], false)}</div>
         </div>
         <div class="card">
-          <div class="card-title">🎯 Phe Địch</div>
+          <div class="card-title">🎯 Phe Địch (Mục tiêu & BOSS)</div>
           <div class="table-wrap">${renderBattleTroopsTable(bs?.enemy_troops || [], true)}</div>
         </div>
       </div>
 
       <div class="card">
         <div class="form-row">
-          <label>Vị trí ta <input id="bt-pos" type="number" value="${bs?.our_troops?.[0]?.position ?? 1}" style="width:60px;"/></label>
-          <select id="bt-mform">${formOpts.map((f) => `<option value="${f.id}">${f.id}. ${esc(f.name)}</option>`).join("")}</select>
-          <button id="btn-bt-form" class="btn-sm">🔄 Đổi trận</button>
-          <select id="bt-mstrat">${manualStratOpts.map((s) => `<option value="${s.id}">${s.id}. ${esc(s.name)}</option>`).join("")}</select>
-          <button id="btn-bt-strat" class="btn-sm">✨ Mưu kế</button>
+          <label>Vị trí ta <input id="bt-pos" type="number" value="${selPos}" style="width:60px;"/></label>
+          <select id="bt-mform">${formOpts.map((f) => `<option value="${f.id}" ${String(state.btManualForm ?? formOpts[0]?.id) === String(f.id) ? "selected" : ""}>${f.id}. ${esc(f.name)}</option>`).join("")}</select>
+          <button id="btn-bt-form" class="btn-sm">🔄 Đổi ngay</button>
+          <select id="bt-mstrat">${manualStratOpts.map((s) => `<option value="${s.id}" ${String(state.btManualStrat ?? manualStratOpts[0]?.id) === String(s.id) ? "selected" : ""}>${s.id}. ${esc(s.name)}</option>`).join("")}</select>
+          <button id="btn-bt-strat" class="btn-sm">✨ Kích hoạt</button>
           <button id="btn-bt-defend" class="btn-warning btn-sm">🛡️ Phòng ngự toàn quân</button>
-          <button id="btn-clr-bt" class="btn-sm" style="margin-left:auto;">🗑️ Xóa</button>
+          <button id="btn-clr-bt" class="btn-sm" style="margin-left:auto;">🗑️ Xóa log</button>
         </div>
         <div id="log-battle" class="log-box">${esc((snap.logs.battle || []).join("\n"))}</div>
       </div>`;
@@ -1721,10 +2110,24 @@
         leave_boss_last: $("cb-boss").checked,
         auto_cleanse_confusion: $("cb-cleanse").checked,
         emergency_retreat_threshold: $("cb-retreat").value,
+        auto_capture_boss: $("cb-autocap").checked,
+        capture_boss_max_morale: $("cb-capmor").value,
       },
     });
-    ["cb-counter", "cb-win", "cb-act", "cb-strat", "cb-skip", "cb-boss", "cb-cleanse", "cb-retreat"].forEach((id) => ($(id).onchange = syncCb));
+    ["cb-counter", "cb-win", "cb-act", "cb-strat", "cb-skip", "cb-boss", "cb-cleanse", "cb-retreat", "cb-autocap", "cb-capmor"].forEach((id) => ($(id).onchange = syncCb));
+    $("btn-bt-notify").onclick = openNotificationModal;
+    root.querySelectorAll(".bt-our-row").forEach((tr) => {
+      tr.onclick = () => {
+        state.selectedBattleOurPos = Number(tr.dataset.pos);
+        $("bt-pos").value = String(state.selectedBattleOurPos);
+        root.querySelectorAll(".bt-our-row").forEach((r) => r.classList.remove("selected"));
+        tr.classList.add("selected");
+      };
+    });
     $("bt-id").onchange = () => { state.battleIdInput = $("bt-id").value; };
+    $("bt-pos").onchange = () => { state.selectedBattleOurPos = Number($("bt-pos").value); };
+    $("bt-mform").onchange = () => { state.btManualForm = $("bt-mform").value; };
+    $("bt-mstrat").onchange = () => { state.btManualStrat = $("bt-mstrat").value; };
     $("btn-bt-load").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/battle/load`, {
       method: "POST", body: { battle_id: Number($("bt-id").value || 0) },
     }).catch((e) => showToast("Lỗi", e.message, "error"));
@@ -1763,10 +2166,11 @@
           <label>Kỵ <input id="nt-cav" type="number" value="${esc(nt.target_cavalry)}" style="width:68px;"/></label>
           <label>Cung <input id="nt-arc" type="number" value="${esc(nt.target_archers)}" style="width:68px;"/></label>
           <button id="btn-tgl-nt" class="btn-success btn-sm">▶️ Bắt đầu Niên Thú</button>
+          <span id="nt-status-lbl" class="pill">${esc(ntStatusText())}</span>
         </div>
         <div class="form-row">
           <label><input id="nt-rec" type="checkbox" ${nt.auto_recruit ? "checked" : ""}/> Tự chiêu mộ & biên chế</label>
-          <label><input id="nt-mor" type="checkbox" ${nt.auto_morale ? "checked" : ""}/> Tự nâng sĩ khí ≥</label>
+          <label><input id="nt-mor" type="checkbox" ${nt.auto_morale ? "checked" : ""}/> Luyện sĩ khí tự động ≥</label>
           <input id="nt-minm" type="number" value="${esc(nt.min_morale)}" style="width:55px;"/>
           <label><input id="nt-march" type="checkbox" ${nt.speed_up_march ? "checked" : ""}/> Tốc hành quân đi</label>
           <label><input id="nt-ret" type="checkbox" ${nt.speed_up_return ? "checked" : ""}/> Tốc hành quân về</label>
@@ -1822,11 +2226,16 @@
   }
 
   function renderBattleTroopsTable(troops, isEnemy) {
-    return `<table><thead><tr><th>Ô</th><th>Tướng</th><th>Quân</th><th>SK</th><th>Trận hình</th><th>Trạng thái</th><th>Mục tiêu</th></tr></thead>
-      <tbody>${troops.map((t) => `<tr class="${isEnemy && t.is_boss ? "row-boss" : ""}">
-        <td>${t.position}</td><td>${esc(t.general_name)} ${t.is_boss ? "👑" : ""}</td><td>${t.soldiers}/${t.initial_soldiers}</td>
-        <td>${t.morale}</td><td>${esc(t.formation_name)}</td><td>${esc(t.status_text)}</td><td>${t.target_id || "Tùy chọn"}</td>
-      </tr>`).join("")}</tbody></table>`;
+    const actTh = isEnemy ? "" : "<th>Phương thức</th>";
+    return `<table><thead><tr><th>Ô</th><th>Tướng</th><th>Quân</th><th>SK</th><th>Trận hình</th><th>Trạng thái</th>${actTh}<th>Mục tiêu</th></tr></thead>
+      <tbody>${troops.map((t) => {
+        const cls = isEnemy ? (t.is_boss ? "row-boss" : "") : `bt-our-row row-clickable ${state.selectedBattleOurPos === t.position ? "selected" : ""}`;
+        const actTd = isEnemy ? "" : `<td>${esc(t.attack_action_name || "-")}</td>`;
+        return `<tr class="${cls}" data-pos="${t.position}">
+          <td>${t.position}</td><td>${esc(t.general_name)} ${t.is_boss ? "👑" : ""}</td><td>${t.soldiers}/${t.initial_soldiers}</td>
+          <td>${t.morale}</td><td>${esc(t.formation_name)}</td><td>${esc(t.status_text)}</td>${actTd}<td>${t.target_id || "Tùy chọn"}</td>
+        </tr>`;
+      }).join("")}</tbody></table>`;
   }
 
   // ---------------------------------------------------------------------------
@@ -1839,6 +2248,18 @@
     $("modal-backdrop").classList.remove("hidden");
   }
   function closeModal() { $("modal-backdrop").classList.add("hidden"); }
+
+  function openInternalLogModal() {
+    const snap = state.snapshot;
+    const lines = [...(snap.logs.building || []), ...(snap.logs.logistics || [])].slice(-500);
+    openModal(
+      "📜 Nhật ký Nội Chính & Hậu Cần",
+      `<div id="log-modal-box" class="log-box" style="height:60vh;">${esc(lines.join("\n"))}</div>`,
+      `<button class="btn-sm" onclick="document.getElementById('modal-backdrop').classList.add('hidden')">Đóng</button>`
+    );
+    const box = $("log-modal-box");
+    if (box) box.scrollTop = box.scrollHeight;
+  }
 
   function openNotificationModal() {
     const np = state.snapshot.profile.notifications;
@@ -1884,71 +2305,472 @@
     };
   }
 
+  let renderTacticianModalBody = null;
+
   function openTacticianModal() {
-    const vos = (state.snapshot.roster.generals || []).filter((g) => g.role === "vo");
     const bases = state.snapshot.roster.bases || [];
+    const allGens = state.snapshot.roster.generals || [];
+    const selectedTacIds = new Set(allGens.filter((g) => g.role === "vo" && (g.tactician_id || 0) <= 0).map((g) => g.id));
+    if (!selectedTacIds.size) allGens.filter((g) => g.role === "vo").forEach((g) => selectedTacIds.add(g.id));
+    const initCity = state.selectedOverviewCityId && bases.some((b) => b.id === state.selectedOverviewCityId)
+      ? String(state.selectedOverviewCityId)
+      : "all";
+
     openModal(
       "🧠 Thiết Lập Mưu Sĩ Cho Võ Tướng",
-      `<div class="form-row"><label><input id="tac-reassign" type="checkbox"/> Đổi mưu sĩ (tháo Mưu sĩ hiện tại để chia lại)</label></div>
-       <div class="table-wrap" style="max-height:280px;">
-         <table><thead><tr><th><input id="tac-all" type="checkbox" checked/></th><th>Võ tướng</th><th>Thành</th><th>Cấp</th><th>Mưu sĩ hiện tại</th></tr></thead>
-         <tbody>${vos.map((g) => `<tr><td><input type="checkbox" class="tac-chk" data-gid="${g.id}" checked/></td><td>${esc(g.name)}</td><td>${esc(bases.find((b) => b.id === g.city_id)?.name || g.city_id)}</td><td>${g.level}</td><td>${esc(g.tactician_name || "-")}</td></tr>`).join("")}</tbody></table>
+      `<div class="form-row">
+         <label>Thành / Trại <select id="tac-city">
+           <option value="all">🌟 Tất cả căn cứ</option>
+           ${bases.map((b) => `<option value="${b.id}" ${String(b.id) === initCity ? "selected" : ""}>${esc(b.display_name || b.name)}</option>`).join("")}
+         </select></label>
+         <button id="btn-tac-all" class="btn-sm">☑ Tất cả</button>
+         <button id="btn-tac-none" class="btn-sm">☐ Bỏ chọn</button>
+         <button id="btn-tac-unassigned" class="btn-sm">✨ Chỉ chưa có MS</button>
+         <button id="btn-tac-reload" class="btn-sm">🔄 Làm mới</button>
        </div>
-       <div class="log-box" style="height:120px;margin-top:10px;">${esc((state.snapshot.logs.tactician || []).join("\n"))}</div>`,
+       <div id="tac-summary" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+       <div class="form-row"><label><input id="tac-reassign" type="checkbox"/> Đổi mưu sĩ (tháo Mưu sĩ hiện tại để chia lại; trừ Thái thú / bận)</label></div>
+       <div class="table-wrap" style="max-height:260px;">
+         <table><thead><tr><th><input id="tac-all" type="checkbox"/></th><th>Võ tướng</th><th>Thành / Trại</th><th>Cấp</th><th>Mưu sĩ hiện tại</th><th>Trạng thái</th></tr></thead>
+         <tbody id="tac-tbody"></tbody></table>
+       </div>
+       <div id="tac-status-lbl" style="font-size:12px;color:var(--accent);margin-top:6px;">${esc(state.snapshot.aux?.tactician_status || "Sẵn sàng")}</div>
+       <div id="log-tactician" class="log-box" style="height:120px;margin-top:6px;">${esc((state.snapshot.logs.tactician || []).join("\n"))}</div>`,
       `<button class="btn-success btn-sm tac-run" data-mode="by_level">📈 Theo cấp</button>
        <button class="btn-sm tac-run" data-mode="by_name">🏷️ Theo tên</button>
        <button class="btn-sm tac-run" data-mode="sequential">🔢 Tuần tự</button>
        <button class="btn-warning btn-sm tac-run" data-mode="remove">🔓 Tháo MS</button>
        <button id="btn-tac-stop" class="btn-danger btn-sm">⏹ Dừng</button>`
     );
-    $("tac-all").onchange = () => document.querySelectorAll(".tac-chk").forEach((c) => (c.checked = $("tac-all").checked));
+
+    const getVisibleVos = () => {
+      const cityVal = $("tac-city")?.value || "all";
+      const gens = state.snapshot.roster.generals || [];
+      return gens.filter((g) => g.role === "vo" && (cityVal === "all" || String(g.city_id) === cityVal));
+    };
+
+    const updateSummary = () => {
+      const cityVal = $("tac-city")?.value || "all";
+      const gens = state.snapshot.roster.generals || [];
+      const vos = getVisibleVos();
+      const freeCivs = gens.filter(
+        (g) =>
+          g.role === "van" &&
+          (cityVal === "all" || String(g.city_id) === cityVal) &&
+          (g.is_available_tactician ?? (g.status === 0 && !g.is_mayor && !g.is_tactician))
+      ).length;
+      const selVisible = vos.filter((g) => selectedTacIds.has(g.id)).length;
+      const sumEl = $("tac-summary");
+      if (sumEl) {
+        sumEl.textContent = `Võ tướng hiển thị: ${vos.length} • Đang chọn: ${selVisible} (Tổng: ${selectedTacIds.size}) • Văn quan sẵn sàng làm Mưu sĩ: ${freeCivs}`;
+      }
+      const allChk = $("tac-all");
+      if (allChk) allChk.checked = vos.length > 0 && selVisible === vos.length;
+    };
+
+    renderTacticianModalBody = () => {
+      const tbody = $("tac-tbody");
+      if (!tbody) return;
+      const curBases = state.snapshot.roster.bases || [];
+      const vos = getVisibleVos();
+      tbody.innerHTML = vos
+        .map((g) => {
+          const bname = curBases.find((b) => b.id === g.city_id)?.name || g.city_id;
+          const chk = selectedTacIds.has(g.id) ? "checked" : "";
+          return `<tr><td><input type="checkbox" class="tac-chk" data-gid="${g.id}" ${chk}/></td><td>${esc(g.name)}</td><td>${esc(bname)}</td><td>${g.level}</td><td>${esc(g.tactician_name || "-")}</td><td>${esc(g.status_text || "-")}</td></tr>`;
+        })
+        .join("");
+      tbody.querySelectorAll(".tac-chk").forEach((c) => {
+        c.onchange = () => {
+          const gid = Number(c.dataset.gid);
+          if (c.checked) selectedTacIds.add(gid);
+          else selectedTacIds.delete(gid);
+          updateSummary();
+        };
+      });
+      updateSummary();
+    };
+
+    $("tac-city").onchange = renderTacticianModalBody;
+    $("tac-all").onchange = () => {
+      const checked = $("tac-all").checked;
+      getVisibleVos().forEach((g) => (checked ? selectedTacIds.add(g.id) : selectedTacIds.delete(g.id)));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-all").onclick = () => {
+      getVisibleVos().forEach((g) => selectedTacIds.add(g.id));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-none").onclick = () => {
+      getVisibleVos().forEach((g) => selectedTacIds.delete(g.id));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-unassigned").onclick = () => {
+      getVisibleVos().forEach((g) => ((g.tactician_id || 0) <= 0 ? selectedTacIds.add(g.id) : selectedTacIds.delete(g.id)));
+      renderTacticianModalBody();
+    };
+    $("btn-tac-reload").onclick = () => {
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/roster/reload`, { method: "POST" })
+        .then(() => showToast("Làm mới", "Đã đồng bộ danh sách tướng & Mưu sĩ."))
+        .catch((e) => showToast("Lỗi", e.message, "error"));
+    };
     document.querySelectorAll(".tac-run").forEach((b) => (b.onclick = () => {
-      const ids = [...document.querySelectorAll(".tac-chk:checked")].map((c) => Number(c.dataset.gid));
+      const ids = [...selectedTacIds];
       api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tactician/run`, {
         method: "POST", body: { mode: b.dataset.mode, general_ids: ids, reassign: $("tac-reassign").checked },
       }).then(() => showToast("Mưu sĩ", "Đang xử lý trong nền...")).catch((e) => showToast("Lỗi", e.message, "error"));
     }));
     $("btn-tac-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tactician/stop`, { method: "POST" });
+
+    renderTacticianModalBody();
   }
 
+  let renderEquipModalBody = null;
+  let renderArmamentModalBody = null;
+  let renderRenameModalBody = null;
+
   async function openEquipModal() {
-    const gens = state.snapshot.roster.generals || [];
     const bases = state.snapshot.roster.bases || [];
+    const allGens = state.snapshot.roster.generals || [];
+    const selectedIds = new Set(allGens.map((g) => g.id));
     let inv = null;
-    try {
-      const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/inventory`);
-      inv = res.inventory;
-    } catch {}
+    try { inv = (await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/inventory`)).inventory; } catch {}
+    const initCity = state.selectedOverviewCityId && bases.some((b) => b.id === state.selectedOverviewCityId) ? String(state.selectedOverviewCityId) : "all";
+
     openModal(
       "🛡️ Tự Động Trang Bị Quan Văn & Võ Tướng",
       `<div class="form-row">
-         <label><input id="eq-reassign" type="checkbox"/> Đổi trang bị (tháo chia lại từ đầu Cao → Thấp)</label>
-         <span class="pill">Kho đồ: ${inv?.total_items ?? "?"} món</span>
+         <label>Thành / Trại <select id="eq-city"><option value="all">🌟 Tất cả căn cứ</option>${bases.map((b) => `<option value="${b.id}" ${String(b.id) === initCity ? "selected" : ""}>${esc(b.display_name || b.name)}</option>`).join("")}</select></label>
+         <label>Phân hệ <select id="eq-role"><option value="all">Tất cả (Võ & Văn)</option><option value="vo">Võ tướng</option><option value="van">Văn quan</option></select></label>
+         <button id="btn-eq-reload" class="btn-sm" style="margin-left:auto;">🔄 Tải kho & trang bị</button>
        </div>
-       <div class="table-wrap" style="max-height:280px;">
-         <table><thead><tr><th><input id="eq-all" type="checkbox" checked/></th><th>Tướng</th><th>Hệ</th><th>Cấp</th><th>Mũ</th><th>Vũ khí</th><th>Giáp</th><th>Thú cưỡi</th></tr></thead>
-         <tbody>${gens.map((g) => {
-           const eq = inv?.equipped_by_general?.[String(g.id)] || {};
-           return `<tr><td><input type="checkbox" class="eq-chk" data-gid="${g.id}" checked/></td><td>${esc(g.name)}</td><td>${g.role === "van" ? "Văn" : "Võ"}</td><td>${g.level}</td><td>${esc(eq["1"] || "-")}</td><td>${esc(eq["2"] || "-")}</td><td>${esc(eq["3"] || "-")}</td><td>${esc(eq["4"] || "-")}</td></tr>`;
-         }).join("")}</tbody></table>
+       <div class="form-row">
+         <button id="btn-eq-all" class="btn-sm">☑ Tất cả</button>
+         <button id="btn-eq-none" class="btn-sm">☐ Bỏ chọn</button>
+         <button id="btn-eq-vo" class="btn-sm">⚔️ Chọn Võ</button>
+         <button id="btn-eq-van" class="btn-sm">📜 Chọn Văn</button>
+         <button id="btn-eq-miss" class="btn-sm">✨ Thiếu đồ</button>
        </div>
-       <div class="log-box" style="height:120px;margin-top:10px;">${esc((state.snapshot.logs.equip || []).join("\n"))}</div>`,
-      `<button id="btn-eq-assign" class="btn-success btn-sm">🛡️ Tự Động Trang Bị</button>
+       <div id="eq-summary" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+       <div class="form-row"><label><input id="eq-reassign" type="checkbox"/> Đổi trang bị (tháo toàn bộ đồ của các tướng đã chọn về kho để chia lại từ đầu theo cấp Cao → Thấp)</label></div>
+       <div class="table-wrap" style="max-height:260px;">
+         <table><thead><tr><th><input id="eq-all" type="checkbox"/></th><th>Tên tướng</th><th>Chức vụ</th><th>Thành / Trại</th><th>Cấp</th><th>Mũ</th><th>Vũ khí</th><th>Giáp</th><th>Thú cưỡi</th><th>Trạng thái</th></tr></thead>
+         <tbody id="eq-tbody"></tbody></table>
+       </div>
+       <div id="eq-status-lbl" style="font-size:12px;color:var(--accent);margin-top:6px;">${esc(state.snapshot.aux?.equip_status || "Sẵn sàng")}</div>
+       <div id="log-equip" class="log-box" style="height:120px;margin-top:6px;">${esc((state.snapshot.logs.equip || []).join("\n"))}</div>`,
+      `<button id="btn-eq-assign" class="btn-success btn-sm">🛡️ Tự Động Trang Bị (Cao → Thấp)</button>
        <button id="btn-eq-remove" class="btn-warning btn-sm">🔓 Tháo Trang Bị</button>
        <button id="btn-eq-stop" class="btn-danger btn-sm">⏹ Dừng</button>`
     );
-    $("eq-all").onchange = () => document.querySelectorAll(".eq-chk").forEach((c) => (c.checked = $("eq-all").checked));
+
+    const visibleGens = () => {
+      const c = $("eq-city")?.value || "all";
+      const r = $("eq-role")?.value || "all";
+      const cur = (state.snapshot.roster.generals || []).filter(
+        (g) => (c === "all" || String(g.city_id) === c) && (r === "all" || g.role === r)
+      );
+      const tier = (g) => (g.role === "van" ? (g.is_mayor ? 0 : g.is_tactician ? 1 : 2) : 2);
+      return [...cur].sort((a, b) => tier(a) - tier(b) || b.level - a.level || a.id - b.id);
+    };
+    const updateEqSummary = (shown) => {
+      const vis = visibleGens();
+      const selVis = vis.filter((g) => selectedIds.has(g.id)).length;
+      const invPart = inv
+        ? ` • Kho Võ (Mũ/VK/Giáp/Ngựa): ${(inv.free_vo || []).join("/")} • Kho Văn (Mũ/VK/Giáp/Ngựa): ${(inv.free_van || []).join("/")}`
+        : " • (Chưa tải kho trang bị)";
+      const el = $("eq-summary");
+      if (el) el.textContent = `Tướng hiển thị: ${shown ?? vis.length} • Đang chọn: ${selVis} (Tổng chọn: ${selectedIds.size})${invPart}`;
+      const chkAll = $("eq-all");
+      if (chkAll) chkAll.checked = vis.length > 0 && selVis === vis.length;
+    };
+
+    renderEquipModalBody = () => {
+      const tbody = $("eq-tbody");
+      if (!tbody) return;
+      const curBases = state.snapshot.roster.bases || [];
+      const rows = visibleGens();
+      tbody.innerHTML = rows.map((g) => {
+        const bname = curBases.find((b) => b.id === g.city_id)?.name || g.city_id;
+        const eq = inv?.equipped_by_general?.[String(g.id)] || {};
+        const roleTxt = g.is_mayor ? "Thái thú" : (g.role === "van" ? "Văn quan" : "Võ tướng");
+        return `<tr><td><input type="checkbox" class="eq-chk" data-gid="${g.id}" ${selectedIds.has(g.id) ? "checked" : ""}/></td><td>${esc(g.name)}</td><td>${esc(roleTxt)}</td><td>${esc(bname)}</td><td>${g.level}</td><td>${esc(eq["1"] || "-")}</td><td>${esc(eq["2"] || "-")}</td><td>${esc(eq["3"] || "-")}</td><td>${esc(eq["4"] || "-")}</td><td>${esc(g.status_text || "-")}</td></tr>`;
+      }).join("");
+      tbody.querySelectorAll(".eq-chk").forEach((c) => (c.onchange = () => {
+        const gid = Number(c.dataset.gid);
+        if (c.checked) selectedIds.add(gid); else selectedIds.delete(gid);
+        updateEqSummary(rows.length);
+      }));
+      updateEqSummary(rows.length);
+    };
+
+    $("eq-city").onchange = renderEquipModalBody;
+    $("eq-role").onchange = renderEquipModalBody;
+    $("eq-all").onchange = () => { const ch = $("eq-all").checked; visibleGens().forEach((g) => (ch ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderEquipModalBody(); };
+    $("btn-eq-all").onclick = () => { visibleGens().forEach((g) => selectedIds.add(g.id)); renderEquipModalBody(); };
+    $("btn-eq-none").onclick = () => { visibleGens().forEach((g) => selectedIds.delete(g.id)); renderEquipModalBody(); };
+    $("btn-eq-vo").onclick = () => { visibleGens().forEach((g) => (g.role === "vo" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderEquipModalBody(); };
+    $("btn-eq-van").onclick = () => { visibleGens().forEach((g) => (g.role === "van" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderEquipModalBody(); };
+    $("btn-eq-miss").onclick = () => {
+      visibleGens().forEach((g) => {
+        const eq = inv?.equipped_by_general?.[String(g.id)] || {};
+        const miss = ["1", "2", "3", "4"].some((s) => !eq[s]);
+        if (miss) selectedIds.add(g.id); else selectedIds.delete(g.id);
+      });
+      renderEquipModalBody();
+    };
+    $("btn-eq-reload").onclick = async () => {
+      try {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/roster/reload`, { method: "POST" });
+        inv = (await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/inventory`)).inventory;
+        renderEquipModalBody();
+        showToast("Làm mới", "Đã tải lại kho & trang bị.");
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
     $("btn-eq-assign").onclick = () => {
-      const ids = [...document.querySelectorAll(".eq-chk:checked")].map((c) => Number(c.dataset.gid));
-      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/run`, { method: "POST", body: { mode: "assign", general_ids: ids, reassign: $("eq-reassign").checked } })
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/run`, { method: "POST", body: { mode: "assign", general_ids: [...selectedIds], reassign: $("eq-reassign").checked } })
         .then(() => showToast("Trang bị", "Đang xử lý trong nền...")).catch((e) => showToast("Lỗi", e.message, "error"));
     };
     $("btn-eq-remove").onclick = () => {
-      const ids = [...document.querySelectorAll(".eq-chk:checked")].map((c) => Number(c.dataset.gid));
-      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/run`, { method: "POST", body: { mode: "unequip", general_ids: ids, reassign: false } })
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/run`, { method: "POST", body: { mode: "unequip", general_ids: [...selectedIds], reassign: false } })
         .then(() => showToast("Trang bị", "Đang tháo trang bị...")).catch((e) => showToast("Lỗi", e.message, "error"));
     };
     $("btn-eq-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/stop`, { method: "POST" });
+    renderEquipModalBody();
+  }
+
+  async function openArmamentModal() {
+    const bases = state.snapshot.roster.bases || [];
+    const scopesMeta = state.meta?.armament_scopes || [
+      { id: "infantry", name: "Bộ binh" },
+      { id: "cavalry", name: "Kỵ binh" },
+      { id: "bowman", name: "Cung binh" },
+      { id: "mangonel", name: "Xe ném đá" },
+    ];
+    const voList = () => {
+      const seen = new Set();
+      return (state.snapshot.roster.generals || []).filter((g) => g.role === "vo" && !seen.has(g.id) && seen.add(g.id))
+        .sort((a, b) => b.level - a.level || a.id - b.id);
+    };
+    const initVos = voList();
+    let snaps = {};
+    try { snaps = (await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/armament/snapshots`)).snapshots || {}; } catch {}
+    const selectedIds = new Set();
+
+    openModal(
+      "⚔️ Đồng Bộ Quân Giới Võ Tướng",
+      `<div class="card" style="padding:10px;margin-bottom:8px;">
+         <div class="form-row">
+           <label>Võ tướng mẫu <select id="arm-tpl">${initVos.map((g) => `<option value="${g.id}">${esc(g.name)} (Cấp ${g.level}) - ${esc(bases.find((b) => b.id === g.city_id)?.name || g.city_id)} #${g.id}</option>`).join("")}</select></label>
+           <button id="btn-arm-reload" class="btn-sm" style="margin-left:auto;">🔄 Tải lại</button>
+         </div>
+         <div id="arm-tpl-preview" style="font-size:12px;color:var(--accent);margin-bottom:6px;"></div>
+         <div class="form-row" style="margin-bottom:0;">
+           <strong style="font-size:12px;">Phạm vi:</strong>
+           ${scopesMeta.map((s) => `<label style="font-size:12.5px;"><input type="checkbox" class="arm-scope" value="${s.id}" checked/> ${esc(s.name)}</label>`).join("")}
+           <label style="font-size:12.5px;"><input id="arm-form" type="checkbox"/> Trận hình</label>
+         </div>
+       </div>
+       <div class="form-row">
+         <label>Thành / Trại <select id="arm-city"><option value="all">🌟 Tất cả căn cứ</option>${bases.map((b) => `<option value="${b.id}">${esc(b.display_name || b.name)}</option>`).join("")}</select></label>
+         <button id="btn-arm-all" class="btn-sm">☑ Tất cả</button>
+         <button id="btn-arm-none" class="btn-sm">☐ Bỏ chọn</button>
+         <button id="btn-arm-mismatch" class="btn-sm">✨ Chưa khớp mẫu</button>
+       </div>
+       <div id="arm-summary" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+       <div class="table-wrap" style="max-height:240px;">
+         <table><thead><tr><th><input id="arm-all-chk" type="checkbox"/></th><th>Võ tướng</th><th>Thành / Trại</th><th>Bộ binh</th><th>Kỵ binh</th><th>Cung binh</th><th>Xe ném đá</th><th>Trận</th><th>Trạng thái</th></tr></thead>
+         <tbody id="arm-tbody"></tbody></table>
+       </div>
+       <div id="arm-status-lbl" style="font-size:12px;color:var(--accent);margin-top:6px;">${esc(state.snapshot.aux?.armament_status || "Sẵn sàng")}</div>
+       <div id="log-armament" class="log-box" style="height:110px;margin-top:6px;">${esc((state.snapshot.logs.armament || []).join("\n"))}</div>`,
+      `<button id="btn-arm-run" class="btn-success btn-sm">🔄 Đồng Bộ Quân Giới</button>
+       <button id="btn-arm-stop" class="btn-danger btn-sm">⏹ Dừng</button>`
+    );
+
+    const activeScopes = () => [...document.querySelectorAll(".arm-scope:checked")].map((c) => c.value);
+    const isMatch = (gid) => {
+      const tid = Number($("arm-tpl")?.value || 0);
+      const cur = snaps[String(gid)];
+      const tpl = snaps[String(tid)];
+      if (!cur || !tpl) return null;
+      for (const s of activeScopes()) {
+        if (JSON.stringify(cur.eids?.[s] || []) !== JSON.stringify(tpl.eids?.[s] || [])) return false;
+      }
+      if ($("arm-form")?.checked && cur.battle_array !== tpl.battle_array) return false;
+      return true;
+    };
+    const visibleVos = () => {
+      const c = $("arm-city")?.value || "all";
+      return voList().filter((g) => c === "all" || String(g.city_id) === c);
+    };
+
+    renderArmamentModalBody = () => {
+      const tid = Number($("arm-tpl")?.value || 0);
+      const tplSnap = snaps[String(tid)];
+      const prev = $("arm-tpl-preview");
+      if (prev) prev.textContent = tplSnap ? tplSnap.description : "Chưa tải cấu hình tướng mẫu.";
+      const curBases = state.snapshot.roster.bases || [];
+      const rows = visibleVos();
+      const tbody = $("arm-tbody");
+      if (!tbody) return;
+      tbody.innerHTML = rows.map((g) => {
+        const s = snaps[String(g.id)];
+        const bname = curBases.find((b) => b.id === g.city_id)?.name || g.city_id;
+        const m = isMatch(g.id);
+        const st = g.id === tid ? "Tướng mẫu" : (g.status !== 0 ? g.status_text : (m === null ? "-" : (m ? "✅ Khớp" : "⚠️ Lệch")));
+        return `<tr><td><input type="checkbox" class="arm-chk" data-gid="${g.id}" ${selectedIds.has(g.id) ? "checked" : ""}/></td><td>${esc(g.name)}</td><td>${esc(bname)}</td><td>${esc(s?.labels?.infantry || "-")}</td><td>${esc(s?.labels?.cavalry || "-")}</td><td>${esc(s?.labels?.bowman || "-")}</td><td>${esc(s?.labels?.mangonel || "-")}</td><td>${s?.battle_array ?? "-"}</td><td>${esc(st)}</td></tr>`;
+      }).join("");
+      tbody.querySelectorAll(".arm-chk").forEach((c) => (c.onchange = () => {
+        const gid = Number(c.dataset.gid);
+        if (c.checked) selectedIds.add(gid); else selectedIds.delete(gid);
+        const sum = $("arm-summary");
+        if (sum) sum.textContent = `Võ tướng hiển thị: ${rows.length} • Đang chọn: ${selectedIds.size}`;
+      }));
+      const sum = $("arm-summary");
+      if (sum) sum.textContent = `Võ tướng hiển thị: ${rows.length} • Đang chọn: ${selectedIds.size}`;
+    };
+
+    $("arm-tpl").onchange = renderArmamentModalBody;
+    $("arm-city").onchange = renderArmamentModalBody;
+    $("arm-form").onchange = renderArmamentModalBody;
+    document.querySelectorAll(".arm-scope").forEach((c) => (c.onchange = renderArmamentModalBody));
+    $("arm-all-chk").onchange = () => { const ch = $("arm-all-chk").checked; const tid = Number($("arm-tpl").value); visibleVos().forEach((g) => (ch && g.id !== tid ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderArmamentModalBody(); };
+    $("btn-arm-all").onclick = () => { const tid = Number($("arm-tpl").value); visibleVos().forEach((g) => { if (g.id !== tid) selectedIds.add(g.id); }); renderArmamentModalBody(); };
+    $("btn-arm-none").onclick = () => { visibleVos().forEach((g) => selectedIds.delete(g.id)); renderArmamentModalBody(); };
+    $("btn-arm-mismatch").onclick = () => { const tid = Number($("arm-tpl").value); visibleVos().forEach((g) => { if (g.id !== tid && isMatch(g.id) === false) selectedIds.add(g.id); else selectedIds.delete(g.id); }); renderArmamentModalBody(); };
+    $("btn-arm-reload").onclick = async () => {
+      try {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/roster/reload`, { method: "POST" });
+        snaps = (await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/armament/snapshots`)).snapshots || {};
+        renderArmamentModalBody();
+        showToast("Làm mới", "Đã tải lại cấu hình Quân Giới.");
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+    $("btn-arm-run").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/armament/run`, {
+      method: "POST",
+      body: { template_id: Number($("arm-tpl").value), general_ids: [...selectedIds], scopes: activeScopes(), sync_formation: $("arm-form").checked },
+    }).then(() => showToast("Quân Giới", "Đang đồng bộ trong nền...")).catch((e) => showToast("Lỗi", e.message, "error"));
+    $("btn-arm-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/armament/stop`, { method: "POST" });
+    renderArmamentModalBody();
+  }
+
+  function openRenameModal() {
+    const bases = state.snapshot.roster.bases || [];
+    const maxW = state.meta?.rename_max_width || 17;
+    const blockedStatus = state.meta?.rename_status_blocked || 35;
+    const selectedIds = new Set();
+    const initCity = state.selectedOverviewCityId && bases.some((b) => b.id === state.selectedOverviewCityId) ? String(state.selectedOverviewCityId) : "all";
+    const nameWidth = (s) => [...String(s || "")].reduce((acc, ch) => acc + (ch.charCodeAt(0) < 128 ? 1 : 2), 0);
+
+    openModal(
+      "✏️ Đổi Tên Văn Quan & Võ Tướng",
+      `<div class="card" style="padding:10px;margin-bottom:8px;">
+         <div class="form-row">
+           <label>Tiền tố / Tên mới <input id="ren-prefix" type="text" value="DT_" style="width:150px;"/></label>
+           <label><input id="ren-numbered" type="checkbox" checked/> Đánh số thứ tự (01, 02...)</label>
+           <label>Bắt đầu từ <input id="ren-start" type="number" min="1" value="1" style="width:65px;"/></label>
+           <span id="ren-example" style="font-size:12px;color:var(--accent);font-weight:700;"></span>
+         </div>
+         <div style="font-size:11.5px;color:var(--muted);">Nhập tiền tố (vd 'DT_') để đổi thành DT_01, DT_02... theo thứ tự bảng. Bỏ tick 'Đánh số thứ tự' để đặt cùng 1 tên cố định. Giới hạn ≤ ${maxW} đơn vị (chữ Hán/có dấu tính 2).</div>
+       </div>
+       <div class="form-row">
+         <label>Thành / Trại <select id="ren-city"><option value="all">🌟 Tất cả căn cứ</option>${bases.map((b) => `<option value="${b.id}" ${String(b.id) === initCity ? "selected" : ""}>${esc(b.display_name || b.name)}</option>`).join("")}</select></label>
+         <label>Phân hệ <select id="ren-role"><option value="all">Tất cả (Võ & Văn)</option><option value="vo">Võ tướng</option><option value="van">Văn quan</option></select></label>
+         <button id="btn-ren-all" class="btn-sm">☑ Tất cả</button>
+         <button id="btn-ren-none" class="btn-sm">☐ Bỏ chọn</button>
+         <button id="btn-ren-vo" class="btn-sm">⚔️ Chọn Võ</button>
+         <button id="btn-ren-van" class="btn-sm">📜 Chọn Văn</button>
+         <button id="btn-ren-reload" class="btn-sm" style="margin-left:auto;">🔄 Làm mới</button>
+       </div>
+       <div id="ren-summary" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+       <div class="table-wrap" style="max-height:240px;">
+         <table><thead><tr><th><input id="ren-all-chk" type="checkbox"/></th><th>Tên hiện tại</th><th>Chức vụ</th><th>Thành / Trại</th><th>Cấp</th><th>Tên mới (Xem trước)</th><th>Trạng thái</th></tr></thead>
+         <tbody id="ren-tbody"></tbody></table>
+       </div>
+       <div id="ren-status-lbl" style="font-size:12px;color:var(--accent);margin-top:6px;">${esc(state.snapshot.aux?.rename_status || "Sẵn sàng")}</div>
+       <div id="log-rename" class="log-box" style="height:105px;margin-top:6px;">${esc((state.snapshot.logs.rename || []).join("\n"))}</div>`,
+      `<button id="btn-ren-run" class="btn-success btn-sm">✏️ Thực Hiện Đổi Tên</button>
+       <button id="btn-ren-stop" class="btn-danger btn-sm">⏹ Dừng</button>`
+    );
+
+    const visibleGens = () => {
+      const c = $("ren-city")?.value || "all";
+      const r = $("ren-role")?.value || "all";
+      const seen = new Set();
+      const filtered = (state.snapshot.roster.generals || []).filter(
+        (g) => !seen.has(g.id) && seen.add(g.id) && (c === "all" || String(g.city_id) === c) && (r === "all" || g.role === r)
+      );
+      return [...filtered].sort((a, b) => (a.city_id - b.city_id) || (b.level - a.level) || (a.id - b.id));
+    };
+    const buildPlanMap = (rows) => {
+      const raw = ($("ren-prefix")?.value || "").trim().replace(/'/g, "’").replace(/"/g, "’");
+      const numbered = !!$("ren-numbered")?.checked;
+      const start = Math.max(1, Number($("ren-start")?.value || 1));
+      const chosen = rows.filter((g) => selectedIds.has(g.id));
+      const pad = Math.max(2, String(start + Math.max(0, chosen.length - 1)).length);
+      const map = {};
+      chosen.forEach((g, idx) => {
+        if (!raw) map[g.id] = "";
+        else if (!numbered) map[g.id] = raw;
+        else map[g.id] = `${raw}${String(start + idx).padStart(pad, "0")}`;
+      });
+      return { raw, numbered, start, map };
+    };
+
+    renderRenameModalBody = () => {
+      const rows = visibleGens();
+      const { raw, numbered, start, map } = buildPlanMap(rows);
+      if ($("ren-start")) $("ren-start").disabled = !numbered;
+      const ex = numbered && raw ? `${raw}${String(start).padStart(2, "0")}` : (raw || "-");
+      if ($("ren-example")) $("ren-example").textContent = `Ví dụ: ${ex}`;
+      const curBases = state.snapshot.roster.bases || [];
+      const tbody = $("ren-tbody");
+      if (!tbody) return;
+      tbody.innerHTML = rows.map((g) => {
+        const bname = curBases.find((b) => b.id === g.city_id)?.name || g.city_id;
+        const roleTxt = g.is_mayor ? "Thái thú" : (g.role === "van" ? "Văn quan" : "Võ tướng");
+        const prevName = selectedIds.has(g.id) ? (map[g.id] || "(trống)") : "-";
+        const w = selectedIds.has(g.id) ? nameWidth(map[g.id] || "") : 0;
+        const bad = selectedIds.has(g.id) && (!map[g.id] || w > maxW);
+        const st = g.status === blockedStatus ? `⚠️ Bị chặn (${g.status})` : (bad ? `❌ Quá dài (${w}/${maxW})` : (g.status_text || "Rảnh"));
+        return `<tr style="${bad ? "color:#f87171;" : ""}"><td><input type="checkbox" class="ren-chk" data-gid="${g.id}" ${selectedIds.has(g.id) ? "checked" : ""}/></td><td>${esc(g.name)}</td><td>${esc(roleTxt)}</td><td>${esc(bname)}</td><td>${g.level}</td><td>${esc(prevName)}</td><td>${esc(st)}</td></tr>`;
+      }).join("");
+      tbody.querySelectorAll(".ren-chk").forEach((c) => (c.onchange = () => {
+        const gid = Number(c.dataset.gid);
+        if (c.checked) selectedIds.add(gid); else selectedIds.delete(gid);
+        renderRenameModalBody();
+      }));
+      const selVis = rows.filter((g) => selectedIds.has(g.id)).length;
+      if ($("ren-summary")) $("ren-summary").textContent = `Tướng hiển thị: ${rows.length} • Đang chọn: ${selVis} (Tổng: ${selectedIds.size})`;
+      if ($("ren-all-chk")) $("ren-all-chk").checked = rows.length > 0 && selVis === rows.length;
+    };
+
+    $("ren-prefix").oninput = renderRenameModalBody;
+    $("ren-numbered").onchange = renderRenameModalBody;
+    $("ren-start").oninput = renderRenameModalBody;
+    $("ren-city").onchange = renderRenameModalBody;
+    $("ren-role").onchange = renderRenameModalBody;
+    $("ren-all-chk").onchange = () => { const ch = $("ren-all-chk").checked; visibleGens().forEach((g) => (ch ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderRenameModalBody(); };
+    $("btn-ren-all").onclick = () => { visibleGens().forEach((g) => selectedIds.add(g.id)); renderRenameModalBody(); };
+    $("btn-ren-none").onclick = () => { visibleGens().forEach((g) => selectedIds.delete(g.id)); renderRenameModalBody(); };
+    $("btn-ren-vo").onclick = () => { visibleGens().forEach((g) => (g.role === "vo" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderRenameModalBody(); };
+    $("btn-ren-van").onclick = () => { visibleGens().forEach((g) => (g.role === "van" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderRenameModalBody(); };
+    $("btn-ren-reload").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/roster/reload`, { method: "POST" }).then(() => showToast("Làm mới", "Đã đồng bộ danh sách tướng."));
+    $("btn-ren-run").onclick = () => {
+      const rows = visibleGens();
+      const { raw, map } = buildPlanMap(rows);
+      if (!raw) return showToast("Đổi tên", "Vui lòng nhập tiền tố hoặc tên mới.", "error");
+      const chosen = rows.filter((g) => selectedIds.has(g.id));
+      if (!chosen.length) return showToast("Đổi tên", "Vui lòng chọn ít nhất 1 tướng.", "warn");
+      const tooLong = chosen.find((g) => nameWidth(map[g.id] || "") > maxW);
+      if (tooLong) return showToast("Đổi tên", `Tên '${map[tooLong.id]}' vượt quá ${maxW} đơn vị.`, "error");
+      const items = chosen.map((g) => ({ general_id: g.id, new_name: map[g.id] }));
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/rename/run`, { method: "POST", body: { items } })
+        .then(() => showToast("Đổi tên", "Đang thực thi đổi tên trong nền...")).catch((e) => showToast("Lỗi", e.message, "error"));
+    };
+    $("btn-ren-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/rename/stop`, { method: "POST" });
+    renderRenameModalBody();
   }
 
   async function openSysLogsModal() {
@@ -2080,6 +2902,24 @@
       $("btn-sound-toggle").textContent = state.soundEnabled ? "🔊 Âm thanh: Bật" : "🔇 Âm thanh: Tắt";
       if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
     };
+    $("btn-relogin").onclick = async () => {
+      if (!state.currentKey) return;
+      try {
+        const r = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/relogin`, { method: "POST" });
+        showToast("Re-Login", r.ok ? "Đã đăng nhập lại thành công." : "Đăng nhập lại thất bại.", r.ok ? "info" : "error");
+      } catch (e) { showToast("Re-Login", e.message, "error"); }
+    };
+    $("hdr-profile-save").onclick = async () => {
+      if (!state.currentKey || !state.snapshot) return;
+      try {
+        await saveProfileImmediate(state.snapshot.profile);
+        showToast("Đã lưu", "Hồ sơ cấu hình đã được lưu.");
+      } catch (e) { showToast("Lỗi lưu hồ sơ", e.message, "error"); }
+    };
+    $("gl-server").oninput = updateServerHint;
+    $("gl-proxy").onchange = autoSplitProxyInput;
+    $("gl-proxy").onpaste = () => setTimeout(autoSplitProxyInput, 0);
+    document.addEventListener("click", hideAccountContextMenu);
     $("btn-reload-roster").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/roster/reload`, { method: "POST" }).catch((e) => showToast("Lỗi", e.message, "error"));
     $("btn-rotate-proxy").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/proxy/rotate`, { method: "POST" }).catch((e) => showToast("Lỗi", e.message, "error"));
     $("btn-notify-settings").onclick = openNotificationModal;

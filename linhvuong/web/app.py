@@ -12,8 +12,10 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from ..armament import ALL_SCOPES as ARM_ALL_SCOPES, SCOPE_NAMES as ARM_SCOPE_NAMES
 from ..auth import LoginError
 from ..battle import ATTACK_ACTION_COMBO_OPTIONS, FORMATION_NAMES, STRATAGEMS
+from ..generals import RENAME_MAX_WIDTH, RENAME_STATUS_BLOCKED
 from ..logger import list_log_files, read_log_tail
 from ..paths import logs_dir
 from ..proxy import DEFAULT_FREE_PROXY_URL
@@ -288,6 +290,9 @@ def create_app(
             "log_channels": list(LOG_CHANNELS),
             "auto_start_task_options": [{"id": tid, "label": lbl} for tid, lbl in AUTO_START_TASK_LABELS],
             "vault_unlocked": ws_manager.vault.is_unlocked(),
+            "armament_scopes": [{"id": s, "name": ARM_SCOPE_NAMES[s]} for s in ARM_ALL_SCOPES],
+            "rename_max_width": RENAME_MAX_WIDTH,
+            "rename_status_blocked": RENAME_STATUS_BLOCKED,
         }
 
     # -------------------------------------------------------------------------
@@ -452,6 +457,7 @@ def create_app(
             "nienthu": sess.start_nienthu,
             "resource_monitor": sess.start_resource_monitor,
             "crafting": sess.start_crafting,
+            "transfer_loop": sess.start_transfer_loop,
         }
         fn = dispatch.get(task_name)
         if not fn:
@@ -474,6 +480,7 @@ def create_app(
             "nienthu": sess.stop_nienthu,
             "resource_monitor": sess.stop_resource_monitor,
             "crafting": sess.stop_crafting,
+            "transfer_loop": sess.stop_transfer_loop,
         }
         fn = dispatch.get(task_name)
         if not fn:
@@ -558,8 +565,11 @@ def create_app(
 
     @app.post("/api/accounts/{account_key}/aux/tribute", dependencies=[Depends(require_admin)])
     def tribute_city(account_key: str, body: dict = Body(...)) -> dict:
-        _get_session(account_key).tribute_city(int(body["city_id"]), int(body.get("building_gid", 1)))
-        return {"ok": True}
+        try:
+            _get_session(account_key).tribute_city(int(body["city_id"]), int(body.get("building_gid", 1)))
+            return {"ok": True}
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/accounts/{account_key}/aux/transfer", dependencies=[Depends(require_admin)])
     def transfer_army(account_key: str, body: dict = Body(...)) -> dict:
@@ -675,6 +685,76 @@ def create_app(
     @app.post("/api/accounts/{account_key}/equip/stop", dependencies=[Depends(require_admin)])
     def equip_stop(account_key: str) -> dict:
         _get_session(account_key).stop_equip_action()
+        return {"ok": True}
+
+    def _bad_req(fn):
+        try:
+            return fn()
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/accounts/{account_key}/armament/snapshots", dependencies=[Depends(require_admin)])
+    def armament_snapshots(account_key: str) -> dict:
+        try:
+            return {"ok": True, "snapshots": _get_session(account_key).fetch_all_armaments()}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/armament/template", dependencies=[Depends(require_admin)])
+    def armament_template(account_key: str, body: dict = Body(...)) -> dict:
+        return _bad_req(lambda: {"ok": True, "info": _get_session(account_key).armament_template_info(int(body["general_id"]))})
+
+    @app.post("/api/accounts/{account_key}/armament/compare", dependencies=[Depends(require_admin)])
+    def armament_compare(account_key: str, body: dict = Body(...)) -> dict:
+        return _bad_req(lambda: {
+            "ok": True,
+            "result": _get_session(account_key).armament_compare(
+                int(body["template_id"]),
+                [int(x) for x in body.get("general_ids", [])],
+                list(body.get("scopes", [])),
+                bool(body.get("sync_formation", False)),
+            ),
+        })
+
+    @app.post("/api/accounts/{account_key}/armament/run", dependencies=[Depends(require_admin)])
+    def armament_run(account_key: str, body: dict = Body(...)) -> dict:
+        def _do():
+            _get_session(account_key).run_armament_sync(
+                int(body["template_id"]),
+                [int(x) for x in body.get("general_ids", [])],
+                list(body.get("scopes", [])),
+                bool(body.get("sync_formation", False)),
+            )
+            return {"ok": True}
+        return _bad_req(_do)
+
+    @app.post("/api/accounts/{account_key}/armament/stop", dependencies=[Depends(require_admin)])
+    def armament_stop(account_key: str) -> dict:
+        _get_session(account_key).stop_armament_sync()
+        return {"ok": True}
+
+    @app.post("/api/accounts/{account_key}/rename/preview", dependencies=[Depends(require_admin)])
+    def rename_preview(account_key: str, body: dict = Body(...)) -> dict:
+        return _bad_req(lambda: {
+            "ok": True,
+            **_get_session(account_key).preview_rename(
+                [int(x) for x in body.get("general_ids", [])],
+                str(body.get("prefix", "")),
+                bool(body.get("numbered", True)),
+                int(body.get("start_index", 1) or 1),
+            ),
+        })
+
+    @app.post("/api/accounts/{account_key}/rename/run", dependencies=[Depends(require_admin)])
+    def rename_run(account_key: str, body: dict = Body(...)) -> dict:
+        def _do():
+            _get_session(account_key).run_rename(list(body.get("items", [])))
+            return {"ok": True}
+        return _bad_req(_do)
+
+    @app.post("/api/accounts/{account_key}/rename/stop", dependencies=[Depends(require_admin)])
+    def rename_stop(account_key: str) -> dict:
+        _get_session(account_key).stop_rename()
         return {"ok": True}
 
     @app.post("/api/accounts/{account_key}/battle/load", dependencies=[Depends(require_admin)])

@@ -192,3 +192,22 @@ tr.row-boss td { color: #f87171; font-weight: 700; }
   }
   .sidebar.open { transform: translateX(0); }
 }
+
+/* Context menu & Desktop-parity widgets (ADR-0043) */
+.ctx-menu {
+  position: fixed; z-index: 95; background: var(--card-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; display: flex; flex-direction: column; min-width: 170px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.ctx-menu button { background: transparent; border: none; justify-content: flex-start; width: 100%; }
+.ctx-menu button.danger { color: #f87171; }
+.bar-track { width: 100%; height: 12px; background: var(--bg-deep); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.bar-fill { height: 100%; background: var(--accent); }
+.bar-fill.cav { background: #f59e0b; }
+.bar-fill.arc { background: #38bdf8; }
+.bar-row { display: grid; grid-template-columns: 70px 1fr 80px; gap: 8px; align-items: center; margin: 4px 0; font-size: 12.5px; }
+.row-clickable { cursor: pointer; }
+.grp-menu { border: 1px solid var(--border); border-radius: 7px; background: var(--bg-deep); padding: 6px 8px; max-height: 190px; overflow: auto; }
+.grp-menu details { margin: 2px 0; }
+.grp-menu summary { cursor: pointer; font-weight: 600; color: var(--accent); font-size: 12.5px; }
+.grp-menu label { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 2px 0 2px 14px; }

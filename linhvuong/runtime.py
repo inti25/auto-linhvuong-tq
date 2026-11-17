@@ -17,6 +17,15 @@ from typing import Any, Callable, Optional, Union
 import requests
 
 from .auth import LoginError, login, normalize_proxy_url, parse_server_id
+from .armament import (
+    ALL_SCOPES as ARM_ALL_SCOPES,
+    SCOPE_NAMES as ARM_SCOPE_NAMES,
+    armament_matches,
+    describe_armament,
+    fetch_armament,
+    find_general_base,
+    sync_armament,
+)
 from .battle import (
     ATTACK_ACTION_COMBO_OPTIONS,
     ATTACK_ACTIONS,
@@ -32,11 +41,17 @@ from .gateway import GatewayClient
 from .generals import (
     EQUIP_MODE_ASSIGN,
     EQUIP_MODE_UNEQUIP,
+    EQUIP_TYPES,
+    RENAME_MAX_WIDTH,
+    build_rename_plan,
+    collect_reward_targets,
     configure_equipment,
     configure_tacticians,
     fetch_equipment_inventory,
+    general_name_width,
+    rename_generals,
     reward_all_generals,
-    collect_reward_targets,
+    validate_general_name,
 )
 from .locks import TargetLocks
 from .logger import setup_logger
@@ -100,6 +115,7 @@ RESUMABLE_TASKS = (
     "nienthu",
     "resource_monitor",
     "crafting",
+    "transfer_loop",
 )
 
 AUTO_START_TASK_LABELS = (
@@ -110,6 +126,7 @@ AUTO_START_TASK_LABELS = (
     ("goidan", "🧛 Gọi man"),
     ("nienthu", "🧧 Niên thú"),
     ("crafting", "🛡️ Chế tạo quân giới"),
+    ("transfer_loop", "🚚 Chuyển quân giới lặp"),
     ("resource_monitor", "📦 Tự mở rương TN/Vàng"),
 )
 
@@ -138,6 +155,8 @@ LOG_CHANNELS = (
     "tactician",
     "equip",
     "chest",
+    "armament",
+    "rename",
 )
 
 
@@ -193,6 +212,7 @@ def serialize_roster(roster: Optional[Roster]) -> dict:
                 "tactician_id": getattr(g, "tactician_id", 0),
                 "tactician_name": g.tactician_name,
                 "is_mayor": bool(getattr(g, "is_mayor", False)),
+                "is_tactician": bool(getattr(g, "is_tactician", False)),
                 "upgrading_time": getattr(g, "upgrading_time", 0),
                 "army": {
                     "infantry": army.infantry if army else 0,
@@ -441,6 +461,21 @@ class AccountSession:
         self._equip_status = "Sẵn sàng"
         self._equip_inventory: Optional[dict] = None
 
+        self._transfer_running = False
+        self._transfer_stop = threading.Event()
+        self._transfer_thread: Optional[threading.Thread] = None
+        self._transfer_status = "Sẵn sàng"
+        self._tribute_last_date: Optional[str] = None
+
+        self._arm_running = False
+        self._arm_stop = threading.Event()
+        self._arm_status = "Sẵn sàng"
+
+        self._ren_running = False
+        self._ren_stop = threading.Event()
+        self._ren_status = "Sẵn sàng"
+        self._ren_progress = {"done": 0, "total": 0}
+
         self._nien_thu_ann: Optional[dict] = None
         self._last_roster_err: Optional[str] = None
 
@@ -594,6 +629,7 @@ class AccountSession:
                     self._check_boost_once()
                     self._check_explore_once()
                     self._check_daily_reward_once()
+                    self._check_tribute_once()
                 except Exception:
                     pass
                 wait_sec = 60.0
@@ -728,6 +764,13 @@ class AccountSession:
             "tactician_status": self._tac_status,
             "equip_running": self._equip_running,
             "equip_status": self._equip_status,
+            "transfer_running": self._transfer_running,
+            "transfer_status": self._transfer_status,
+            "armament_running": self._arm_running,
+            "armament_status": self._arm_status,
+            "rename_running": self._ren_running,
+            "rename_status": self._ren_status,
+            "rename_progress": dict(self._ren_progress),
             "nien_thu_announcement": self._nien_thu_ann,
         }
 
@@ -741,6 +784,7 @@ class AccountSession:
             "nienthu": {"running": self.engine.is_running("nienthu"), "status": self.engine.get_status("nienthu")},
             "resource_monitor": {"running": self._res_monitor_running, "status": "Đang chạy..." if self._res_monitor_running else "Đã dừng"},
             "crafting": {"running": self._craft_running, "status": "Đang chạy..." if self._craft_running else "Đã dừng"},
+            "transfer_loop": {"running": self._transfer_running, "status": self._transfer_status},
             "battle": {"running": self._battle_running, "status": "Đang chạy..." if self._battle_running else "Đã dừng"},
             "morale": {"running": self._morale_running, "status": self._morale_status},
             "ditrai": {"running": self._ditrai_running, "status": self._ditrai_status},
@@ -761,6 +805,7 @@ class AccountSession:
             "nienthu": "🧧 NT",
             "resource_monitor": "📦 TN",
             "crafting": "🛡️ Rèn",
+            "transfer_loop": "🚚 CQG",
         }
         active = [lbl for tid, lbl in label_map.items() if states.get(tid, {}).get("running")]
         eff_status = "captcha" if self.captcha_required else ("connected" if self.status != "error" else "error")
@@ -1406,19 +1451,129 @@ class AccountSession:
         threading.Thread(target=lambda: task.claim_daily_reward(), daemon=True).start()
 
     def tribute_city(self, city_id: int, building_gid: int = 1) -> None:
+        cid = int(city_id)
+        gid = int(building_gid)
+        if cid <= 0:
+            raise ValueError("Cống quận chỉ áp dụng cho Thành, không áp dụng cho Doanh trại.")
+        if gid not in (1, 2):
+            raise ValueError("Công trình Cống quận chỉ hỗ trợ Quan Phủ (1) hoặc Tường Thành (2).")
+
         def _worker():
             try:
                 resp = self.gateway.call(
-                    "OPT.ashx", 146, {"tid": str(city_id), "gid": str(building_gid), "_": ""}
+                    "OPT.ashx", 146, {"tid": str(cid), "gid": str(gid), "_": ""}
                 ) or {}
-                if resp.get("ret", -1) == 0:
-                    self.append_log("building", f"✅ Đã gửi lệnh Cống quận cho thành {city_id}.")
+                ret = resp.get("ret", -1)
+                if ret == 110:
+                    self._handle_captcha("Cống quận tạm dừng do Captcha.")
+                elif ret == 0:
+                    self.append_log("building", f"✅ Đã gửi lệnh Cống quận cho thành {cid}.")
                 else:
-                    self.append_log("building", f"⚠️ Cống quận thành {city_id} trả về mã lỗi {resp.get('ret')}.")
+                    self.append_log("building", f"⚠️ Cống quận thành {cid} trả về mã lỗi {ret}.")
+            except CaptchaRequired:
+                self._handle_captcha("Cống quận tạm dừng do Captcha.")
             except Exception as exc:
                 self.append_log("building", f"❌ Lỗi Cống quận: {exc}")
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _check_tribute_once(self) -> None:
+        """Cống quận tự động tối đa 1 lần/ngày cho các Thành đang bật Xây (bỏ qua Doanh trại)."""
+        lg = self.profile.logistics
+        today = time.strftime("%Y-%m-%d")
+        if not lg.tribute_enabled or self._tribute_last_date == today:
+            return
+        self._ensure_roster_loaded()
+        if not self.roster or not self.roster.cities:
+            return
+        valid = {c.id for c in self.roster.cities}
+        city_ids = [
+            int(cid) for cid, cfg in self.profile.building.cities.items()
+            if cfg.enabled and int(cid) > 0 and int(cid) in valid
+        ]
+        if not city_ids:
+            return
+        for cid in city_ids:
+            self.tribute_city(cid, lg.tribute_building_gid)
+        self._tribute_last_date = today
+
+    def transfer_loop_orders(self) -> list[ArmyTransferOrder]:
+        return [
+            ArmyTransferOrder(
+                from_city_id=int(o["from_city_id"]),
+                to_city_id=int(o["to_city_id"]),
+                army_id=int(o["army_id"]),
+                amount=int(o["amount"]),
+            )
+            for o in self.profile.logistics.transfer_orders
+        ]
+
+    def start_transfer_loop(self) -> None:
+        """Chạy lặp bảng Chuyển quân giới; dừng ngay khi Thành xuất phát thiếu quân (ADR-0042)."""
+        if self._transfer_running:
+            return
+        orders = self.transfer_loop_orders()
+        if not orders:
+            raise ValueError("Chưa có lệnh Chuyển quân giới nào trong bảng.")
+        interval = max(3.0, _safe_float(self.profile.logistics.transfer_interval, 60.0))
+        self._transfer_running = True
+        self._transfer_stop.clear()
+        self._transfer_status = f"Đang chạy lặp mỗi {int(interval)}s"
+
+        def _loop():
+            task = LogisticsTask(
+                self.gateway,
+                auto_comfort=False,
+                auto_daily_reward=False,
+                notify=lambda m: self.append_log("logistics", m),
+            )
+            try:
+                while not self._transfer_stop.is_set():
+                    cur_orders = self.transfer_loop_orders()
+                    if not cur_orders:
+                        self.append_log("logistics", "⏹️ Không còn lệnh Chuyển quân giới — dừng vòng lặp.")
+                        self._transfer_status = "Đã dừng: không có lệnh"
+                        return
+                    for order in cur_orders:
+                        if self._transfer_stop.is_set():
+                            break
+                        garrison = task.get_garrison_troops(order.from_city_id)
+                        available = garrison.get(order.army_id, 0)
+                        if available < order.amount:
+                            self.append_log(
+                                "logistics",
+                                f"⏹️ Thành {order.from_city_id} thiếu quân giới loại {order.army_id} "
+                                f"({available}/{order.amount}) — dừng vòng lặp Chuyển quân giới.",
+                            )
+                            self._transfer_status = "Đã dừng: thiếu quân giới"
+                            return
+                        task.transfer_army(order)
+                    if self._transfer_stop.wait(interval):
+                        break
+                if not self._transfer_status.startswith("Đã dừng"):
+                    self._transfer_status = "Đã dừng"
+            except CaptchaRequired:
+                self._handle_captcha("Chuyển quân giới tạm dừng do Captcha.")
+                self._transfer_status = "Tạm dừng (Captcha)"
+            except Exception as exc:
+                self.append_log("logistics", f"❌ Lỗi vòng lặp Chuyển quân giới: {exc}")
+                self._transfer_status = f"Lỗi: {exc}"
+            finally:
+                self._transfer_running = False
+                self._emit("aux_updated", self.get_aux_status())
+                self._emit("status_changed", self.get_status_snapshot())
+
+        self._transfer_thread = threading.Thread(target=_loop, daemon=True)
+        self._transfer_thread.start()
+        self._emit("aux_updated", self.get_aux_status())
+        self._emit("status_changed", self.get_status_snapshot())
+
+    def stop_transfer_loop(self) -> None:
+        self._transfer_running = False
+        self._transfer_stop.set()
+        self._transfer_status = "Đã dừng"
+        self._emit("aux_updated", self.get_aux_status())
+        self._emit("status_changed", self.get_status_snapshot())
 
     # -------------------------------------------------------------------------
     # DI TRẠI ĐỘC LẬP
@@ -1499,7 +1654,7 @@ class AccountSession:
         combo_val = combo_opts[idx] if 0 <= idx < len(combo_opts) else combo_opts[0]
         action_mode, fixed_id = parse_attack_action_combo(combo_val)
 
-        stratagem_ids = [0, 92, 93, 94, 95]
+        stratagem_ids = [0, 93, 95, 94]  # khớp Desktop (ADR-0042)
         s_idx = int(cb.stratagem_combo_idx or 0)
         s_id = stratagem_ids[s_idx] if 0 <= s_idx < len(stratagem_ids) else 0
 
@@ -2281,9 +2436,11 @@ class AccountSession:
         inv = fetch_equipment_inventory(self.gateway)
         data = {
             "total_items": len(inv.items) if hasattr(inv, "items") else 0,
+            "free_vo": [inv.count_free("vo", t) for t in EQUIP_TYPES] if hasattr(inv, "count_free") else [0, 0, 0, 0],
+            "free_van": [inv.count_free("van", t) for t in EQUIP_TYPES] if hasattr(inv, "count_free") else [0, 0, 0, 0],
             "equipped_by_general": {
                 str(gid): {
-                    str(slot): item.name if hasattr(item, "name") else str(item)
+                    str(slot): item.short_label if hasattr(item, "short_label") else (item.name if hasattr(item, "name") else str(item))
                     for slot, item in slots.items()
                 }
                 for gid, slots in getattr(inv, "equipped_by_general", {}).items()
@@ -2328,6 +2485,188 @@ class AccountSession:
 
     def stop_equip_action(self) -> None:
         self._equip_stop.set()
+
+    # -------------------------------------------------------------------------
+    # ĐỒNG BỘ QUÂN GIỚI VÕ TƯỚNG (ADR-0041 / ADR-0042)
+    # -------------------------------------------------------------------------
+    def fetch_all_armaments(self) -> dict:
+        self._ensure_roster_loaded()
+        out: dict[str, dict] = {}
+        seen: set[int] = set()
+        for base in self.roster.bases:
+            for gen in self.roster.generals_of(base.id):
+                if gen.role != "vo" or gen.id in seen:
+                    continue
+                seen.add(gen.id)
+                snap = fetch_armament(self.gateway, gen.id, base.id)
+                if snap is not None:
+                    out[str(gen.id)] = {
+                        "infantry": list(snap.infantry),
+                        "cavalry": list(snap.cavalry),
+                        "bowman": list(snap.bowman),
+                        "mangonel": snap.mangonel,
+                        "battle_array": snap.battle_array,
+                        "formation_name": FORMATION_NAMES.get(snap.battle_array, str(snap.battle_array)),
+                        "labels": {s: snap.label(s) for s in ARM_ALL_SCOPES},
+                        "summary": describe_armament(snap),
+                    }
+        return out
+
+    def armament_template_info(self, general_id: int) -> dict:
+        self._ensure_roster_loaded()
+        loc = find_general_base(self.roster, int(general_id))
+        if loc is None:
+            raise ValueError("Không tìm thấy Võ tướng mẫu.")
+        base_id, gen = loc
+        snap = fetch_armament(self.gateway, gen.id, base_id)
+        if snap is None:
+            raise RuntimeError(f"Không đọc được cấu hình quân giới của {gen.name}.")
+        return {
+            "general_id": gen.id,
+            "general_name": gen.name,
+            "battle_array": snap.battle_array,
+            "formation_name": FORMATION_NAMES.get(snap.battle_array, str(snap.battle_array)),
+            "scopes": {
+                s: {"name": ARM_SCOPE_NAMES[s], "eids": list(snap.eids(s)), "label": snap.label(s)}
+                for s in ARM_ALL_SCOPES
+            },
+            "summary": describe_armament(snap),
+        }
+
+    def armament_compare(
+        self, template_id: int, general_ids: list[int], scopes: list[str], sync_formation: bool = False
+    ) -> dict:
+        """Trả {general_id: 'match'|'diff'|'error'} so với tướng mẫu."""
+        self._ensure_roster_loaded()
+        tpl_loc = find_general_base(self.roster, int(template_id))
+        if tpl_loc is None:
+            raise ValueError("Không tìm thấy Võ tướng mẫu.")
+        tpl = fetch_armament(self.gateway, tpl_loc[1].id, tpl_loc[0])
+        if tpl is None:
+            raise RuntimeError("Không đọc được cấu hình tướng mẫu.")
+        out: dict[str, str] = {}
+        for gid in general_ids:
+            loc = find_general_base(self.roster, int(gid))
+            if loc is None:
+                out[str(gid)] = "error"
+                continue
+            cur = fetch_armament(self.gateway, loc[1].id, loc[0])
+            if cur is None:
+                out[str(gid)] = "error"
+            else:
+                out[str(gid)] = "match" if armament_matches(cur, tpl, scopes, sync_formation) else "diff"
+        return out
+
+    def run_armament_sync(
+        self, template_id: int, general_ids: list[int], scopes: list[str], sync_formation: bool = False
+    ) -> None:
+        if self._arm_running:
+            raise RuntimeError("Đang đồng bộ Quân Giới.")
+        if not general_ids:
+            raise ValueError("Vui lòng chọn ít nhất 1 Võ tướng đích.")
+        self._ensure_roster_loaded()
+        self._arm_running = True
+        self._arm_stop.clear()
+        self._arm_status = "Đang đồng bộ Quân Giới..."
+        self._emit("aux_updated", self.get_aux_status())
+
+        def _worker():
+            try:
+                fresh = fetch_roster(self.gateway)
+                s = sync_armament(
+                    self.gateway,
+                    fresh,
+                    int(template_id),
+                    [int(x) for x in general_ids],
+                    scopes=scopes,
+                    sync_formation=sync_formation,
+                    stop_event=self._arm_stop,
+                    on_log=lambda m: self.append_log("armament", m),
+                )
+                self._arm_status = (
+                    f"Hoàn tất: {s.synced} đồng bộ, {s.skipped_same} đã khớp, "
+                    f"{s.skipped_busy} bận, {s.failed} lỗi"
+                )
+            except Exception as exc:
+                self._arm_status = f"❌ Lỗi: {exc}"
+                self.append_log("armament", f"❌ Lỗi đồng bộ Quân Giới: {exc}")
+            finally:
+                self._arm_running = False
+                self._emit("aux_updated", self.get_aux_status())
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def stop_armament_sync(self) -> None:
+        self._arm_stop.set()
+
+    # -------------------------------------------------------------------------
+    # ĐỔI TÊN VĂN QUAN & VÕ TƯỚNG (ADR-0042)
+    # -------------------------------------------------------------------------
+    def preview_rename(self, general_ids: list[int], prefix: str, numbered: bool = True, start_index: int = 1) -> dict:
+        self._ensure_roster_loaded()
+        by_id = {}
+        for base in self.roster.bases:
+            for g in self.roster.generals_of(base.id):
+                by_id.setdefault(g.id, (base.id, g))
+        ordered = [by_id[int(i)] for i in general_ids if int(i) in by_id]
+        plan = build_rename_plan(ordered, prefix, numbered=numbered, start_index=start_index)
+        rows = []
+        for cid, gen, new_name in plan:
+            ok, err = validate_general_name(new_name)
+            rows.append({
+                "general_id": gen.id,
+                "city_id": cid,
+                "name": gen.name,
+                "new_name": new_name,
+                "width": general_name_width(new_name),
+                "valid": ok,
+                "error": err,
+            })
+        return {"max_width": RENAME_MAX_WIDTH, "rows": rows}
+
+    def run_rename(self, items: list[dict]) -> None:
+        if self._ren_running:
+            raise RuntimeError("Đang đổi tên tướng.")
+        pairs = [(int(i["general_id"]), str(i["new_name"])) for i in items]
+        if not pairs:
+            raise ValueError("Vui lòng chọn ít nhất 1 tướng để đổi tên.")
+        self._ren_running = True
+        self._ren_stop.clear()
+        self._ren_status = "Đang đổi tên..."
+        self._ren_progress = {"done": 0, "total": len(pairs)}
+        self._emit("aux_updated", self.get_aux_status())
+
+        def _on_prog(done: int, total: int) -> None:
+            self._ren_progress = {"done": done, "total": total}
+            self._emit("aux_updated", self.get_aux_status())
+
+        def _worker():
+            try:
+                fresh = fetch_roster(self.gateway)
+                s = rename_generals(
+                    self.gateway,
+                    fresh,
+                    pairs,
+                    stop_event=self._ren_stop,
+                    on_log=lambda m: self.append_log("rename", m),
+                    on_progress=_on_prog,
+                )
+                self._ren_status = (
+                    f"Hoàn tất: {s.renamed} đổi, {s.skipped_same} trùng, "
+                    f"{s.skipped_blocked} bị chặn, {s.invalid_name} tên sai, {s.failed} lỗi"
+                )
+                self.reload_roster()
+            except Exception as exc:
+                self._ren_status = f"❌ Lỗi: {exc}"
+                self.append_log("rename", f"❌ Lỗi đổi tên: {exc}")
+            finally:
+                self._ren_running = False
+                self._emit("aux_updated", self.get_aux_status())
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def stop_rename(self) -> None:
+        self._ren_stop.set()
 
     # -------------------------------------------------------------------------
     # CAPTCHA / PROXY / RELOGIN / AUTO-RESUME / SHUTDOWN
@@ -2389,6 +2728,7 @@ class AccountSession:
             "nienthu": self.start_nienthu,
             "resource_monitor": self.start_resource_monitor,
             "crafting": self.start_crafting,
+            "transfer_loop": self.start_transfer_loop,
         }
         for name in task_names:
             fn = actions.get(name)
@@ -2407,6 +2747,10 @@ class AccountSession:
         self._res_monitor_stop.set()
         self._craft_running = False
         self._craft_stop.set()
+        self._transfer_running = False
+        self._transfer_stop.set()
+        self._arm_stop.set()
+        self._ren_stop.set()
         self._morale_stop.set()
         self._ditrai_stop.set()
         self._battle_stop.set()
@@ -2820,7 +3164,7 @@ class WorkspaceManager:
 
     def start_all_accounts(self) -> int:
         count = 0
-        batch_tasks = [t for t in RESUMABLE_TASKS if t != "resource_monitor"]
+        batch_tasks = [t for t in RESUMABLE_TASKS if t not in ("resource_monitor", "transfer_loop")]
         with self._lock:
             sessions = list(self.sessions.values())
         for sess in sessions:

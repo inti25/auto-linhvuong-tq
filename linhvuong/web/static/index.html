@@ -65,6 +65,7 @@
         <div class="topbar-right">
           <button id="btn-sound-toggle" class="btn-sm" title="Âm thanh cảnh báo trình duyệt">🔊 Âm thanh: Bật</button>
           <button id="btn-reload-roster" class="btn-sm hidden">🔄 Làm mới</button>
+          <button id="btn-relogin" class="btn-sm hidden" title="Đăng nhập lại bằng mật khẩu trong RAM/Két">🔁 Re-Login</button>
           <button id="btn-rotate-proxy" class="btn-sm hidden">🌐 Đổi Proxy</button>
           <button id="btn-notify-settings" class="btn-sm hidden">🔔 Thông báo & BOSS</button>
           <button id="btn-account-logout" class="btn-danger btn-sm hidden">🚪 Đăng xuất Game</button>
@@ -75,6 +76,7 @@
         <div class="profile-bar-left">
           <span>📁 Hồ sơ: <strong id="hdr-profile-name">-</strong></span>
           <a id="hdr-profile-export" class="btn btn-sm" href="#" target="_blank">💾 Tải JSON</a>
+          <button id="hdr-profile-save" class="btn-sm" title="Lưu hồ sơ cấu hình ngay">💾 Lưu</button>
           <label class="btn btn-sm" style="margin:0;">📂 Nạp JSON <input id="hdr-profile-import" type="file" accept=".json" class="hidden" /></label>
         </div>
         <div class="profile-bar-right">
@@ -101,6 +103,7 @@
             <div class="field">
               <label>Server ID</label>
               <input id="gl-server" type="number" min="1" placeholder="53" required />
+              <div id="gl-server-hint" style="font-size:11px;color:var(--muted);margin-top:3px;"></div>
             </div>
             <div class="field">
               <label>Tài khoản</label>
@@ -119,7 +122,7 @@
               </div>
             </div>
             <div class="field">
-              <label>Proxy đơn (http://, socks5://, host:port:user:pass)</label>
+              <label>Proxy đơn (http://, socks5://, host:port hoặc host:port:user:pass — tự tách)</label>
               <input id="gl-proxy" type="text" />
             </div>
             <div class="grid-2" style="gap:8px;">
