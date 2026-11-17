@@ -9,8 +9,14 @@ DATA_DIR="${DATA_DIR:-/var/lib/linhvuong}"
 ENV_FILE="/etc/linhvuong/env"
 SERVICE_FILE="/etc/systemd/system/linhvuong-web.service"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd || pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" 2>/dev/null && pwd || pwd)"
+  REPO_ROOT="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd || pwd)"
+else
+  SCRIPT_DIR=""
+  REPO_ROOT=""
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,8 +72,8 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -z "$BINARY_PATH" ]]; then
-  for cand in "./LinhVuongWeb" "$REPO_ROOT/dist/linux/LinhVuongWeb" "$REPO_ROOT/dist/LinhVuongWeb"; do
-    if [[ -f "$cand" ]]; then
+  for cand in "./LinhVuongWeb" ${REPO_ROOT:+"$REPO_ROOT/dist/linux/LinhVuongWeb"} ${REPO_ROOT:+"$REPO_ROOT/dist/LinhVuongWeb"}; do
+    if [[ -n "$cand" && -f "$cand" ]]; then
       BINARY_PATH="$cand"
       break
     fi
@@ -112,7 +118,7 @@ $SUDO chown -R linhvuong:linhvuong "$DATA_DIR"
 
 # 4. Tạo tệp môi trường /etc/linhvuong/env nếu chưa có
 if [[ ! -f "$ENV_FILE" ]]; then
-  if [[ -f "$SCRIPT_DIR/env.example" ]]; then
+  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/env.example" ]]; then
     $SUDO cp "$SCRIPT_DIR/env.example" "$ENV_FILE"
   else
     $SUDO tee "$ENV_FILE" >/dev/null <<EOF
@@ -131,7 +137,7 @@ EOF
 fi
 
 # 5. Cài đặt systemd unit trỏ thẳng tới binary
-if [[ -f "$SCRIPT_DIR/linhvuong-web.service" ]]; then
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/linhvuong-web.service" ]]; then
   $SUDO cp "$SCRIPT_DIR/linhvuong-web.service" "$SERVICE_FILE"
 else
   $SUDO tee "$SERVICE_FILE" >/dev/null <<'EOF'
@@ -146,7 +152,7 @@ User=linhvuong
 Group=linhvuong
 WorkingDirectory=/var/lib/linhvuong
 EnvironmentFile=-/etc/linhvuong/env
-ExecStart=/usr/local/bin/LinhVuongWeb --host ${LINHVUONG_WEB_HOST:-127.0.0.1} --port ${LINHVUONG_WEB_PORT:-8000}
+ExecStart=/usr/local/bin/LinhVuongWeb
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM
