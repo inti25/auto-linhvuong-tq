@@ -161,6 +161,7 @@
     if (event === "accounts_changed" && payload?.accounts) {
       state.accounts = payload.accounts;
       renderSidebar();
+      if (state.snapshot) renderHeaderProfileBar();
       if (state.currentKey && !state.accounts.some((a) => a.account_key === state.currentKey)) {
         state.currentKey = state.accounts[0]?.account_key || null;
         state.snapshot = null;
@@ -209,6 +210,7 @@
       updateRunningButtonsOnly();
     } else if (event === "profile_updated") {
       state.snapshot.profile = payload;
+      renderHeaderProfileBar();
       renderActiveTab();
     } else if (event === "roster_updated") {
       state.snapshot.roster = payload;
@@ -290,9 +292,47 @@
     showGameLoginView(null);
   }
 
+  const DEFAULT_AUTOSTART_OPTIONS = [
+    { id: "building", label: "🏛️ Xây dựng" },
+    { id: "research", label: "🔬 Nghiên cứu" },
+    { id: "resource_monitor", label: "🌾 An dân / Tài nguyên" },
+    { id: "thaophat", label: "⚔️ Thảo phạt" },
+    { id: "binhman", label: "🏕️ Bình man" },
+    { id: "goidan", label: "🧛 Gọi man" },
+    { id: "nienthu", label: "🧧 Niên thú" },
+    { id: "crafting", label: "🛡️ Chế tạo quân giới" },
+  ];
+
+  function getAutoStartOptions() {
+    return state.meta?.auto_start_task_options?.length ? state.meta.auto_start_task_options : DEFAULT_AUTOSTART_OPTIONS;
+  }
+
+  function renderAutoStartCheckboxes(containerId, selectedIds, clsName) {
+    const el = $(containerId);
+    if (!el) return;
+    const selected = new Set(selectedIds || []);
+    el.innerHTML = getAutoStartOptions()
+      .map((t) => `<label><input type="checkbox" class="${clsName}" value="${esc(t.id)}" ${selected.has(t.id) ? "checked" : ""}/> ${esc(t.label)}</label>`)
+      .join("");
+  }
+
+  function getCurrentAccountMeta() {
+    return state.accounts.find((a) => a.account_key === state.currentKey) || null;
+  }
+
+  function applyUpdatedAccountMeta(acc) {
+    if (!acc?.account_key) return;
+    const idx = state.accounts.findIndex((a) => a.account_key === acc.account_key);
+    if (idx >= 0) state.accounts[idx] = acc;
+    else state.accounts.push(acc);
+    renderSidebar();
+    renderHeaderProfileBar();
+  }
+
   function showGameLoginView(acc) {
     $("game-login-view").classList.remove("hidden");
     $("dashboard-view").classList.add("hidden");
+    $("profile-header-bar").classList.add("hidden");
     $("captcha-banner").classList.add("hidden");
     $("btn-reload-roster").classList.add("hidden");
     $("btn-rotate-proxy").classList.add("hidden");
@@ -313,20 +353,37 @@
     $("gl-proxy-user").value = cfg.proxy_user || "";
     $("gl-proxy-pass").value = cfg.proxy_pass || "";
     $("gl-auto-resume").checked = cfg.auto_resume !== false;
-    $("gl-save-vault").checked = !!acc?.has_vault_password;
+    $("gl-save-vault").checked = acc ? !!acc.has_vault_password : true;
     $("gl-vault-hint").textContent = acc?.has_vault_password ? "(đã lưu trong Két — có thể để trống)" : "";
     $("gl-vault-box").classList.toggle("hidden", !state.auth.vault_unlocked);
+    renderAutoStartCheckboxes("gl-autostart-tasks", cfg.auto_start_tasks || [], "gl-as-chk");
     $("btn-delete-acc").classList.toggle("hidden", !acc);
     $("gl-status").textContent = "";
+  }
+
+  function renderHeaderProfileBar() {
+    const snap = state.snapshot;
+    if (!snap || !state.currentKey) return;
+    const acc = getCurrentAccountMeta();
+    const cfg = acc?.config || {};
+    const asTasks = cfg.auto_start_tasks || [];
+    $("hdr-profile-name").textContent = snap.profile_filename || "-";
+    $("hdr-profile-export").href = `/api/accounts/${encodeURIComponent(state.currentKey)}/profile/export`;
+    $("hdr-save-vault").checked = !!acc?.has_vault_password;
+    $("hdr-save-vault").disabled = !state.auth.vault_unlocked;
+    $("hdr-auto-resume").checked = cfg.auto_resume !== false;
+    $("hdr-autostart-count").textContent = String(asTasks.length);
   }
 
   function showDashboardView() {
     $("game-login-view").classList.add("hidden");
     $("dashboard-view").classList.remove("hidden");
+    $("profile-header-bar").classList.remove("hidden");
     $("btn-reload-roster").classList.remove("hidden");
     $("btn-notify-settings").classList.remove("hidden");
     $("btn-account-logout").classList.remove("hidden");
     renderTopbar();
+    renderHeaderProfileBar();
     renderActiveTab();
   }
 
@@ -1323,9 +1380,6 @@
     root.innerHTML = `
       <div class="card">
         <div class="form-row" style="margin-bottom:0;">
-          <span>📁 Hồ sơ: <strong>${esc(snap.profile_filename)}</strong></span>
-          <a class="btn btn-sm" href="/api/accounts/${encodeURIComponent(state.currentKey)}/profile/export" target="_blank">💾 Tải JSON</a>
-          <label class="btn btn-sm" style="margin:0;">📂 Nạp JSON <input id="imp-profile-file" type="file" accept=".json" class="hidden"/></label>
           <button id="btn-reward-all" class="btn-success btn-sm">🎁 Ban Thưởng Toàn Bộ</button>
           <button id="btn-open-tactician" class="btn-sm">🧠 Thiết Lập Mưu Sĩ</button>
           <button id="btn-open-equip" class="btn-sm">🛡️ Trang Bị Tướng</button>
@@ -1412,15 +1466,6 @@
 
     root.querySelectorAll(".ov-base").forEach((tr) => (tr.onclick = () => { state.selectedOverviewCityId = Number(tr.dataset.bid); renderActiveTab(); }));
     root.querySelectorAll(".ov-gen").forEach((tr) => (tr.onclick = () => { state.selectedOverviewGenId = Number(tr.dataset.gid); renderActiveTab(); }));
-    $("imp-profile-file").onchange = async (e) => {
-      const f = e.target.files?.[0];
-      if (!f) return;
-      try {
-        const json = JSON.parse(await f.text());
-        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/profile/import`, { method: "POST", body: json });
-        showToast("Đã nạp hồ sơ", f.name);
-      } catch (err) { showToast("Lỗi nạp JSON", err.message, "error"); }
-    };
     $("btn-reward-all").onclick = async () => {
       try {
         const pre = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/reward/preview`, { method: "POST" });
@@ -1807,6 +1852,47 @@
     };
   }
 
+  function openAutoStartModal() {
+    const acc = getCurrentAccountMeta();
+    const cfg = acc?.config || {};
+    const hasVault = !!acc?.has_vault_password;
+    openModal(
+      `🚀 Cấu Hình Tự Động Khởi Chạy (${esc(state.currentKey)})`,
+      `<div class="form-row">
+         <label><input id="as-save-vault" type="checkbox" ${hasVault ? "checked" : ""}/> 🔐 Lưu mật khẩu mã hóa vào Két (bắt buộc để tự đăng nhập lại khi server khởi động)</label>
+       </div>
+       <div class="form-row">
+         <label><input id="as-auto-resume" type="checkbox" ${cfg.auto_resume !== false ? "checked" : ""}/> 🔄 Tự động chạy lại các tác vụ đang chạy trước khi tắt/restart</label>
+       </div>
+       <div class="field" style="margin-top:8px;">
+         <label>📌 Các tác vụ luôn tự động khởi chạy khi server khởi động & đăng nhập lại:</label>
+         <div id="modal-autostart-tasks" class="autostart-grid"></div>
+       </div>
+       <div style="font-size:12px;color:var(--muted);margin-top:6px;">
+         Lưu ý: Các tác vụ được tích chọn sẽ tự động chạy ngay sau khi server khởi động lại (kể cả trước đó đã tắt tay).
+       </div>`,
+      `<button class="btn-sm" onclick="document.getElementById('modal-backdrop').classList.add('hidden')">Hủy</button>
+       <button id="btn-as-save" class="btn-primary btn-sm">💾 Lưu cấu hình</button>`
+    );
+    renderAutoStartCheckboxes("modal-autostart-tasks", cfg.auto_start_tasks || [], "modal-as-chk");
+    $("btn-as-save").onclick = async () => {
+      try {
+        const tasks = [...document.querySelectorAll(".modal-as-chk:checked")].map((c) => c.value);
+        const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/autostart`, {
+          method: "PUT",
+          body: {
+            auto_resume: $("as-auto-resume").checked,
+            auto_start_tasks: tasks,
+            save_to_vault: $("as-save-vault").checked,
+          },
+        });
+        applyUpdatedAccountMeta(res.account);
+        closeModal();
+        showToast("Đã lưu", "Cấu hình lưu mật khẩu & tự động khởi chạy đã được cập nhật.");
+      } catch (e) { showToast("Lỗi", e.message, "error"); }
+    };
+  }
+
   function openCoffeeModal() {
     openModal(
       "☕ Buy Me A Coffee — Ủng Hộ Tác Giả",
@@ -1857,6 +1943,51 @@
     $("btn-account-logout").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/logout`, { method: "POST" });
     $("btn-resume-captcha").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/captcha/resume`, { method: "POST" });
 
+    $("hdr-profile-import").onchange = async (e) => {
+      const f = e.target.files?.[0];
+      if (!f || !state.currentKey) return;
+      try {
+        const json = JSON.parse(await f.text());
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/profile/import`, { method: "POST", body: json });
+        showToast("Đã nạp hồ sơ", f.name);
+      } catch (err) { showToast("Lỗi nạp JSON", err.message, "error"); }
+      e.target.value = "";
+    };
+    $("hdr-save-vault").onchange = async () => {
+      if (!state.currentKey) return;
+      const save = $("hdr-save-vault").checked;
+      try {
+        const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/vault`, {
+          method: "POST",
+          body: { save },
+        });
+        applyUpdatedAccountMeta(res.account);
+        showToast("Két Mật Khẩu", save ? "Đã lưu mật khẩu mã hóa vào Két." : "Đã xóa mật khẩu khỏi Két.");
+      } catch (err) {
+        $("hdr-save-vault").checked = !save;
+        showToast("Lỗi Lưu Mật Khẩu", err.message, "error");
+      }
+    };
+    $("hdr-auto-resume").onchange = async () => {
+      if (!state.currentKey) return;
+      const checked = $("hdr-auto-resume").checked;
+      const curTasks = getCurrentAccountMeta()?.config?.auto_start_tasks || [];
+      try {
+        const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/autostart`, {
+          method: "PUT",
+          body: { auto_resume: checked, auto_start_tasks: curTasks },
+        });
+        applyUpdatedAccountMeta(res.account);
+        showToast("Tự động khởi chạy", checked ? "Đã bật tự chạy lại tác vụ khi restart." : "Đã tắt tự chạy lại tác vụ khi restart.");
+      } catch (err) {
+        $("hdr-auto-resume").checked = !checked;
+        showToast("Lỗi", err.message, "error");
+      }
+    };
+    $("btn-autostart-cfg").onclick = () => {
+      if (state.currentKey) openAutoStartModal();
+    };
+
     $("btn-free-proxy").onclick = () => { $("gl-proxy-url").value = state.meta?.default_free_proxy_url || ""; $("gl-status").textContent = "Đã điền ProxyScrape SOCKS5 Free."; };
     $("btn-test-proxy").onclick = async () => {
       $("gl-status").textContent = "🔄 Đang kiểm tra proxy...";
@@ -1870,6 +2001,7 @@
       $("gl-status").textContent = "🔑 Đang kết nối...";
       $("btn-game-login").disabled = true;
       try {
+        const autoStartTasks = [...document.querySelectorAll(".gl-as-chk:checked")].map((c) => c.value);
         const res = await api("/api/accounts/login", {
           method: "POST",
           body: {
@@ -1882,6 +2014,7 @@
             proxy_pass: $("gl-proxy-pass").value,
             save_to_vault: $("gl-save-vault").checked,
             auto_resume: $("gl-auto-resume").checked,
+            auto_start_tasks: autoStartTasks,
             old_key: state.currentKey,
           },
         });
@@ -1899,20 +2032,29 @@
     };
     $("btn-save-acc-only").onclick = async () => {
       try {
+        const acc = getCurrentAccountMeta();
+        const pwd = $("gl-pass").value;
+        const saveChk = $("gl-save-vault").checked;
+        const saveVault = !saveChk ? false : (pwd || acc?.has_vault_password ? true : null);
+        const autoStartTasks = [...document.querySelectorAll(".gl-as-chk:checked")].map((c) => c.value);
         const res = await api("/api/accounts", {
           method: "POST",
           body: {
             server_id: Number($("gl-server").value),
             username: $("gl-user").value.trim(),
+            password: pwd,
             proxy_url: $("gl-proxy-url").value.trim(),
             proxy: $("gl-proxy").value.trim(),
             proxy_user: $("gl-proxy-user").value.trim(),
             proxy_pass: $("gl-proxy-pass").value,
+            save_to_vault: saveVault,
             auto_resume: $("gl-auto-resume").checked,
+            auto_start_tasks: autoStartTasks,
             old_key: state.currentKey,
           },
         });
         state.currentKey = res.account.account_key;
+        applyUpdatedAccountMeta(res.account);
         $("gl-status").textContent = "✅ Đã lưu cấu hình tài khoản.";
       } catch (e) { $("gl-status").textContent = `❌ ${e.message}`; }
     };

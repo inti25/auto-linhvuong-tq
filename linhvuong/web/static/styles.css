@@ -79,6 +79,19 @@ input[type="checkbox"], input[type="radio"] { width: auto; accent-color: var(--a
 }
 .topbar-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .topbar-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.profile-bar {
+  background: #141724; border-bottom: 1px solid var(--border); padding: 7px 14px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.profile-bar-left, .profile-bar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hdr-check { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--fg); }
+.autostart-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px;
+  background: var(--bg-deep); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px;
+  font-size: 12.5px;
+}
+.autostart-grid label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--fg); cursor: pointer; }
 .mobile-menu-btn { display: none; }
 .pill {
   font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--card-2);

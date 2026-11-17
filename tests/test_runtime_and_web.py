@@ -381,3 +381,81 @@ def test_battle_track_forwards_on_web_event_to_boss_alert(monkeypatch):
 
     engine.track_battle(777, max_bouts=1, sleep_fn=lambda _s: None)
     assert captured.get("on_web_event") is cfg.on_web_event
+
+
+def test_web_vault_autostart_endpoints_and_auto_restore(tmp_path, monkeypatch):
+    monkeypatch.delenv("LINHVUONG_VAULT_KEY", raising=False)
+    _mock_offline(monkeypatch)
+
+    # WorkspaceManager tự mở khóa Két ngay cả khi không đặt LINHVUONG_VAULT_KEY
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=True)
+    assert wm.vault.is_unlocked()
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="webpassword")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        html = client.get("/").text
+        assert 'id="profile-header-bar"' in html
+        assert 'id="hdr-save-vault"' in html
+        assert 'id="hdr-auto-resume"' in html
+        assert 'id="btn-autostart-cfg"' in html
+
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "webpassword"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 53, "username": "autouser", "password": "secret-pw", "save_to_vault": False},
+        ).status_code == 200
+
+        # Lưu mật khẩu từ session RAM vào Két qua /vault
+        r_v1 = client.post("/api/accounts/autouser%20%40%20S53/vault", json={"save": True})
+        assert r_v1.status_code == 200
+        assert r_v1.json()["account"]["has_vault_password"] is True
+
+        # Cấu hình tự động khởi chạy + tắt auto_resume
+        r_as = client.put(
+            "/api/accounts/autouser%20%40%20S53/autostart",
+            json={"auto_resume": False, "auto_start_tasks": ["building", "binhman", "invalid_task"]},
+        )
+        assert r_as.status_code == 200
+        acc = r_as.json()["account"]
+        assert acc["config"]["auto_resume"] is False
+        assert acc["config"]["auto_start_tasks"] == ["building", "binhman"]
+
+        # Kiểm tra metadata trả danh sách lựa chọn auto_start_task_options
+        meta = client.get("/api/meta").json()
+        assert any(o["id"] == "binhman" for o in meta["auto_start_task_options"])
+
+        # Giả lập đang chạy 'research' trước khi tắt server
+        sess = wm.get_session("autouser @ S53")
+        sess.engine.is_running = lambda tid: tid == "research"  # type: ignore[method-assign]
+
+    wm.graceful_shutdown()
+
+    # Khởi động lại: tự mở khóa bằng .vault.key, tự chạy auto_start_tasks (building, binhman) và không chạy lại 'research' vì auto_resume=False
+    resumed_calls = []
+    wm2 = WorkspaceManager(data_dir=tmp_path, acquire_lock=True)
+    monkeypatch.setattr(
+        runtime_mod.AccountSession,
+        "resume_tasks",
+        lambda self, names: resumed_calls.append((self.account_key, list(names))) or list(names),
+    )
+    restored = wm2.auto_restore_on_startup()
+    assert restored["restored_accounts"] == ["autouser @ S53"]
+    assert resumed_calls == [("autouser @ S53", ["building", "binhman"])]
+
+    # Bật lại auto_resume=True -> gộp cả auto_start_tasks lẫn running_tasks trước khi tắt (không trùng)
+    wm2.update_account_autostart("autouser @ S53", auto_resume=True, auto_start_tasks=["building"])
+    wm2.graceful_shutdown()
+
+    resumed_calls.clear()
+    wm3 = WorkspaceManager(data_dir=tmp_path, acquire_lock=True)
+    # Ghi lại runtime_state có research đang chạy
+    from linhvuong.paths import runtime_state_path
+    runtime_state_path(tmp_path).write_text(
+        json.dumps({"version": 1, "accounts": {"autouser @ S53": {"running_tasks": ["building", "research"]}}}),
+        encoding="utf-8",
+    )
+    restored3 = wm3.auto_restore_on_startup()
+    assert restored3["restored_accounts"] == ["autouser @ S53"]
+    assert resumed_calls == [("autouser @ S53", ["building", "research"])]
+    wm3.graceful_shutdown()
