@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Linh Vương Auto - Web Dashboard</title>
+  <link rel="icon" href="/assets/linhvuong.png" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Màn hình đăng nhập Phiên Quản Trị Web -->
+  <div id="admin-login-view" class="center-card-wrap hidden">
+    <div class="login-card">
+      <h2>🔐 Phiên Quản Trị Web</h2>
+      <p style="color:var(--muted);text-align:center;margin:0 0 14px;">Đăng nhập để điều khiển dàn tài khoản Linh Vương</p>
+      <form id="admin-login-form">
+        <div class="field">
+          <label>Tài khoản quản trị</label>
+          <input id="admin-user" type="text" value="admin" required />
+        </div>
+        <div class="field">
+          <label>Mật khẩu quản trị</label>
+          <input id="admin-pass" type="password" required />
+        </div>
+        <div id="admin-login-error" style="color:#f87171;font-size:12px;margin-bottom:8px;"></div>
+        <button type="submit" class="btn-primary" style="width:100%;">🔑 Đăng nhập Web Dashboard</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Không Gian Đa Tài Khoản -->
+  <div id="app-shell" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-row">
+          <img src="/assets/linhvuong_menu.png" alt="LV" onerror="this.style.display='none'" />
+          <span>Linh Vương Web</span>
+        </div>
+        <button id="btn-add-account" class="btn-primary" style="width:100%;">➕ Thêm tài khoản</button>
+        <div class="sidebar-actions">
+          <button id="btn-start-all" class="btn-success btn-sm">▶️ Chạy tất cả</button>
+          <button id="btn-stop-all" class="btn-danger btn-sm">⏹️ Dừng tất cả</button>
+        </div>
+      </div>
+
+      <div id="account-list" class="account-list"></div>
+
+      <div class="sidebar-footer">
+        <button id="btn-open-syslogs" class="btn-sm">📄 Xem / Tải Logs Server</button>
+        <button id="btn-admin-settings" class="btn-sm">🔐 Đổi mật khẩu Web</button>
+        <button id="btn-coffee" class="btn-coffee btn-sm">☕ Buy me a coffee</button>
+        <button id="btn-admin-logout" class="btn-sm hidden">🚪 Thoát Quản Trị Web</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="btn-mobile-menu" class="mobile-menu-btn btn-sm">☰ Tài khoản</button>
+          <strong id="ws-title">Chưa chọn tài khoản</strong>
+          <span id="ws-status-pill" class="pill">⚪ Chờ</span>
+          <span id="ws-proxy-pill" class="pill hidden">🌐 Proxy</span>
+          <span id="ws-realtime-pill" class="pill">WS: ...</span>
+        </div>
+        <div class="topbar-right">
+          <button id="btn-sound-toggle" class="btn-sm" title="Âm thanh cảnh báo trình duyệt">🔊 Âm thanh: Bật</button>
+          <button id="btn-reload-roster" class="btn-sm hidden">🔄 Làm mới</button>
+          <button id="btn-rotate-proxy" class="btn-sm hidden">🌐 Đổi Proxy</button>
+          <button id="btn-notify-settings" class="btn-sm hidden">🔔 Thông báo & BOSS</button>
+          <button id="btn-account-logout" class="btn-danger btn-sm hidden">🚪 Đăng xuất Game</button>
+        </div>
+      </header>
+
+      <div id="captcha-banner" class="captcha-banner hidden">
+        <div>
+          <strong>⚠️ CẦN GIẢI CAPTCHA:</strong>
+          <span id="captcha-reason-text">Tác vụ đang tạm dừng chờ xác nhận.</span>
+          <span style="font-size:12px;display:block;opacity:.9;">Hãy đăng nhập game trên trình duyệt (hoặc đổi proxy) để giải mã, rồi bấm Tiếp tục.</span>
+        </div>
+        <button id="btn-resume-captcha" class="btn-success btn-sm">▶️ Tiếp tục sau khi đã giải</button>
+      </div>
+
+      <!-- Khung Đăng nhập Game Cục Bộ -->
+      <div id="game-login-view" class="center-card-wrap hidden">
+        <div class="login-card">
+          <h2 id="game-login-title">🔑 Đăng Nhập Tài Khoản Game</h2>
+          <form id="game-login-form">
+            <div class="field">
+              <label>Server ID</label>
+              <input id="gl-server" type="number" min="1" placeholder="53" required />
+            </div>
+            <div class="field">
+              <label>Tài khoản</label>
+              <input id="gl-user" type="text" required />
+            </div>
+            <div class="field">
+              <label>Mật khẩu game <span id="gl-vault-hint" style="color:var(--info);"></span></label>
+              <input id="gl-pass" type="password" placeholder="Nhập mật khẩu (hoặc để trống nếu đã lưu Két)" />
+            </div>
+            <div class="field">
+              <label>URL Proxy List (tùy chọn)</label>
+              <div class="form-row" style="margin:0;">
+                <input id="gl-proxy-url" type="text" style="flex:1;" placeholder="https://..." />
+                <button type="button" id="btn-free-proxy" class="btn-sm">⚡ Free</button>
+                <button type="button" id="btn-test-proxy" class="btn-sm">🔄 Test</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Proxy đơn (http://, socks5://, host:port:user:pass)</label>
+              <input id="gl-proxy" type="text" />
+            </div>
+            <div class="grid-2" style="gap:8px;">
+              <div class="field">
+                <label>Proxy User</label>
+                <input id="gl-proxy-user" type="text" />
+              </div>
+              <div class="field">
+                <label>Proxy Pass</label>
+                <input id="gl-proxy-pass" type="password" />
+              </div>
+            </div>
+            <div id="gl-vault-box" class="form-row hidden" style="margin-top:4px;">
+              <label><input id="gl-save-vault" type="checkbox" /> Lưu vào Két Mật Khẩu Mã Hóa</label>
+              <label><input id="gl-auto-resume" type="checkbox" checked /> Tự chạy lại tác vụ khi reboot</label>
+            </div>
+            <div id="gl-status" style="color:#fbbf24;font-size:12px;margin:8px 0;"></div>
+            <div class="form-row" style="margin-bottom:0;">
+              <button type="submit" id="btn-game-login" class="btn-primary" style="flex:1;">🔑 Đăng nhập</button>
+              <button type="button" id="btn-save-acc-only" class="btn-sm">💾 Lưu cấu hình</button>
+              <button type="button" id="btn-delete-acc" class="btn-danger btn-sm">🗑️ Xóa</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Khung 7 Tab Dashboard -->
+      <div id="dashboard-view" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0;">
+        <nav class="tab-bar" id="tab-bar">
+          <button class="tab-btn active" data-tab="internal">🏛️ Nội Chính & NC</button>
+          <button class="tab-btn" data-tab="thaophat">⚔️ Thảo Phạt</button>
+          <button class="tab-btn" data-tab="binhman">🏕️ Bình Man</button>
+          <button class="tab-btn" data-tab="goidan">🧛 Gọi Man & Vong Linh</button>
+          <button class="tab-btn" data-tab="overview">🏰 Tổng Quan & Quân Đội</button>
+          <button class="tab-btn" data-tab="battle">⚔️ Chiến Trường</button>
+          <button class="tab-btn" data-tab="nienthu">🧧 Niên Thú</button>
+        </nav>
+        <div id="tab-content" class="ws-body"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal dùng chung -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <span id="modal-title">Modal</span>
+        <button id="modal-close" class="btn-sm">✖</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+      <div id="modal-footer" class="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- Toast Stack -->
+  <div id="toast-stack" class="toast-stack"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

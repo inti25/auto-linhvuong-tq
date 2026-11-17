@@ -1,0 +1,15 @@
+.venv
+__pycache__
+*.pyc
+build
+dist
+logs
+data
+*.log
+gui_settings.json
+auto_profile*.json
+vault.enc
+web_auth.json
+runtime_state.json
+.linhvuong.lock
+.pytest_cache

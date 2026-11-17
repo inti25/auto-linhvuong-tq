@@ -67,9 +67,20 @@ class SanitizingFilter(logging.Filter):
         return val
 
 
+def _resolve_log_dir(log_dir: Optional[Path] = None) -> Path:
+    if log_dir is not None:
+        return Path(log_dir)
+    if DEFAULT_LOG_DIR != Path("logs"):
+        return DEFAULT_LOG_DIR
+    env_dir = os.environ.get("LINHVUONG_DATA_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir) / "logs"
+    return DEFAULT_LOG_DIR
+
+
 def get_log_file_path(username: str, server_id: int, log_dir: Optional[Path] = None) -> Path:
     """Trả về đường dẫn tệp log định danh theo tài khoản và máy chủ."""
-    folder = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
+    folder = _resolve_log_dir(log_dir)
     clean_user = re.sub(r"[^\w\-.]", "_", username) if username else "unknown"
     return folder / f"bot_{clean_user}_S{server_id}.log"
 
@@ -86,7 +97,7 @@ def clean_old_logs(
     - Xóa an toàn với try/except để tránh gián đoạn nếu tệp đang bị tiến trình khác giữ khóa.
     - Trả về số lượng tệp đã được xóa thành công.
     """
-    folder = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
+    folder = _resolve_log_dir(log_dir)
     if not folder.exists() or not folder.is_dir():
         return 0
 
@@ -131,7 +142,7 @@ def setup_logger(
     - Gắn SanitizingFilter lên toàn bộ handler.
     - Cấu hình cấp độ ghi log (DEBUG nếu debug=True, ngược lại INFO).
     """
-    target_dir = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
+    target_dir = _resolve_log_dir(log_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if clean_history_days is not None and clean_history_days > 0:
@@ -186,9 +197,39 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+def list_log_files(log_dir: Optional[Path] = None) -> list[dict]:
+    """Liệt kê các tệp nhật ký hiện có trong thư mục log (phục vụ Web UI)."""
+    folder = _resolve_log_dir(log_dir)
+    if not folder.exists() or not folder.is_dir():
+        return []
+    files = []
+    for f in sorted(folder.iterdir(), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
+        if f.is_file() and (f.suffix == ".log" or ".log." in f.name):
+            st = f.stat()
+            files.append({
+                "name": f.name,
+                "size": st.st_size,
+                "modified_at": int(st.st_mtime),
+            })
+    return files
+
+
+def read_log_tail(filename: str, lines: int = 500, log_dir: Optional[Path] = None) -> str:
+    """Đọc N dòng cuối của tệp log an toàn (chống path traversal)."""
+    safe_name = Path(filename).name
+    if safe_name != filename or (not safe_name.endswith(".log") and ".log." not in safe_name):
+        raise ValueError("Tên tệp nhật ký không hợp lệ.")
+    folder = _resolve_log_dir(log_dir)
+    target = (folder / safe_name).resolve()
+    if target.parent != folder.resolve() or not target.is_file():
+        raise FileNotFoundError(f"Không tìm thấy tệp log: {safe_name}")
+    content = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(content[-max(1, lines):])
+
+
 def open_logs_directory(log_dir: Optional[Path] = None) -> bool:
     """Mở thư mục log trong trình duyệt tệp của hệ điều hành (Explorer trên Windows)."""
-    folder = Path(log_dir) if log_dir else DEFAULT_LOG_DIR
+    folder = _resolve_log_dir(log_dir)
     folder.mkdir(parents=True, exist_ok=True)
     abs_path = folder.resolve()
     try:

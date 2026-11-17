@@ -289,6 +289,17 @@ def build_task(
 
 
 def main(argv=None) -> int:
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    if raw_argv and raw_argv[0] == "web":
+        try:
+            from .web.server import main as web_main
+        except ImportError as exc:
+            raise SystemExit(
+                "Thiếu gói phụ thuộc Web Server (fastapi, uvicorn, cryptography). "
+                "Cài đặt bằng: pip install -e '.[web]'"
+            ) from exc
+        return web_main(raw_argv[1:])
+
     ap = argparse.ArgumentParser(prog="linhvuong")
     ap.add_argument(
         "task",

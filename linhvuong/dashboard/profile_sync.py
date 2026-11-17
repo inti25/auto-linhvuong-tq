@@ -35,6 +35,8 @@ class ProfileSyncMixin:
             self._auto_save_after_id = None
 
     def _resolve_active_profile_target(self) -> Path:
+        from ..paths import get_data_dir
+
         active = getattr(self, "_active_profile_path", None)
         if active is not None:
             return Path(active)
@@ -42,8 +44,10 @@ class ProfileSyncMixin:
         if hasattr(self, "profile_path_var"):
             val = (self.profile_path_var.get() or "").strip()
             if val:
-                return Path(val)
-        return Path(def_name)
+                p = Path(val)
+                return p if p.is_absolute() or p.parent != Path(".") else get_data_dir() / p
+        p_def = Path(def_name)
+        return p_def if p_def.is_absolute() or p_def.parent != Path(".") else get_data_dir() / p_def
 
     def _schedule_auto_save(self, *_args):
         if not getattr(self, "_auto_save_enabled", False):
