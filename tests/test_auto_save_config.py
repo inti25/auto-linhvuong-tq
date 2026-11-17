@@ -250,3 +250,76 @@ def test_auto_save_tree_toggles_and_uncheck_all_generals(tmp_path, monkeypatch):
     finally:
         dash.destroy()
 
+
+def test_dashboard_loaded_prunes_stale_cities_and_updates_existing_profile_json(tmp_path, monkeypatch):
+    profile_path = tmp_path / "auto_profile_quilia_57.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "building": {
+                    "cities": {
+                        "10129": {"name": "Cũ", "enabled": False, "resource": False, "plans": [{"pid": 1, "gid": 1, "target_level": 20, "enabled": True}]},
+                        "10229": {"name": "", "enabled": True, "resource": True, "plans": [{"pid": 1, "gid": 1, "target_level": 20, "enabled": True}]},
+                        "10230": {"name": "", "enabled": True, "resource": True, "plans": [{"pid": 1, "gid": 1, "target_level": 20, "enabled": True}]},
+                    }
+                },
+                "research": {"city_id": 10229},
+                "resource": {"resource_cities": [10229, 10230]},
+                "binh_man": {
+                    "current_base_id": 10229,
+                    "bases": {
+                        "10129": {"name": "Cũ", "enabled": False, "parent_city_id": "10229"},
+                        "10229": {"name": "Ma", "enabled": True},
+                    },
+                },
+                "crafting": {
+                    "cities": {
+                        "10129": {"city_id": 10129, "enabled": False},
+                        "10229": {"city_id": 10229, "enabled": True},
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    dash = _create_dash(tmp_path, monkeypatch, username="quilia", server_id=57)
+    try:
+        dash._active_profile_path = profile_path
+        ok, _msg = dash._load_unified_profile(profile_path)
+        assert ok
+
+        live_roster = Roster(
+            cities=[
+                City(id=10129, name="1", type="Thành", pos_x=200, pos_y=96),
+                City(id=10254, name="TT", type="Thành", pos_x=180, pos_y=67),
+            ],
+            camps=[],
+        )
+        dash._loaded(live_roster)
+
+        assert 10229 not in dash._city_building_plans
+        assert 10230 not in dash._city_building_plans
+        assert 10229 not in dash._selected_building_cities
+        assert 10229 not in dash._selected_resource_cities
+        assert 10129 not in dash._selected_building_cities  # giữ đúng enabled=False đã cấu hình
+        assert dash._research_city_id == 10129
+        assert set(dash.bm_base_configs.keys()) == {10129, 10254}
+        assert 10229 not in dash.bm_base_configs
+        assert dash.bm_base_configs[10254].enabled is False
+        assert set(dash.craft_configs.keys()) == {10129}
+
+        synced = json.loads(profile_path.read_text(encoding="utf-8"))
+        assert set(synced["building"]["cities"].keys()) == {"10129", "10254"}
+        assert synced["building"]["cities"]["10129"]["name"] == "1"
+        assert synced["building"]["cities"]["10254"]["name"] == "TT"
+        assert synced["building"]["cities"]["10254"]["enabled"] is False
+        assert synced["resource"]["resource_cities"] == []
+        assert synced["research"]["city_id"] == 10129
+        assert set(synced["binh_man"]["bases"].keys()) == {"10129", "10254"}
+        assert "10229" not in synced["binh_man"]["bases"]
+        assert list(synced["crafting"]["cities"].keys()) == ["10129"]
+    finally:
+        dash.destroy()

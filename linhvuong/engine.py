@@ -132,7 +132,8 @@ class TaskRunnerThread(threading.Thread):
                     res = self.task.run_once()
                 elif isinstance(self.task, (list, tuple)):
                     all_completed = True
-                    for sub in self.task:
+                    missing_subs = []
+                    for sub in list(self.task):
                         if self.stop_event.is_set():
                             break
                         if hasattr(sub, "run_step"):
@@ -141,8 +142,18 @@ class TaskRunnerThread(threading.Thread):
                             sub_res = sub.run_once()
                         else:
                             sub_res = "ok"
+                        if sub_res == "city_not_found":
+                            missing_subs.append(sub)
+                            continue
                         if sub_res != "all_buildings_completed":
                             all_completed = False
+
+                    if missing_subs and isinstance(self.task, list):
+                        self.task[:] = [s for s in self.task if s not in missing_subs]
+                        if not self.task:
+                            self._log("⚠️ Không còn căn cứ hợp lệ nào trong hàng đợi tác vụ.")
+                            self._set_status(TaskStatus.COMPLETED)
+                            break
 
                     if all_completed and self.task:
                         self._log("🎉 Toàn bộ công trình quy hoạch của tất cả các căn cứ đã hoàn tất!")

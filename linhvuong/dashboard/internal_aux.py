@@ -399,7 +399,13 @@ class InternalAuxMixin:
     def _toggle_resource_monitor(self):
         msgbox = resolve_dashboard_symbol("messagebox", _default_messagebox)
         if not self._res_monitor_running:
-            target_cids = list(self._selected_resource_cities)
+            valid_base_ids = (
+                {b.id for b in self.roster.bases} if (self.roster and self.roster.bases) else None
+            )
+            target_cids = [
+                cid for cid in self._selected_resource_cities
+                if valid_base_ids is None or cid in valid_base_ids
+            ]
             if not target_cids:
                 if self._current_bld_city_id:
                     target_cids = [self._current_bld_city_id]
@@ -426,9 +432,16 @@ class InternalAuxMixin:
 
     def _run_resource_monitor_loop(self):
         while self._res_monitor_running:
-            target_cids = list(self._selected_resource_cities)
+            valid_base_ids = (
+                {b.id for b in self.roster.bases} if (self.roster and self.roster.bases) else None
+            )
+            target_cids = [
+                cid for cid in self._selected_resource_cities
+                if valid_base_ids is None or cid in valid_base_ids
+            ]
             if not target_cids and self._current_bld_city_id:
-                target_cids = [self._current_bld_city_id]
+                if valid_base_ids is None or self._current_bld_city_id in valid_base_ids:
+                    target_cids = [self._current_bld_city_id]
 
             for cid in target_cids:
                 if not self._res_monitor_running:
@@ -442,6 +455,13 @@ class InternalAuxMixin:
 
                     # 1. Gọi City.ashx?id=20 lấy tài nguyên hiện tại
                     resp = self.gateway.call("City.ashx", 20, {"tid": str(cid), "_": ""}) or {}
+                    if resp.get("ret", 0) == 4:
+                        try:
+                            self.after(0, self._append_bld_log, f"⚠️ [{cname}] Không còn tồn tại trên máy chủ (mã 4); đang đồng bộ lại...")
+                            self.after(0, self.reload)
+                        except Exception:
+                            pass
+                        continue
                     money = int(resp.get("money", resp.get("gold", 0)))
                     wood = int(resp.get("wood", 0))
                     iron = int(resp.get("iron", 0))

@@ -724,6 +724,72 @@ class NienThuProfile:
 
 
 @dataclass
+class BaseSyncResult:
+    """Kết quả Đồng Bộ Danh Sách Căn Cứ vào Hồ Sơ Cấu Hình."""
+
+    changed: bool = False
+    added_ids: list[int] = field(default_factory=list)
+    removed_ids: list[int] = field(default_factory=list)
+    renamed_ids: list[int] = field(default_factory=list)
+    updated_refs: list[str] = field(default_factory=list)
+
+
+def _parse_int_id(raw: Any) -> Optional[int]:
+    if raw is None or isinstance(raw, bool):
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s.lstrip("-").isdigit() and s != "-":
+        return int(s)
+    return None
+
+
+def _normalize_bases(bases: Any) -> list[tuple[int, str, bool]]:
+    """Chuẩn hóa danh sách Căn Cứ (City hoặc dict) thành (id, name, is_camp)."""
+    if not bases:
+        return []
+    out: list[tuple[int, str, bool]] = []
+    seen: set[int] = set()
+    for b in bases:
+        if isinstance(b, dict):
+            bid = _parse_int_id(b.get("id"))
+            name = str(b.get("name", ""))
+            is_camp = bool(b.get("is_camp", False) or b.get("type") == "Doanh trại" or (bid is not None and bid < 0))
+        else:
+            bid = _parse_int_id(getattr(b, "id", None))
+            name = str(getattr(b, "name", ""))
+            is_camp = bool(
+                getattr(b, "is_camp", False)
+                or getattr(b, "type", "") == "Doanh trại"
+                or (bid is not None and bid < 0)
+            )
+        if bid is None or bid in seen:
+            continue
+        seen.add(bid)
+        out.append((bid, name, is_camp))
+    return out
+
+
+def _prune_id_dict(mapping: dict[str, Any], valid_ids: set[int]) -> tuple[dict[str, Any], list[int], bool]:
+    """Lọc bỏ các khóa ID không còn nằm trong tập hợp lệ."""
+    kept: dict[str, Any] = {}
+    removed: list[int] = []
+    changed = False
+    for k, v in mapping.items():
+        parsed = _parse_int_id(k)
+        if parsed is None or parsed not in valid_ids:
+            if parsed is not None:
+                removed.append(parsed)
+            changed = True
+            continue
+        kept[str(parsed)] = v
+        if str(parsed) != k:
+            changed = True
+    return kept, removed, changed
+
+
+@dataclass
 class Profile:
     version: int = 1
     building: BuildingProfile = field(default_factory=BuildingProfile)
@@ -738,6 +804,156 @@ class Profile:
     crafting: CraftProfile = field(default_factory=CraftProfile)
     notifications: NotificationProfile = field(default_factory=NotificationProfile)
     nien_thu: NienThuProfile = field(default_factory=NienThuProfile)
+
+    def sync_with_bases(
+        self,
+        bases: Any,
+        *,
+        add_missing_building_cities: bool = True,
+    ) -> BaseSyncResult:
+        """Đồng bộ toàn bộ Hồ Sơ theo danh sách Căn Cứ thực tế từ máy chủ (ADR-0040).
+
+        Chỉ thanh lọc khi `bases` hợp lệ và khác rỗng; tuyệt đối không xóa dữ liệu khi
+        danh sách máy chủ rỗng do lỗi mạng hoặc phiên hết hạn.
+        """
+        norm = _normalize_bases(bases)
+        if not norm:
+            return BaseSyncResult(changed=False)
+
+        valid_base_ids = {bid for bid, _, _ in norm}
+        valid_city_ids = {bid for bid, _, is_camp in norm if not is_camp}
+        base_name_map = {bid: name for bid, name, _ in norm}
+        first_base_id = norm[0][0]
+        first_city_id = next((bid for bid, _, is_camp in norm if not is_camp), None)
+
+        res = BaseSyncResult()
+        removed_set: set[int] = set()
+
+        # 1. Building.cities (áp dụng cho cả Thành và Doanh trại)
+        old_bld_cities = self.building.cities
+        had_bld_cities = bool(old_bld_cities)
+        parsed_old_bld: dict[int, CityBuildingConfig] = {}
+        for k, cfg in old_bld_cities.items():
+            pid = _parse_int_id(k)
+            if pid is None or pid not in valid_base_ids:
+                if pid is not None:
+                    removed_set.add(pid)
+                res.changed = True
+                continue
+            parsed_old_bld[pid] = cfg
+
+        skip_adding_bld = (not had_bld_cities and bool(self.building.plans)) or not add_missing_building_cities
+        if not skip_adding_bld:
+            new_bld_cities: dict[str, CityBuildingConfig] = {}
+            for idx, (bid, bname, _is_camp) in enumerate(norm):
+                if bid in parsed_old_bld:
+                    cfg = parsed_old_bld[bid]
+                    if cfg.name != bname:
+                        cfg.name = bname
+                        res.renamed_ids.append(bid)
+                        res.changed = True
+                    new_bld_cities[str(bid)] = cfg
+                else:
+                    new_bld_cities[str(bid)] = CityBuildingConfig(
+                        name=bname,
+                        enabled=(not had_bld_cities and idx == 0),
+                        resource=False,
+                        plans=[],
+                    )
+                    res.added_ids.append(bid)
+                    res.changed = True
+            self.building.cities = new_bld_cities
+        else:
+            new_bld_cities = {}
+            for bid, cfg in parsed_old_bld.items():
+                bname = base_name_map[bid]
+                if cfg.name != bname:
+                    cfg.name = bname
+                    res.renamed_ids.append(bid)
+                    res.changed = True
+                new_bld_cities[str(bid)] = cfg
+            self.building.cities = new_bld_cities
+
+        # 2. Resource.resource_cities (cùng tập roster.bases với building.cities)
+        old_res_cities = list(self.resource.resource_cities)
+        filtered_res_cities = sorted({cid for cid in old_res_cities if cid in valid_base_ids})
+        for cid in old_res_cities:
+            if cid not in valid_base_ids:
+                removed_set.add(cid)
+        if filtered_res_cities != old_res_cities:
+            self.resource.resource_cities = filtered_res_cities
+            res.changed = True
+
+        # 3. BinhMan.bases & tham chiếu current_base_id / parent_city_id / camp_id
+        new_bm_bases, bm_removed, bm_changed = _prune_id_dict(self.binh_man.bases, valid_base_ids)
+        removed_set.update(bm_removed)
+        if bm_changed:
+            res.changed = True
+        for bid_str, bcfg in new_bm_bases.items():
+            bid = int(bid_str)
+            bname = base_name_map.get(bid, "")
+            if bname and bcfg.name != bname:
+                bcfg.name = bname
+                if bid not in res.renamed_ids:
+                    res.renamed_ids.append(bid)
+                res.changed = True
+            if bcfg.parent_city_id:
+                pcid = _parse_int_id(bcfg.parent_city_id)
+                if pcid is None or pcid not in valid_city_ids:
+                    bcfg.parent_city_id = str(first_city_id) if first_city_id is not None else ""
+                    res.updated_refs.append(f"binh_man.bases.{bid_str}.parent_city_id")
+                    res.changed = True
+            if bcfg.camp_id:
+                camp_id = _parse_int_id(bcfg.camp_id)
+                if camp_id is None or camp_id not in valid_base_ids:
+                    bcfg.camp_id = ""
+                    res.updated_refs.append(f"binh_man.bases.{bid_str}.camp_id")
+                    res.changed = True
+        self.binh_man.bases = new_bm_bases
+
+        if self.binh_man.current_base_id is not None and self.binh_man.current_base_id not in valid_base_ids:
+            self.binh_man.current_base_id = first_base_id
+            res.updated_refs.append("binh_man.current_base_id")
+            res.changed = True
+        if self.binh_man.camp_id:
+            flat_camp = _parse_int_id(self.binh_man.camp_id)
+            if flat_camp is None or flat_camp not in valid_base_ids:
+                self.binh_man.camp_id = ""
+                res.updated_refs.append("binh_man.camp_id")
+                res.changed = True
+        if self.binh_man.parent_city_id:
+            flat_parent = _parse_int_id(self.binh_man.parent_city_id)
+            if flat_parent is None or flat_parent not in valid_city_ids:
+                self.binh_man.parent_city_id = str(first_city_id) if first_city_id is not None else ""
+                res.updated_refs.append("binh_man.parent_city_id")
+                res.changed = True
+
+        # 4. Crafting.cities (chỉ Thành)
+        new_craft_cities, craft_removed, craft_changed = _prune_id_dict(self.crafting.cities, valid_city_ids)
+        removed_set.update(craft_removed)
+        if craft_changed:
+            self.crafting.cities = new_craft_cities
+            res.changed = True
+
+        # 5. Các trường tham chiếu đơn theo Thành (roster.cities)
+        for attr_name, section in (
+            ("research.city_id", self.research),
+            ("thao_phat.city_id", self.thao_phat),
+            ("goi_dan.city_id", self.goi_dan),
+        ):
+            cur_val = section.city_id
+            if cur_val is not None and cur_val not in valid_city_ids:
+                section.city_id = first_city_id
+                res.updated_refs.append(attr_name)
+                res.changed = True
+
+        if self.nien_thu.city_id != 0 and self.nien_thu.city_id not in valid_city_ids:
+            self.nien_thu.city_id = first_city_id if first_city_id is not None else 0
+            res.updated_refs.append("nien_thu.city_id")
+            res.changed = True
+
+        res.removed_ids = sorted(removed_set)
+        return res
 
     def to_dict(self) -> dict:
         data = asdict(self)

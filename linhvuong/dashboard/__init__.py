@@ -662,11 +662,24 @@ class Dashboard(
         self.refresh_btn.state(["!disabled"])
 
     def _loaded(self, roster: Roster):
+        sync_changed = False
         with self._suppress_auto_save():
-            self._apply_loaded_roster(roster)
+            sync_changed = self._apply_loaded_roster(roster)
 
-    def _apply_loaded_roster(self, roster: Roster):
+        if sync_changed and getattr(self, "_auto_save_enabled", False) and hasattr(self, "_resolve_active_profile_target"):
+            try:
+                target = self._resolve_active_profile_target()
+                if target.exists():
+                    self._save_unified_profile(target)
+                    if hasattr(self, "_append_bld_log"):
+                        self._append_bld_log("🔄 Đã đồng bộ danh sách căn cứ thực tế vào hồ sơ JSON.")
+            except Exception as exc:
+                logger.debug(f"Đồng bộ hồ sơ sau khi tải roster thất bại: {exc}")
+
+    def _apply_loaded_roster(self, roster: Roster) -> bool:
+        had_loaded_profile_cities = bool(getattr(self, "_loaded_profile_city_names", None))
         self.roster = roster
+        sync_changed = self._sync_state_with_roster(roster) if hasattr(self, "_sync_state_with_roster") else False
         # Tab 1: Thành & Doanh trại
         self.city_tree.delete(*self.city_tree.get_children())
         for base in roster.bases:
@@ -683,7 +696,18 @@ class Dashboard(
             self.bld_bases_tree.delete(*self.bld_bases_tree.get_children())
             for base in roster.bases:
                 iid = str(base.id)
-                is_sel = "☑" if (base.id in self._selected_building_cities or (not self._selected_building_cities and base == roster.bases[0])) else "☐"
+                is_sel = (
+                    "☑"
+                    if (
+                        base.id in self._selected_building_cities
+                        or (
+                            not self._selected_building_cities
+                            and not had_loaded_profile_cities
+                            and base == roster.bases[0]
+                        )
+                    )
+                    else "☐"
+                )
                 if is_sel == "☑":
                     self._selected_building_cities.add(base.id)
                 is_res = "☑" if (base.id in self._selected_resource_cities) else "☐"
@@ -813,6 +837,7 @@ class Dashboard(
             if getattr(self, "_last_daily_claim_date", None) != today_str:
                 self._last_daily_claim_date = today_str
                 self._do_claim_daily()
+        return sync_changed
 
     def destroy(self):
         self._flush_auto_save()

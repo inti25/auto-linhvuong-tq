@@ -1573,3 +1573,74 @@ def test_run_batch_open_chest_aborts_on_110_captcha():
     assert any("Captcha" in m for m in logs)
 
 
+def test_building_task_does_not_assume_level_zero_when_building_list_fails():
+    """Khi City.ashx?id=5 lỗi hoặc trả rỗng, tuyệt đối không suy diễn level=0 để gửi lệnh xây."""
+    for handler_resp in ({"ret": 500}, {"ret": 0, "buildings": []}):
+        server = FakeServer(
+            handlers={
+                "Common.ashx?id=77": {"ret": 0, "list": []},
+                "City.ashx?id=5": handler_resp,
+                "OPT.ashx?id=65": {"ret": 0},
+            }
+        )
+        gw = GatewayClient(53, server, sleep=lambda s: None)
+        task = BuildingTask(
+            gw,
+            city_id=10129,
+            plans=[BuildingPlan(pid=1, gid=1, target_level=20)],
+            auto_comfort=False,
+            auto_boost=False,
+        )
+        out = task.run_once()
+        assert out == "buildings_read_failed"
+        upgrade_calls = [c for c in server.calls if c[0] == "OPT.ashx?id=65"]
+        assert len(upgrade_calls) == 0
+
+
+def test_building_task_returns_city_not_found_and_runner_prunes_dead_city():
+    """Khi server trả ret=4 (thành không tồn tại), BuildingTask báo city_not_found và Runner loại khỏi vòng lặp."""
+    from linhvuong.dashboard.runners import BuildingAutoRunner
+
+    class MultiCityServer(FakeServer):
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            self.calls.append((key, dict(data or {})))
+            cid = int((data or {}).get("tid", (data or {}).get("cid", 0)) or 0)
+            if key == "Common.ashx?id=77":
+                return Resp({"ret": 0, "list": []})
+            if key == "City.ashx?id=5":
+                if cid == 10229:
+                    return Resp({"ret": 4, "infos": []})
+                return Resp({"ret": 0, "infos": [{"pid": 1, "gid": 1, "level": 20, "name": "Quan Phủ"}]})
+            return Resp({"ret": 0})
+
+    server = MultiCityServer()
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    missing_seen: list[int] = []
+
+    dead_task = BuildingTask(
+        gw,
+        city_id=10229,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=20)],
+        auto_comfort=False,
+        auto_boost=False,
+        city_name="Thành Ma",
+        on_city_missing=missing_seen.append,
+    )
+    live_task = BuildingTask(
+        gw,
+        city_id=10129,
+        plans=[BuildingPlan(pid=1, gid=1, target_level=20)],
+        auto_comfort=False,
+        auto_boost=False,
+        city_name="Thành Sống",
+    )
+
+    logs: list[str] = []
+    runner = BuildingAutoRunner([dead_task, live_task], interval=0.01, log_cb=logs.append, status_cb=lambda _s: None)
+    runner.run()
+
+    assert missing_seen == [10229]
+    assert dead_task not in runner.tasks
+    upgrade_calls = [c for c in server.calls if c[0] == "OPT.ashx?id=65"]
+    assert len(upgrade_calls) == 0
