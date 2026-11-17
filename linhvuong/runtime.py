@@ -610,7 +610,9 @@ class AccountSession:
 
     def _check_boost_once(self) -> None:
         cid = self._default_city_id() or 0
-        resp = self.gateway.call("Common.ashx", 77, {"cid": str(cid), "_": ""}) or {}
+        resp = self.gateway.page_building(cid) or {}
+        if not isinstance(resp, dict) or _safe_int(resp.get("ret", -1), -1) != 0:
+            return
         rem = parse_boost_remaining_time(resp, cid)
         self._set_boost_left(rem)
         if rem <= 0 and self.profile.building.auto_boost:
@@ -621,8 +623,9 @@ class AccountSession:
                 act = self.gateway.call("OPT.ashx", 69, {"type": "3", "param1": "0", "param2": "0", "paytype": "2", "_": ""}) or {}
                 if act.get("ret", 0) == 0:
                     self.append_log("building", "✅ Kích hoạt thành công DS kiến trúc!")
-                    resp2 = self.gateway.call("Common.ashx", 77, {"cid": str(cid), "_": ""}) or {}
-                    self._set_boost_left(parse_boost_remaining_time(resp2, cid))
+                    resp2 = self.gateway.page_building(cid) or {}
+                    if isinstance(resp2, dict) and _safe_int(resp2.get("ret", -1), -1) == 0:
+                        self._set_boost_left(parse_boost_remaining_time(resp2, cid))
         self._emit("aux_updated", self.get_aux_status())
 
     def _check_explore_once(self) -> None:
@@ -853,8 +856,8 @@ class AccountSession:
         return data
 
     def fetch_city_buildings(self, city_id: int) -> list[dict]:
-        resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
-        buildings = resp.get("infos") or resp.get("buildings") or resp.get("build", [])
+        resp = self.gateway.building_list(city_id) or {}
+        buildings = resp.get("items") or resp.get("infos") or resp.get("buildings") or resp.get("build", [])
         plans = self._sync_city_buildings_from_raw(city_id, buildings, from_auto_cycle=False)
         return plans
 
@@ -886,11 +889,11 @@ class AccountSession:
         elif isinstance(buildings, (list, tuple)):
             for b in buildings:
                 if isinstance(b, dict):
-                    pid = int(b.get("pid", 0))
+                    pid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
                     real_map[pid] = {
-                        "gid": int(b.get("gid", 0)),
-                        "level": int(b.get("level", 0)),
-                        "name": b.get("name", ""),
+                        "gid": int(b.get("m_lgid") if b.get("m_lgid") is not None else b.get("gid", 0)),
+                        "level": int(b.get("m_llevel") if b.get("m_llevel") is not None else b.get("level", 0)),
+                        "name": str(b.get("m_szname") or b.get("name") or ""),
                     }
                 elif isinstance(b, (list, tuple)) and len(b) >= 4:
                     pid = int(b[0])
@@ -1000,14 +1003,17 @@ class AccountSession:
             raise ValueError("Không tìm thấy thành trì để tải kỹ thuật.")
 
         def _find_univ(target_cid: int):
-            self.gateway.call("City.ashx", 50, {"tid": str(target_cid), "_": ""})
-            resp_bld = self.gateway.call("City.ashx", 5, {"tid": str(target_cid), "_": ""}) or {}
-            b_list = resp_bld.get("infos") or resp_bld.get("buildings") or []
+            self.gateway.set_current_city(target_cid)
+            resp_bld = self.gateway.building_list(target_cid) or {}
+            b_list = resp_bld.get("items") or resp_bld.get("infos") or resp_bld.get("buildings") or []
             for b in b_list:
                 if isinstance(b, (list, tuple)) and len(b) >= 2 and int(b[1]) in (6, 59):
                     return int(b[0]), int(b[1])
-                if isinstance(b, dict) and int(b.get("gid", 0)) in (6, 59):
-                    return int(b.get("pid", 0)), int(b.get("gid", 0))
+                if isinstance(b, dict):
+                    bgid = int(b.get("m_lgid") if b.get("m_lgid") is not None else b.get("gid", 0))
+                    if bgid in (6, 59):
+                        bpid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
+                        return bpid, bgid
             return None, None
 
         univ_pid, univ_gid = _find_univ(cid)

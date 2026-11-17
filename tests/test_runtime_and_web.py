@@ -217,11 +217,14 @@ def test_web_ws_rejects_unauth_and_building_fetch(tmp_path, monkeypatch):
         assert r_login.status_code == 200
 
         sess = wm.get_session("blduser @ S53")
-        sess.gateway.call = lambda ep, api_id, params=None: (  # type: ignore[method-assign]
-            {"infos": [[1, 1, "官府", 5], [2, 3, "民房", 3]]}
-            if ep == "City.ashx" and api_id == 5
-            else {"ret": 0}
-        )
+        sess.gateway.building_list = lambda cid: {  # type: ignore[method-assign]
+            "ret": 0,
+            "items": [
+                {"m_lpos": 1, "m_lgid": 1, "m_szname": "官府", "m_llevel": 5},
+                {"m_lpos": 2, "m_lgid": 3, "m_szname": "民房", "m_llevel": 3},
+            ],
+        }
+        sess.gateway.call = lambda ep, api_id, params=None: {"ret": 0}  # type: ignore[method-assign]
         r_bld = client.post(
             "/api/accounts/blduser%20%40%20S53/buildings/fetch",
             json={"city_id": 1001},
@@ -519,6 +522,7 @@ def test_aux_countdown_ticks_in_snapshot_and_app_js_has_ticker(tmp_path, monkeyp
     monkeypatch.setattr(runtime_mod.time, "monotonic", lambda: now[0])
 
     sess = AccountSession("aux @ S53", requests.Session(), 53, "aux", data_dir=tmp_path)
+    sess.gateway.page_building = lambda cid: {"ret": 0, "plus_finish": 120}  # type: ignore[method-assign]
     sess.gateway.call = lambda ep, api_id, params=None: (  # type: ignore[method-assign]
         {"ret": 0, "left": 45}
         if ep == "Common.ashx" and api_id == 140
@@ -648,3 +652,38 @@ def test_start_all_accounts_skips_resource_monitor(tmp_path):
     assert "building" in called_tasks
     assert "binhman" in called_tasks
     wm.graceful_shutdown()
+
+
+def test_s58_boost_and_building_list_use_rest_apis(tmp_path):
+    import requests
+    from linhvuong.roster import City, Roster
+    from linhvuong.runtime import AccountSession
+
+    sess = AccountSession("s58api @ S58", requests.Session(), 58, "s58api", data_dir=tmp_path)
+    sess.roster = Roster(cities=[City(id=10129, name="1")])
+    sess.profile.building.auto_boost = True
+
+    legacy_calls: list[tuple[str, int]] = []
+
+    def fail_if_legacy_call(ep, api_id, params=None):
+        legacy_calls.append((ep, api_id))
+        return {"ret": 1}
+
+    sess.gateway.call = fail_if_legacy_call  # type: ignore[method-assign]
+    sess.gateway.page_building = lambda cid: {"ret": 0, "plus_finish": 4125000, "list": []}  # type: ignore[method-assign]
+    sess.gateway.building_list = lambda cid: {  # type: ignore[method-assign]
+        "ret": 0,
+        "items": [{"m_lpos": 1, "m_lgid": 4, "m_llevel": 30, "m_szname": "仓库"}],
+    }
+
+    sess._check_boost_once()
+    assert sess.get_aux_status()["boost_left_seconds"] == 4125000
+    assert legacy_calls == []
+
+    plans = sess.fetch_city_buildings(10129)
+    assert len(plans) == 1
+    assert plans[0]["pid"] == 1
+    assert plans[0]["gid"] == 4
+    assert plans[0]["cur_lvl"] == 30
+    assert legacy_calls == []
+    sess.destroy()
