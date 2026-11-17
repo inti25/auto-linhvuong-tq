@@ -191,7 +191,7 @@ class AutomationEngine:
         on_status: Optional[Callable[[str, str], None]] = None,
     ):
         self._runners: dict[str, TaskRunnerThread] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.on_log = on_log
         self.on_status = on_status
 
@@ -229,31 +229,31 @@ class AutomationEngine:
     ) -> None:
         """Khởi động một tác vụ tự động hóa."""
         with self._lock:
-            # Dừng runner cũ nếu đang chạy
             old_runner = self._runners.get(task_id)
-            if old_runner and old_runner.is_alive():
-                old_runner.stop()
-                old_runner.join(timeout=1.0)
+        if old_runner and old_runner.is_alive():
+            old_runner.stop()
+            old_runner.join(timeout=1.0)
 
-            runner = TaskRunnerThread(
-                task_id=task_id,
-                task=task,
-                interval=interval,
-                jitter=jitter,
-                log_cb=self._dispatch_log,
-                status_cb=self._dispatch_status,
-            )
+        runner = TaskRunnerThread(
+            task_id=task_id,
+            task=task,
+            interval=interval,
+            jitter=jitter,
+            log_cb=self._dispatch_log,
+            status_cb=self._dispatch_status,
+        )
+        with self._lock:
             self._runners[task_id] = runner
-            runner.start()
+        runner.start()
 
     def stop(self, task_id: str, wait_timeout: Optional[float] = None) -> None:
         """Dừng một tác vụ cụ thể."""
         with self._lock:
             runner = self._runners.get(task_id)
-            if runner:
-                runner.stop()
-                if wait_timeout:
-                    runner.join(timeout=wait_timeout)
+        if runner:
+            runner.stop()
+            if wait_timeout:
+                runner.join(timeout=wait_timeout)
 
     def stop_all(self, wait_timeout: Optional[float] = None) -> None:
         """Dừng tất cả các tác vụ đang chạy."""

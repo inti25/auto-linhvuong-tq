@@ -266,7 +266,16 @@ class _BinhManRunnable:
             if self.stop_event.wait(self.interval):
                 break
 
+    def _bind_stop_event(self) -> None:
+        for t in self.tasks:
+            t.stop_event = self.stop_event
+            if getattr(t, "ctx", None) is not None:
+                t.ctx.stop_event = self.stop_event
+            if getattr(t, "sleep_fn", None) is time.sleep:
+                t.sleep_fn = lambda s, ev=self.stop_event: ev.wait(max(0.0, float(s)))
+
     def run(self):
+        self._bind_stop_event()
         if len(self.tasks) == 1:
             self._run_base(self.tasks[0])
             return
