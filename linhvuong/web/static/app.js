@@ -21,6 +21,9 @@
     selectedResTechId: null,
     battleIdInput: "0",
     saveTimer: null,
+    pendingProfilePatch: null,
+    pendingSelfProfileUpdates: 0,
+    pendingSelfProfileExpiresAt: 0,
     auxSyncedAt: 0,
     auxTimer: null,
   };
@@ -216,7 +219,12 @@
     } else if (event === "profile_updated") {
       state.snapshot.profile = payload;
       renderHeaderProfileBar();
-      renderActiveTab();
+      if (state.pendingSelfProfileUpdates > 0 && Date.now() < state.pendingSelfProfileExpiresAt) {
+        state.pendingSelfProfileUpdates -= 1;
+      } else {
+        state.pendingSelfProfileUpdates = 0;
+        renderActiveTab();
+      }
     } else if (event === "roster_updated") {
       state.snapshot.roster = payload;
       renderActiveTab();
@@ -243,6 +251,7 @@
   // ---------------------------------------------------------------------------
   function renderSidebar() {
     const list = $("account-list");
+    const prevScrollTop = list.scrollTop;
     list.innerHTML = state.accounts
       .map((a) => {
         const icon = a.status === "connected" ? "🟢" : a.status === "captcha" ? "⚠️" : a.status === "error" ? "🔴" : "⚪";
@@ -265,6 +274,7 @@
         selectAccount(el.dataset.key);
       });
     });
+    list.scrollTop = prevScrollTop;
   }
 
   async function selectAccount(key) {
@@ -427,24 +437,43 @@
   // ---------------------------------------------------------------------------
   // PROFILE SYNC HELPERS
   // ---------------------------------------------------------------------------
-  function scheduleProfileSave(patch) {
-    if (!state.currentKey || !state.snapshot) return;
-    // Merge optimistically into local snapshot
-    const prof = state.snapshot.profile;
-    for (const [k, v] of Object.entries(patch)) {
-      if (prof[k] && typeof prof[k] === "object" && !Array.isArray(prof[k]) && typeof v === "object") {
-        prof[k] = { ...prof[k], ...v };
+  function mergePatchInto(target, patch) {
+    for (const [k, v] of Object.entries(patch || {})) {
+      if (target[k] && typeof target[k] === "object" && !Array.isArray(target[k]) && typeof v === "object" && !Array.isArray(v)) {
+        target[k] = { ...target[k], ...v };
       } else {
-        prof[k] = v;
+        target[k] = v;
       }
     }
+  }
+
+  async function putProfilePatch(patch) {
+    state.pendingSelfProfileUpdates += 1;
+    state.pendingSelfProfileExpiresAt = Date.now() + 5000;
+    try {
+      await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/profile`, {
+        method: "PUT",
+        body: patch,
+      });
+    } catch (e) {
+      state.pendingSelfProfileUpdates = Math.max(0, state.pendingSelfProfileUpdates - 1);
+      throw e;
+    }
+  }
+
+  function scheduleProfileSave(patch) {
+    if (!state.currentKey || !state.snapshot) return;
+    // Merge optimistically into local snapshot and coalesce pending patches
+    mergePatchInto(state.snapshot.profile, patch);
+    state.pendingProfilePatch = state.pendingProfilePatch || {};
+    mergePatchInto(state.pendingProfilePatch, patch);
     clearTimeout(state.saveTimer);
     state.saveTimer = setTimeout(async () => {
+      const toSend = state.pendingProfilePatch;
+      state.pendingProfilePatch = null;
+      if (!toSend || !state.currentKey) return;
       try {
-        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/profile`, {
-          method: "PUT",
-          body: patch,
-        });
+        await putProfilePatch(toSend);
       } catch (e) {
         showToast("Lỗi lưu cấu hình", e.message, "error");
       }
@@ -453,18 +482,11 @@
 
   async function saveProfileImmediate(patch) {
     clearTimeout(state.saveTimer);
-    const prof = state.snapshot.profile;
-    for (const [k, v] of Object.entries(patch)) {
-      if (prof[k] && typeof prof[k] === "object" && !Array.isArray(prof[k]) && typeof v === "object") {
-        prof[k] = { ...prof[k], ...v };
-      } else {
-        prof[k] = v;
-      }
-    }
-    await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/profile`, {
-      method: "PUT",
-      body: patch,
-    });
+    const queued = state.pendingProfilePatch || {};
+    state.pendingProfilePatch = null;
+    mergePatchInto(queued, patch);
+    mergePatchInto(state.snapshot.profile, patch);
+    await putProfilePatch(queued);
   }
 
   async function toggleTask(taskName) {
@@ -485,6 +507,10 @@
     }
   }
 
+  function isNearBottom(el, threshold = 24) {
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) <= threshold;
+  }
+
   function appendLogToDom(channel, line) {
     const map = {
       building: "log-internal",
@@ -497,8 +523,9 @@
     };
     const box = $(map[channel]);
     if (box) {
+      const stickBottom = isNearBottom(box);
       box.textContent += (box.textContent ? "\n" : "") + line;
-      box.scrollTop = box.scrollHeight;
+      if (stickBottom) box.scrollTop = box.scrollHeight;
     }
   }
 
@@ -578,10 +605,93 @@
   // ---------------------------------------------------------------------------
   // RENDER 7 TABS
   // ---------------------------------------------------------------------------
+  function captureTabUiState(root) {
+    const curKey = state.currentKey || "";
+    if (root.dataset.renderedKey !== curKey || root.dataset.renderedTab !== state.activeTab) {
+      return null;
+    }
+    const tableScrolls = [...root.querySelectorAll(".table-wrap")].map((el) => ({
+      top: el.scrollTop,
+      left: el.scrollLeft,
+    }));
+    const logScrolls = {};
+    root.querySelectorAll(".log-box").forEach((el) => {
+      if (!el.id) return;
+      logScrolls[el.id] = { top: el.scrollTop, atBottom: isNearBottom(el) };
+    });
+    let focus = null;
+    const active = document.activeElement;
+    if (active && root.contains(active)) {
+      focus = {
+        id: active.id || "",
+        tag: active.tagName,
+        cls: active.className || "",
+        pid: active.dataset?.pid,
+        gid: active.dataset?.gid,
+        idx: active.dataset?.idx,
+        bid: active.dataset?.bid,
+        selStart: typeof active.selectionStart === "number" ? active.selectionStart : null,
+        selEnd: typeof active.selectionEnd === "number" ? active.selectionEnd : null,
+      };
+    }
+    return {
+      rootTop: root.scrollTop,
+      rootLeft: root.scrollLeft,
+      tableScrolls,
+      logScrolls,
+      focus,
+    };
+  }
+
+  function restoreTabUiState(root, saved) {
+    root.querySelectorAll(".log-box").forEach((el) => {
+      const prev = saved && el.id ? saved.logScrolls[el.id] : null;
+      if (prev) {
+        el.scrollTop = prev.atBottom ? el.scrollHeight : prev.top;
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    if (!saved) return;
+    root.querySelectorAll(".table-wrap").forEach((el, idx) => {
+      const s = saved.tableScrolls[idx];
+      if (s) {
+        el.scrollTop = s.top;
+        el.scrollLeft = s.left;
+      }
+    });
+    root.scrollTop = saved.rootTop;
+    root.scrollLeft = saved.rootLeft;
+
+    if (saved.focus) {
+      const f = saved.focus;
+      let target = f.id ? $(f.id) : null;
+      if (target && !root.contains(target)) target = null;
+      if (!target) {
+        target = [...root.querySelectorAll("input, select, textarea, button")].find(
+          (el) =>
+            el.tagName === f.tag &&
+            (el.className || "") === f.cls &&
+            el.dataset?.pid === f.pid &&
+            el.dataset?.gid === f.gid &&
+            el.dataset?.idx === f.idx &&
+            el.dataset?.bid === f.bid
+        ) || null;
+      }
+      if (target && typeof target.focus === "function") {
+        try { target.focus({ preventScroll: true }); } catch {}
+        if (f.selStart !== null && typeof target.setSelectionRange === "function") {
+          try { target.setSelectionRange(f.selStart, f.selEnd); } catch {}
+        }
+      }
+    }
+  }
+
   function renderActiveTab() {
     if (!state.snapshot) return;
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.activeTab));
     const root = $("tab-content");
+    const savedUi = captureTabUiState(root);
     const renderers = {
       internal: renderInternalTab,
       thaophat: renderThaoPhatTab,
@@ -592,8 +702,11 @@
       nienthu: renderNienThuTab,
     };
     renderers[state.activeTab](root);
+    root.dataset.renderedKey = state.currentKey || "";
+    root.dataset.renderedTab = state.activeTab;
     updateRunningButtonsOnly();
     renderAuxDomOnly();
+    restoreTabUiState(root, savedUi);
   }
 
   // TAB 1: NỘI CHÍNH & NGHIÊN CỨU

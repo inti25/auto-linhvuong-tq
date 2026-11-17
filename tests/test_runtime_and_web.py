@@ -622,3 +622,289 @@ def test_start_all_accounts_skips_resource_monitor(tmp_path, monkeypatch):
     assert "resource_monitor" not in resumed
     assert "building" in resumed
     wm.graceful_shutdown()
+
+
+def test_web_scroll_preserved_on_rerender_and_logs():
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+
+    app_js_path = Path(__file__).resolve().parents[1] / "linhvuong" / "web" / "static" / "app.js"
+    js_test = r"""
+const fs = require("node:fs");
+const vm = require("node:vm");
+const assert = require("node:assert/strict");
+
+const appCode = fs.readFileSync(process.env.APP_JS_PATH, "utf8");
+
+function makeEl(tag, id = "", className = "") {
+  const el = {
+    tagName: tag.toUpperCase(),
+    id,
+    className,
+    dataset: {},
+    style: {},
+    children: [],
+    listeners: {},
+    _innerHTML: "",
+    _textContent: "",
+    scrollTop: 0,
+    scrollLeft: 0,
+    scrollHeight: 1000,
+    clientHeight: 200,
+    value: "",
+    checked: false,
+    disabled: false,
+    classList: {
+      _set: new Set(className ? className.split(/\s+/) : []),
+      add(...xs) { xs.forEach((x) => this._set.add(x)); },
+      remove(...xs) { xs.forEach((x) => this._set.delete(x)); },
+      toggle(x, force) {
+        if (force === undefined) {
+          if (this._set.has(x)) this._set.delete(x); else this._set.add(x);
+        } else if (force) this._set.add(x); else this._set.delete(x);
+      },
+      contains(x) { return this._set.has(x); },
+    },
+    addEventListener(ev, fn) { (this.listeners[ev] ||= []).push(fn); },
+    dispatchEvent(ev) { (this.listeners[ev.type] || []).forEach((fn) => fn(ev)); },
+    appendChild(ch) { this.children.push(ch); return ch; },
+    remove() {},
+    contains(other) {
+      if (other === this) return true;
+      return this.children.some((c) => c.contains && c.contains(other));
+    },
+    focus() { document.activeElement = this; },
+    setSelectionRange() {},
+    querySelectorAll(sel) {
+      const out = [];
+      const walk = (node) => {
+        for (const c of node.children || []) {
+          if (matchesSel(c, sel)) out.push(c);
+          walk(c);
+        }
+      };
+      walk(this);
+      return out;
+    },
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+  };
+  Object.defineProperty(el, "textContent", {
+    get() { return this._textContent; },
+    set(v) {
+      this._textContent = String(v ?? "");
+      if (this.classList.contains("log-box")) {
+        const lines = this._textContent ? this._textContent.split("\n").length : 0;
+        this.scrollHeight = Math.max(200, lines * 20);
+      }
+    },
+  });
+  Object.defineProperty(el, "innerHTML", {
+    get() { return this._innerHTML; },
+    set(v) {
+      this._innerHTML = String(v ?? "");
+      this.innerHTMLCount = (this.innerHTMLCount || 0) + 1;
+      // Simulate browser behavior: replacing innerHTML destroys children (new scrollTop=0)
+      this.children = [];
+      if (this.id === "tab-content") {
+        // Create 3 .table-wrap + 1 #log-internal + key controls
+        for (let i = 0; i < 3; i++) {
+          const tw = makeEl("div", "", "table-wrap");
+          tw.scrollHeight = 1000;
+          tw.clientHeight = 240;
+          this.children.push(tw);
+        }
+        const logBox = makeEl("div", "log-internal", "log-box");
+        logBox.textContent = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n");
+        this.children.push(logBox);
+        registerById(logBox);
+        const inp = makeEl("input", "", "bld-tgt");
+        inp.dataset.pid = "1";
+        this.children.push(inp);
+        const chk = makeEl("input", "", "bld-chk");
+        chk.dataset.pid = "1";
+        this.children.push(chk);
+        const ids = [
+          "btn-tgl-bld","btn-tgl-res","btn-tgl-resmon","btn-bld-fetch","btn-res-fetch",
+          "btn-bld-all-on","btn-bld-all-off","bld-slots","bld-speedup","bld-spd-item",
+          "bld-spd-hrs","bld-interval","bld-even","aux-comfort","aux-boost","rsrc-open-bld",
+          "btn-bld-all-chk","btn-bld-none-chk","bld-batch-lvl","btn-bld-set-all","btn-bld-demolish",
+          "res-art","res-even","res-interval","btn-res-all","btn-res-none","res-batch-lvl",
+          "btn-res-set-all","rsrc-gold","rsrc-wood","rsrc-iron","rsrc-stone","rsrc-food",
+          "rsrc-gbox","rsrc-tnbox","aux-daily","aux-explore","aux-whip","aux-coin","aux-turns",
+          "logi-amt","dt-x","dt-y","btn-run-explore","btn-chest-start","btn-chest-stop",
+          "btn-logi-xfer","btn-logi-comfort","btn-logi-daily","btn-dt-start","btn-dt-stop","btn-clr-int-log",
+          "aux-boost-lbl","aux-explore-lbl","dt-status-lbl","chest-progress-fill","chest-progress-lbl",
+          "dt-camp","chest-type","chest-city","chest-times","logi-from","logi-to","logi-type"
+        ];
+        for (const cid of ids) {
+          const c = makeEl("button", cid, "");
+          this.children.push(c);
+          registerById(c);
+        }
+      } else if (this.id === "account-list") {
+        const card = makeEl("div", "", "account-card");
+        card.dataset.key = "tester @ S53";
+        this.children.push(card);
+      }
+    },
+  });
+  return el;
+}
+
+function matchesSel(el, sel) {
+  return sel.split(",").map((s) => s.trim()).some((part) => {
+    if (part.startsWith(".")) return el.classList.contains(part.slice(1).split(/[\s\[:]/)[0]);
+    if (part.startsWith("#")) return el.id === part.slice(1);
+    return el.tagName.toLowerCase() === part.split(/[\s\[:.]/)[0].toLowerCase();
+  });
+}
+
+const byId = new Map();
+function registerById(el) { if (el.id) byId.set(el.id, el); }
+
+const allStaticIds = [
+  "admin-login-view","app-shell","game-login-view","dashboard-view","account-list","tab-content",
+  "ws-title","ws-status-pill","ws-proxy-pill","ws-realtime-pill","btn-reload-roster",
+  "btn-rotate-proxy","btn-notify-settings","btn-account-logout","profile-header-bar",
+  "hdr-profile-name","hdr-profile-export","hdr-save-vault","hdr-auto-resume","hdr-autostart-count",
+  "captcha-banner","captcha-reason-text","toast-stack","sidebar","admin-login-form","admin-user","admin-pass",
+  "admin-login-error","btn-admin-logout","btn-mobile-menu","btn-add-account","btn-start-all","btn-stop-all",
+  "btn-open-syslogs","btn-admin-settings","btn-coffee","modal-close","btn-sound-toggle","btn-resume-captcha",
+  "hdr-profile-import","btn-autostart-cfg","btn-free-proxy","btn-test-proxy","game-login-form","btn-game-login",
+  "btn-save-acc-only","btn-delete-acc","modal-backdrop","modal-title","modal-body","modal-footer"
+];
+for (const id of allStaticIds) registerById(makeEl("div", id, id === "tab-content" ? "ws-body" : ""));
+byId.get("account-list").scrollHeight = 900;
+byId.get("tab-content").scrollHeight = 1200;
+
+const document = {
+  activeElement: null,
+  getElementById: (id) => byId.get(id) || null,
+  querySelectorAll: (sel) => (sel === ".tab-btn" ? [] : []),
+  createElement: (tag) => makeEl(tag),
+};
+document.activeElement = makeEl("body");
+
+const sampleProfile = {
+  building: { cities: { "1001": { enabled: true, plans: [{ pid: 1, gid: 1, name: "Quan Phủ", cur_lvl: 5, target_level: 20, enabled: true }] } }, slots: 1, interval: "20" },
+  research: { city_id: 1001, techs: [{ id: 1, name: "Trồng trọt", enabled: true, target_level: 20 }], interval: "20" },
+  resource: { resource_cities: [], gold_threshold: "10000" },
+  logistics: {},
+  ditrai: {},
+  thao_phat: { generals: [] },
+  binh_man: { bases: {} },
+  goi_dan: { generals: [] },
+  crafting: { cities: {} },
+  combat: {},
+  nien_thu: { generals: [] },
+  notifications: {},
+};
+const sampleSnap = {
+  summary: { account_key: "tester @ S53", status: "connected", status_text: "OK", tasks: {} },
+  profile: structuredClone(sampleProfile),
+  roster: { bases: [{ id: 1001, name: "Lạc Dương", display_name: "Lạc Dương", pos_x: 1, pos_y: 2 }], cities: [{ id: 1001, name: "Lạc Dương", display_name: "Lạc Dương" }], camps: [], generals: [] },
+  tech_levels: {},
+  logs: { building: Array.from({ length: 50 }, (_, i) => `log ${i}`), logistics: [], global: [] },
+  aux: {},
+};
+
+let wsInstance = null;
+class FakeWS {
+  constructor() { wsInstance = this; }
+  close() {}
+}
+
+let putCount = 0;
+const windowObj = {
+  location: { protocol: "http:", host: "127.0.0.1:8000" },
+  listeners: {},
+  addEventListener(ev, fn) { (this.listeners[ev] ||= []).push(fn); },
+  setTimeout,
+  clearTimeout,
+  setInterval: () => 1,
+  WebSocket: FakeWS,
+  Notification: { permission: "denied" },
+  confirm: () => true,
+  fetch: async (url, opts) => {
+    if (url === "/api/auth/status") return { status: 200, ok: true, text: async () => JSON.stringify({ auth_enabled: false, authenticated: true, username: "admin", vault_unlocked: true }) };
+    if (url === "/api/meta") return { status: 200, ok: true, text: async () => JSON.stringify({ missions: [], techs: [], tech_names: [], man_targets: [], attack_action_options: [], formations: [], stratagems: [], chests: [], weapons: [], resumable_tasks: [] }) };
+    if (url === "/api/accounts") return { status: 200, ok: true, text: async () => JSON.stringify({ accounts: [{ account_key: "tester @ S53", status: "connected", config: {} }] }) };
+    if (url.endsWith("/snapshot")) return { status: 200, ok: true, text: async () => JSON.stringify(sampleSnap) };
+    if (url.endsWith("/profile") && opts?.method === "PUT") {
+      putCount++;
+      wsInstance.onmessage({ data: JSON.stringify({ account_key: "tester @ S53", event: "profile_updated", payload: structuredClone(sampleProfile) }) });
+      return { status: 200, ok: true, text: async () => JSON.stringify({ ok: true, profile: sampleProfile }) };
+    }
+    return { status: 200, ok: true, text: async () => "{}" };
+  },
+};
+windowObj.window = windowObj;
+windowObj.document = document;
+windowObj.navigator = {};
+Object.assign(windowObj, { Object, Array, Number, String, Boolean, Set, Map, Math, Date, JSON, Error, RegExp, Promise, encodeURIComponent, structuredClone });
+
+(async () => {
+  const ctx = vm.createContext(windowObj);
+  vm.runInContext(appCode, ctx);
+  for (const fn of windowObj.listeners["DOMContentLoaded"] || []) await fn();
+  await new Promise((r) => setTimeout(r, 50));
+
+  const tabRoot = byId.get("tab-content");
+  const accList = byId.get("account-list");
+
+  // Scroll all boxes to mid positions
+  accList.scrollTop = 55;
+  tabRoot.scrollTop = 120;
+  for (const tw of tabRoot.querySelectorAll(".table-wrap")) tw.scrollTop = 120;
+  byId.get("log-internal").scrollTop = 80;
+
+  // 1. Trigger background roster_updated -> must preserve scrollTop of root, .table-wrap, #log-internal
+  wsInstance.onmessage({ data: JSON.stringify({ account_key: "tester @ S53", event: "roster_updated", payload: sampleSnap.roster }) });
+  assert.equal(tabRoot.scrollTop, 120, "tab-content scrollTop reset on roster_updated");
+  for (const tw of tabRoot.querySelectorAll(".table-wrap")) {
+    assert.equal(tw.scrollTop, 120, "table-wrap scrollTop reset on roster_updated");
+  }
+  assert.equal(byId.get("log-internal").scrollTop, 80, "log-internal scrollTop reset on roster_updated");
+
+  // 2. Trigger sidebar status_changed -> must preserve account-list scrollTop
+  wsInstance.onmessage({ data: JSON.stringify({ account_key: "tester @ S53", event: "status_changed", payload: { status: "connected" } }) });
+  assert.equal(accList.scrollTop, 55, "account-list scrollTop reset on status_changed");
+
+  // 3. Trigger incoming log while scrolled up -> must stay at 80; when at bottom -> follow to bottom
+  wsInstance.onmessage({ data: JSON.stringify({ account_key: "tester @ S53", event: "log", payload: { channel: "building", line: "new line 1" } }) });
+  assert.equal(byId.get("log-internal").scrollTop, 80, "log-internal jumped while scrolled up");
+  const box = byId.get("log-internal");
+  box.scrollTop = box.scrollHeight - box.clientHeight;
+  wsInstance.onmessage({ data: JSON.stringify({ account_key: "tester @ S53", event: "log", payload: { channel: "building", line: "new line 2" } }) });
+  assert.equal(box.scrollTop, box.scrollHeight, "log-internal did not auto-scroll when at bottom");
+
+  // 4. Self-initiated profile save (checkbox + delayed PUT/WS echo) must NOT wipe DOM/focus
+  const rendersBefore = tabRoot.innerHTMLCount;
+  const tgtInput = tabRoot.querySelector(".bld-tgt");
+  tgtInput.focus();
+  const chk = tabRoot.querySelector(".bld-chk");
+  chk.checked = false;
+  chk.onchange();
+  await new Promise((r) => setTimeout(r, 380));
+  assert.equal(putCount, 1, "expected PUT /profile after debounce");
+  assert.equal(tabRoot.innerHTMLCount, rendersBefore, "self profile_updated triggered full tab re-render");
+  assert.equal(document.activeElement, tgtInput, "focus lost on self profile_updated");
+})();
+"""
+
+    proc = subprocess.run(
+        [node, "-e", js_test],
+        env={**os.environ, "APP_JS_PATH": str(app_js_path)},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+    )
+    assert proc.returncode == 0, f"JS scroll regression failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+
