@@ -409,6 +409,7 @@ class CombatConfig:
     capture_boss_max_morale: int = 60  # Ngưỡng sĩ khí tối đa để kích hoạt Cầm Hoạch (action = 5)
     notification_config: Optional[Any] = None  # Cấu hình NotificationConfig phát cảnh báo đa kênh
     server_id: int = 0
+    on_web_event: Optional[Callable[[dict], None]] = None
 
 
 class BattleEngine:
@@ -1332,6 +1333,7 @@ class BattleEngine:
                             map_coords=coords,
                             config=getattr(cfg, "notification_config", None),
                             on_log=_log,
+                            on_web_event=getattr(cfg, "on_web_event", None),
                         )
                     except Exception as e:
                         logger.debug(f"Lỗi kích hoạt thông báo đa kênh: {e}")
