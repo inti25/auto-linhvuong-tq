@@ -1683,7 +1683,56 @@ def test_process_speedup_skips_non_speeduppable_buildings_and_avoids_ret_1_spam(
 
 
 
+def _instant_speedup_server(initial_left: int):
+    state = {"left": initial_left}
+
+    def opt69():
+        t = server.calls[-1][1].get("type")
+        if t == "1":
+            state["left"] //= 2
+        elif t == "2":
+            state["left"] = max(0, state["left"] - 3600)
+        return {"ret": 0}
+
+    def pagebuilding():
+        slots = [[9, 3, 6, 1, state["left"]]] if state["left"] > 0 else []
+        return {"ret": 0, "data": {"ret": 0, "plus_finish": 1000, "list": [[10129, "1", 1, 1, slots, []]]}}
+
+    server = FakeServer(handlers={"/api/city/pagebuilding": pagebuilding, "OPT.ashx?id=69": opt69})
+    return server, state
+
+
+@pytest.mark.parametrize("hours", [0, -1])
+@pytest.mark.parametrize(
+    "initial,expected_types",
+    [(20000, ["1", "1", "1", "2"]), (7200, ["1", "2"]), (3600, ["2"]), (300, ["2"])],
+)
+def test_process_speedup_instant_when_hours_not_positive(hours, initial, expected_types):
+    server, state = _instant_speedup_server(initial)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=10129, plans=[], auto_speedup=True, speedup_hours=hours, paytype=2)
+
+    task.process_speedup()
+
+    types = [d["type"] for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert types == expected_types
+    assert state["left"] == 0
+
+
+def test_process_speedup_positive_hours_does_not_use_one_hour_item():
+    server, state = _instant_speedup_server(20000)
+    gw = GatewayClient(58, server, sleep=lambda s: None)
+    task = BuildingTask(gw, city_id=10129, plans=[], auto_speedup=True, speedup_hours=1.0, paytype=2)
+
+    task.process_speedup()
+
+    types = [d["type"] for k, d in server.calls if k == "OPT.ashx?id=69"]
+    assert set(types) == {"1"}
+    assert 0 < state["left"] <= 3600
+
+
 def test_building_task_aborts_open_box_when_city_switch_fails():
+
     """Nếu /api/city/current thất bại (vd ret=8600), không mở rương vào sai thành."""
     server = FakeServer(
         handlers={

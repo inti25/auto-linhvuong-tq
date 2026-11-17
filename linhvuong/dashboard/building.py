@@ -313,7 +313,7 @@ class BuildingMixin:
         self.bld_speedup_item_combo.pack(side="left", padx=2)
         tk.Label(r_spd, text="đến dưới", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
         ttk.Entry(r_spd, textvariable=self.bld_speedup_hours_var, width=3).pack(side="left", padx=2)
-        tk.Label(r_spd, text="giờ", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        tk.Label(r_spd, text="giờ (≤0: ngay)", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
         self.bld_speedup_var.trace_add("write", self._sync_running_bld_speedup)
         self.bld_speedup_hours_var.trace_add("write", self._sync_running_bld_speedup)
         self.bld_speedup_item_combo.bind("<<ComboboxSelected>>", self._sync_running_bld_speedup)

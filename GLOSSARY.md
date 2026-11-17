@@ -57,6 +57,10 @@ _Avoid_: Dò đường tránh vật cản, bypass obstacle, detour
 Hành động sử dụng đạo cụ (Lệnh bài tăng tốc / Vàng) để giảm thời gian hoặc hoàn tất tức thì một tiến trình nâng cấp công trình hoặc nghiên cứu.
 _Avoid_: Speedup, cắn bùa tăng tốc
 
+**Xây Xong Ngay**:
+Chế độ **Tăng tốc** hoàn tất tức thì tiến trình nâng/hạ cấp công trình khi ngưỡng giờ đặt từ `0` trở xuống, bằng cách rút ngắn theo tỷ lệ 50% xuống ngưỡng 1 giờ rồi dùng một lần giảm cố định 1 giờ.
+_Avoid_: Instant build, đập max 50% về 0
+
 **DS kiến trúc** (Đại Sư Kiến Trúc / Kích hoạt kiến trúc):
 Đặc quyền đạo cụ mở rộng hàng đợi thi công từ 1 công trình mặc định lên tối đa 3 công trình xây dựng cùng lúc (`OPT.ashx?id=69, type=3`), đồng thời tăng 20% tốc độ xây dựng. Thời hạn hiệu lực được kiểm tra qua trường `plus_finish` của trang hàng đợi xây dựng (`/api/city/pagebuilding`).
 _Avoid_: Boost 20%, kích hoạt bonus

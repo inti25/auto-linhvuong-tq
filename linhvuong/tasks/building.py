@@ -851,14 +851,14 @@ class BuildingTask:
             }
         return buildings_map
 
-    def speedup_slot(self, slot_id: int, paytype: Optional[int] = None) -> bool:
-        """Sử dụng vật phẩm tăng tốc xây dựng (giảm 50% thời gian thi công)."""
+    def speedup_slot(self, slot_id: int, paytype: Optional[int] = None, kind: int = 1) -> bool:
+        """Sử dụng vật phẩm tăng tốc xây dựng (kind=1: giảm 50%, kind=2: giảm 1 giờ)."""
         pt = paytype if paytype is not None else self.paytype
         resp = self.gateway.call(
             "OPT.ashx",
             69,
             {
-                "type": "1",
+                "type": str(int(kind)),
                 "param1": str(slot_id),
                 "param2": str(self.city_id),
                 "paytype": str(pt),
@@ -920,6 +920,49 @@ class BuildingTask:
             return slot, gid, time_left
         return None
 
+    def _slot_time_left(self, slot: int) -> int:
+        """Đọc lại thời gian còn lại thực tế của slot từ máy chủ (0 nếu đã xong)."""
+        slots, ok = self._fetch_active_upgrade_slots(force=True)
+        if not ok:
+            return 0
+        for item in slots:
+            parsed = self._extract_slot_gid_and_time(item)
+            if parsed is not None and parsed[0] == slot:
+                return parsed[2]
+        return 0
+
+    def _speedup_slot_instant(self, slot: int, time_left: int) -> int:
+        """Xây Xong Ngay: giảm 50% đến <= 1 giờ rồi dùng giảm 1 giờ để hoàn tất. Trả về số lần dùng đạo cụ."""
+        hour = 3600
+        count = 0
+        current = time_left
+        self._log(f"   ⚡ Slot {slot}: còn {time_left // 60} phút, xây xong ngay")
+        while current > hour and count < 10:
+            if not self.speedup_slot(slot, kind=1):
+                self._log(f"      ❌ Tăng tốc 50% thất bại ở lần {count + 1}")
+                return count
+            count += 1
+            current //= 2
+            self._log(f"      ✅ Giảm 50% lần {count}: còn ~{current // 60} phút")
+        for _ in range(3):
+            if current <= 0:
+                break
+            if not self.speedup_slot(slot, kind=2):
+                self._log("      ❌ Giảm 1 giờ thất bại")
+                return count
+            count += 1
+            self._log("      ✅ Đã giảm 1 giờ")
+            current = self._slot_time_left(slot)
+            if current > hour:
+                # Ước lượng lệch lớn: tiếp tục giảm 50% theo thời gian thật
+                if not self.speedup_slot(slot, kind=1):
+                    return count
+                count += 1
+                current = self._slot_time_left(slot)
+        if count:
+            self._log(f"   ✅ Đã tăng tốc {count} lần cho slot {slot}")
+        return count
+
     def process_speedup(self) -> int:
         """Tăng tốc các công trình đang thi công theo cơ chế chuẩn ZBuild.
 
@@ -946,6 +989,13 @@ class BuildingTask:
                     self._non_speedup_logged.add((slot, gid_key))
                     bname = BUILDING_NAMES.get(gid_key, f"GID {gid_key}")
                     self._log(f"   ⏭️ Slot {slot} ({bname}): công trình không hỗ trợ tăng tốc, bỏ qua")
+                continue
+
+            instant = self.speedup_hours <= 0
+            if instant:
+                if time_left <= 0:
+                    continue
+                total_speedups += self._speedup_slot_instant(slot, time_left)
                 continue
 
             if time_left <= target_seconds:

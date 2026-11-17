@@ -437,7 +437,7 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `OPT.ashx?id=57` (Trận hình & tỷ lệ) | `lGeneralID, lRatioAttack, lRatioPK, lRatioStra (tổng 100), lBattleArray, lWithdrawLoss, lWithdrawMorale` | `{"ret":0}` |
 | `OPT.ashx?id=55` | `tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=63` | `{}` | `{"ret":86}` *(đã nhận chuyên cần trong ngày)* |
-| `OPT.ashx?id=69` (`type=1,3,33`) | `type=1`/`3` | `{"ret":0,"errMsg":"成功"}`; Quan Phủ/Thành Tường (`gid=1,2,54,55`) hoặc công trình NPC (`22..53`) trả `{"ret":1,"errMsg":"操作失败，请稍后再试"}`; `type=33` khi hết: `{"ret":90,"errMsg":"道具已经用完"}` |
+| `OPT.ashx?id=69` (`type=1,2,3,33`) | `type=1`/`2`/`3` (`param1=slot, param2=city_id, paytype=1\|2`) | `type=1`: giảm 50% thời gian xây dựng (`10` Coin/Ngân Bảo); `type=2`: giảm 1 giờ (`10` Coin/Ngân Bảo); `{"ret":0,"errMsg":"成功"}`; Quan Phủ/Thành Tường (`gid=1,2,54,55`) hoặc công trình NPC (`22..53`) trả `{"ret":1,"errMsg":"操作失败，请稍后再试"}`; `type=33` khi hết: `{"ret":90,"errMsg":"道具已经用完"}` |
 
 ---
 
