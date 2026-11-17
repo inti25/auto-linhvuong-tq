@@ -459,3 +459,52 @@ def test_web_vault_autostart_endpoints_and_auto_restore(tmp_path, monkeypatch):
     assert restored3["restored_accounts"] == ["autouser @ S53"]
     assert resumed_calls == [("autouser @ S53", ["building", "research"])]
     wm3.graceful_shutdown()
+
+
+def test_web_stop_binhman_does_not_deadlock_and_keeps_api_responsive(tmp_path, monkeypatch):
+    import threading
+    from linhvuong.tasks.binh_man import BinhMan
+
+    _mock_offline(monkeypatch)
+    entered_run = threading.Event()
+    monkeypatch.setattr(BinhMan, "run_once", lambda self: (entered_run.set(), self.sleep_fn(10.0), "ok")[-1])
+
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="webpassword")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    outcome = {}
+
+    def _run():
+        with TestClient(app) as client:
+            assert client.post("/api/auth/login", json={"username": "admin", "password": "webpassword"}).status_code == 200
+            assert client.post(
+                "/api/accounts/login",
+                json={"server_id": 53, "username": "quilia", "password": "secret"},
+            ).status_code == 200
+            assert client.put(
+                "/api/accounts/quilia%20%40%20S53/profile",
+                json={"binh_man": {"bases": {"1001": {"enabled": True, "generals": [1]}}}},
+            ).status_code == 200
+
+            assert client.post("/api/accounts/quilia%20%40%20S53/tasks/binhman/start").status_code == 200
+            assert entered_run.wait(timeout=2.0)
+
+            r_stop = client.post("/api/accounts/quilia%20%40%20S53/tasks/binhman/stop")
+            r_accs = client.get("/api/accounts")
+            outcome["stop_code"] = r_stop.status_code
+            outcome["accs_code"] = r_accs.status_code
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    th.join(timeout=3.0)
+    assert not th.is_alive(), "POST /tasks/binhman/stop hoặc GET /api/accounts bị treo deadlock!"
+    assert outcome == {"stop_code": 200, "accs_code": 200}
+
+    sess = wm.get_session("quilia @ S53")
+    assert sess is not None
+    runner = sess.engine.get_runner("binhman")
+    if runner:
+        runner.join(timeout=1.5)
+        assert not runner.is_alive()
+    wm.graceful_shutdown()

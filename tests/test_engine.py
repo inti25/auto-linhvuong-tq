@@ -117,3 +117,34 @@ def test_engine_list_tasks():
     assert "task_beta" in task_list
     engine.stop_all(wait_timeout=1.0)
 
+
+def test_engine_start_and_stop_do_not_deadlock_with_reentrant_status_callback():
+    import threading
+
+    engine = AutomationEngine()
+    observed = []
+    engine.subscribe(
+        on_status=lambda tid, status: observed.append((tid, status, engine.is_running(tid), engine.get_status(tid)))
+    )
+
+    err = []
+
+    def _run():
+        try:
+            engine.start("t1", DummyStepTask(["ok"]), interval=0.1, jitter=0.0)
+            time.sleep(0.05)
+            # Thay thế task đang chạy (gọi old_runner.stop()) và dừng hoàn toàn
+            engine.start("t1", DummyStepTask(["ok"]), interval=0.1, jitter=0.0)
+            time.sleep(0.05)
+            engine.stop("t1", wait_timeout=1.0)
+        except Exception as exc:
+            err.append(exc)
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    th.join(timeout=3.0)
+    assert not th.is_alive(), "AutomationEngine.start/stop bị deadlock khi callback gọi lại engine!"
+    assert not err
+    assert not engine.is_running("t1")
+    assert observed
+
