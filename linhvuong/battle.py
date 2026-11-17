@@ -97,50 +97,7 @@ STRATAGEMS = {
     96: "Hủy bỏ trạng thái",
 }
 
-BOSS_KEYWORDS = {
-    # Chức danh / Hậu tố Boss Man & Dã ngoại đặc trưng (đã loại bỏ "大将" để tránh nhận nhầm quái hộ vệ)
-    "大王",      # Đại vương (Mộc Lộc Đại Vương, Nam Man Đại Vương...)
-    "单于",      # Thiền vu (Vua Hung Nô, Ô Hoàn, Tiên Ti)
-    "大单于",    # Đại Thiền vu
-    "可汗",      # Khả hãn (Vua Đột Quyết, Hung Nô)
-    "大汗",      # Đại hãn
-    "洞主",      # Động chủ (Mang Nha Trường, Đái Lai Động Chủ...)
-    "大首领",    # Đại thủ lĩnh
-    "元帅",      # Nguyên soái
-    "大元帅",    # Đại nguyên soái
-    "大名",      # Daimyo / Đại danh (Chúa Uy Quốc)
-    "宿老",      # Túc lão (Trọng thần Uy Quốc)
-    "家老",      # Gia lão
-    "大都督",    # Đại đô đốc
-    "都督",      # Đô đốc
-    "领主",      # Lãnh chúa (Vong linh)
-    "法师",      # Pháp sư (Vong linh)
-    "骷髅王",    # Khô Lâu Vương
-    "幽灵王",    # U Linh Vương
-    "宝箱",      # Bảo rương
-    "BOSS",
-    "Boss",
-    "boss",
-}
-
-KNOWN_BOSS_NAMES = { "BOSS", "Boss", "boss", }
-
-COMMON_MONSTER_NAMES = {
-    # Thổ phỉ, sơn tặc dã ngoại
-    "山贼", "强盗", "恶霸", "黄巾", "流寇", "土匪",
-    "蛮兵", "象兵", "藤甲兵", "狼兵", "叛军", "贼兵", "飞贼",
-    "草寇", "乱军", "杂兵", "贼寇", "部队",
-    # Binh lính Uy Quốc thông thường
-    "足轻", "忍者", "浪人", "武士", "倭寇",
-    # 10 Man tộc dã ngoại (dùng chặn quái chỉ mang tên tộc không có chức danh)
-    "倭国", "鲜卑", "乌桓", "山越", "羌氐", "南蛮", "匈奴", "突厥", "龙飞", "虎豹骑", "亡灵",
-    # Hậu tố cấp bậc quân lính / chỉ huy quái NPC dã ngoại thông thường
-    "勇士", "千夫长", "百夫长", "万夫长", "夫长",
-    "头领", "首领", "酋长", "统领",
-    "队长", "斥候", "士卒", "精兵", "亲兵", "卫兵", "哨兵", "哨长",
-    "偏将", "裨将", "校尉", "都尉", "杂役", "小卒",
-    "部将", "副将", "先锋", "前锋",
-}
+BOSS_FLAG = 32  # 0x20: Cờ duy nhất đánh dấu Thất Man BOSS (theo Dipan.SanGuo.Battle.js)
 
 
 @dataclass
@@ -186,7 +143,7 @@ class BattleTroop:
         target_id = raw[16] if len(raw) > 16 else 0
         tactician_id = raw[17] if len(raw) > 17 else 0
         tactician_name = str(raw[18]) if len(raw) > 18 and raw[18] else ""
-        flag = raw[19] if len(raw) > 19 else 0
+        flag = int(raw[19] or 0) if len(raw) > 19 else 0
 
         # Số quân thực tế
         total_army = infantry + cavalry + archers + siege
@@ -211,25 +168,8 @@ class BattleTroop:
             soldiers = raw[11] if len(raw) > 11 else 0
             init_soldiers = soldiers
 
-        # Nhận diện BOSS chiến trường (hỗ trợ đầy đủ Boss Man, Danh tướng Tam Quốc & Boss Thảo Phạt):
-        # 1. Tên chứa chức danh BOSS tối cao (BOSS_KEYWORDS) hoặc danh sách danh tướng / Boss Thảo Phạt (KNOWN_BOSS_NAMES).
-        # 2. Cờ flag & 0x20 đại diện cho BOSS Thất Man dã ngoại (như Himiko - 卑弥呼) có thể bắt sống (Cầm hoạch).
-        # 3. Quái thường dã ngoại (chứa tên trong COMMON_MONSTER_NAMES và không có chức danh BOSS) -> không phải BOSS.
-        is_boss_title_or_name = (
-            any(kw in gname for kw in BOSS_KEYWORDS)
-            or any(bname in gname for bname in KNOWN_BOSS_NAMES)
-        )
-
-        is_common_monster = any(
-            gname == mname or gname.endswith(mname) for mname in COMMON_MONSTER_NAMES
-        )
-
-        if is_boss_title_or_name:
-            is_boss = True
-        elif bool(flag & 0x20) and not is_common_monster:
-            is_boss = True
-        else:
-            is_boss = False
+        # Nhận diện BOSS chiến trường chỉ theo cờ flag == 32 (0x20), không dựa theo tên hay từ khóa.
+        is_boss = flag == BOSS_FLAG
         return cls(
             position=pos,
             player_name=pname,
