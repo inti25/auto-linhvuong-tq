@@ -39,6 +39,8 @@ from .morale import MoraleTrainer
 
 VONG_LINH = 301
 VONG_LINH_TALISMAN_ID = 268
+NEAR_CITY_RADIUS = 6
+VONG_LINH_NEAR_RADIUS = 10
 
 
 class GoiDan:
@@ -185,7 +187,8 @@ class GoiDan:
     def _find_pullable_man(self, curr_type: int) -> Optional[Target]:
         """Quét mở rộng tìm một đạo quân Thất Man đang có trên bản đồ để kéo về sát thành."""
         owner_id = int(self.city_id or 0)
-        for scan_radius in (max(self.radius + 15, 25), max(self.radius + 35, 50)):
+        scan_radii = sorted({25, 50, max(25, self.radius)})
+        for scan_radius in scan_radii:
             try:
                 target = self.ctx.scanner.find_nearest(
                     *self.origin,
@@ -346,7 +349,7 @@ class GoiDan:
         self._current_type_idx = (idx + 1) % total_types
         self.target_type = curr_type
 
-        verify_radius = 6
+        verify_radius = NEAR_CITY_RADIUS
         ox, oy = self.origin
         if "new_target_id" in resp_call:
             x, y = coords_from_mid(int(resp_call["new_target_mid"]))
@@ -358,7 +361,12 @@ class GoiDan:
                 return None, "target_not_found_after_call", None
             if new_tid != source_target.target_id:
                 self._release_lock(source_target.target_id)
-            return Target(x, y, new_tid, int(resp_call.get("new_target_type", curr_type))), None, None
+            pulled = Target(x, y, new_tid, int(resp_call.get("new_target_type", curr_type)))
+            if self.ctx.notify:
+                self.ctx.notify(
+                    f"📣 Đã kéo mục tiêu {curr_type} (ID {pulled.target_id}) từ ({source_target.x}, {source_target.y}) về sát thành ({pulled.x}, {pulled.y})."
+                )
+            return pulled, None, None
 
         self._invalidate_map_cache()
         target = self._scan_with_retry(curr_type, scan_radius=verify_radius)
@@ -372,6 +380,10 @@ class GoiDan:
 
         if target.target_id != source_target.target_id:
             self._release_lock(source_target.target_id)
+        if self.ctx.notify:
+            self.ctx.notify(
+                f"📣 Đã kéo mục tiêu {curr_type} (ID {target.target_id}) từ ({source_target.x}, {source_target.y}) về sát thành ({target.x}, {target.y})."
+            )
         return target, None, None
 
     def call_target(self) -> tuple[Optional[Target], Optional[str]]:
@@ -463,6 +475,26 @@ class GoiDan:
             config=self.combat_config,
         )
 
+    def _find_existing_near_target(self) -> Optional[Target]:
+        """Chỉ nhận mục tiêu có sẵn nếu nó thực sự nằm sát thành (không hành quân xa)."""
+        all_vong_linh = all(self._is_vong_linh(t) for t in self.target_types)
+        scan_radius = VONG_LINH_NEAR_RADIUS if all_vong_linh else NEAR_CITY_RADIUS
+        target = self.ctx.scanner.find_nearest(
+            *self.origin,
+            scan_radius,
+            self.target_types,
+            skip_capital_radius=self.skip_capital_radius,
+            owner_id=int(self.city_id or 0),
+        )
+        if target is None:
+            return None
+        ox, oy = self.origin
+        max_dist = VONG_LINH_NEAR_RADIUS if self._is_vong_linh(target.man_type) else NEAR_CITY_RADIUS
+        if math.hypot(target.x - ox, target.y - oy) > max_dist:
+            self._release_lock(target.target_id)
+            return None
+        return target
+
     def run_once(self) -> str:
         # 0. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle
         if self.check_idle and self.city_id:
@@ -524,14 +556,8 @@ class GoiDan:
                 if not ready:
                     return "waiting_morale"
 
-        # 2. Tìm mục tiêu có sẵn quanh thành trước
-        target = self.ctx.scanner.find_nearest(
-            *self.origin,
-            self.radius,
-            self.target_types,
-            skip_capital_radius=self.skip_capital_radius,
-            owner_id=int(self.city_id or 0),
-        )
+        # 2. Chỉ đánh trực tiếp nếu đã có mục tiêu nằm sát thành; nếu ở xa phải gọi/kéo về trước
+        target = self._find_existing_near_target()
         if target is not None:
             self.ctx.locks.try_lock(target.target_id, LockReason.CLAIMED, owner=int(self.city_id or 0))
             result = attack(

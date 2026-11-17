@@ -925,6 +925,78 @@ def test_goi_man_refuses_attack_if_pulled_target_not_near_city():
     assert not ctx.locks.is_locked(1107)
 
 
+def test_goi_dan_large_radius_pulls_distant_man_to_city_before_attack():
+    """Khi đặt bán kính quét lớn (vd radius=100), phải dùng đạo cụ kéo Man ở xa về sát thành rồi mới xuất quân."""
+    origin_mid = mid_from_coords(180, 67)
+    far_mid = mid_from_coords(250, 67)  # 70 ô (10 * step=7)
+    empty_mid = mid_from_coords(181, 67)
+
+    def handle_call_69():
+        server.map_views[far_mid] = {"npc_tent": []}
+        server.map_views[origin_mid] = {"npc_tent": [man(181, 67, 2201, 1)]}
+        return {"ret": 0}
+
+    server = FakeServer(
+        map_views={
+            origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]},
+            far_mid: {"npc_tent": [man(250, 67, 2201, 1)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": handle_call_69,
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(ctx, generals=[6330], origin=(180, 67), radius=100, mode="dan", target_type=1, city_id=10254)
+    out = task.run_once()
+
+    assert out == "called_and_attacked"
+    api_seq = [k for k, _ in server.calls if k in ("OPT.ashx?id=69", "OPT.ashx?id=53")]
+    assert api_seq == ["OPT.ashx?id=69", "OPT.ashx?id=53"]
+    call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
+    assert call_69["param1"] == "2201"
+    assert call_69["param2"] == str(empty_mid)
+    call_53 = [d for k, d in server.calls if k == "OPT.ashx?id=53"][0]
+    assert call_53["lDestID"] == str(empty_mid)
+
+
+def test_goi_dan_existing_man_outside_near_city_radius_is_pulled_not_marched():
+    """Man nằm trong viewport gốc nhưng ngoài ngưỡng sát thành (dist > 6) cũng phải kéo về sát thành trước khi đánh."""
+    origin_mid = mid_from_coords(180, 67)
+    empty_mid = mid_from_coords(181, 67)
+
+    def handle_call_69():
+        server.map_views[origin_mid] = {"npc_tent": [man(181, 67, 2202, 1)]}
+        return {"ret": 0}
+
+    server = FakeServer(
+        map_views={
+            origin_mid: {
+                "npc_tent": [man(189, 67, 2202, 1)],  # Cách 9 ô (> 6 ô)
+                "infos": [[empty_mid, 1, 0, 0, 0, 0]],
+            },
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": handle_call_69,
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    ctx.scanner.workers = 1
+    task = GoiDan(ctx, generals=[6330], origin=(180, 67), radius=5, mode="dan", target_type=1, city_id=10254)
+    out = task.run_once()
+
+    assert out == "called_and_attacked"
+    call_69 = [d for k, d in server.calls if k == "OPT.ashx?id=69"][0]
+    assert call_69["param1"] == "2202"
+    assert call_69["param2"] == str(empty_mid)
+    call_53 = [d for k, d in server.calls if k == "OPT.ashx?id=53"][0]
+    assert call_53["lDestID"] == str(empty_mid)
+
+
+
 
 
 
