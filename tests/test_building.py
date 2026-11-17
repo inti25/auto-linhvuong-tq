@@ -1644,3 +1644,32 @@ def test_building_task_returns_city_not_found_and_runner_prunes_dead_city():
     assert dead_task not in runner.tasks
     upgrade_calls = [c for c in server.calls if c[0] == "OPT.ashx?id=65"]
     assert len(upgrade_calls) == 0
+
+
+def test_open_one_resource_box_handles_top_level_list_response():
+    from linhvuong.tasks.building import fetch_city_resources_snapshot
+
+    server = FakeServer(
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=48": {"ret": 0},
+            "City.ashx?id=20": {
+                "ret": 0,
+                "food": [500000, 100],
+                "wood": [500000, 100],
+                "stone": [500000, 100],
+                "iron": [500000, 100],
+                "max_storage": 500000,
+            },
+            "City.ashx?id=6": {"ret": 0, "money": [123456, 0]},
+        }
+    )
+    gw = GatewayClient(53, server, sleep=lambda s: None)
+    snap = fetch_city_resources_snapshot(gw, 101)
+    assert snap["money"] == 123456
+    assert snap["wood"] == 500000
+    assert snap["max_storage"] == 500000
+
+    task = BuildingTask(gw, city_id=101, plans=[], auto_open_box=True, box_id=24)
+    assert task._open_one_resource_box() is True
+    assert task._storage_full is True

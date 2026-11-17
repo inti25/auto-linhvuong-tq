@@ -559,7 +559,7 @@
     };
     bindBtn("btn-tgl-bld", t.building?.running, "⏹️ Dừng Xây", "▶️ Xây");
     bindBtn("btn-tgl-res", t.research?.running, "⏹️ Dừng NC", "▶️ Nghiên Cứu");
-    bindBtn("btn-tgl-resmon", t.resource_monitor?.running, "⏹️ Dừng TN", "▶️ Tài Nguyên");
+    bindBtn("btn-tgl-resmon", t.resource_monitor?.running, "⏹️ Dừng mở rương TN/Vàng", "▶️ Tự mở rương TN/Vàng");
     bindBtn("btn-tgl-tp", t.thaophat?.running, "⏹️ Dừng Thảo Phạt", "▶️ Bắt đầu Thảo Phạt");
     bindBtn("btn-tgl-bm", t.binhman?.running, "⏹️ Dừng Bình Man", "▶️ Bắt đầu Bình Man");
     bindBtn("btn-tgl-gd", t.goidan?.running, "⏹️ Dừng Gọi Man", "▶️ Bắt đầu Gọi Man");
@@ -691,7 +691,7 @@
             <div class="form-row">
               <button id="btn-tgl-bld" class="btn-success btn-sm">▶️ Xây</button>
               <button id="btn-tgl-res" class="btn-success btn-sm">▶️ Nghiên Cứu</button>
-              <button id="btn-tgl-resmon" class="btn-success btn-sm">▶️ Tài Nguyên</button>
+              <button id="btn-tgl-resmon" class="btn-success btn-sm">▶️ Tự mở rương TN/Vàng</button>
             </div>
             <div class="form-row" style="margin-bottom:0;">
               <button id="btn-bld-all-on" class="btn-sm">☑ Chọn hết thành</button>

@@ -13,6 +13,7 @@ from ..tasks.building import (
     CHEST_MAPPING,
     BuildingTask as _DefaultBuildingTask,
     chest_needs_city_switch,
+    fetch_city_resources_snapshot,
     parse_boost_remaining_time,
     run_batch_open_chest,
 )
@@ -453,31 +454,43 @@ class InternalAuxMixin:
                         if b:
                             cname = b.name
 
-                    # 1. Gọi City.ashx?id=20 lấy tài nguyên hiện tại
-                    resp = self.gateway.call("City.ashx", 20, {"tid": str(cid), "_": ""}) or {}
-                    if resp.get("ret", 0) == 4:
+                    # 1. Gọi City.ashx?id=20 + City.ashx?id=6 lấy tài nguyên và vàng hiện tại
+                    snap = fetch_city_resources_snapshot(self.gateway, cid, include_gold=True)
+                    if snap.get("ret", 0) == 4:
                         try:
                             self.after(0, self._append_bld_log, f"⚠️ [{cname}] Không còn tồn tại trên máy chủ (mã 4); đang đồng bộ lại...")
                             self.after(0, self.reload)
                         except Exception:
                             pass
                         continue
-                    money = int(resp.get("money", resp.get("gold", 0)))
-                    wood = int(resp.get("wood", 0))
-                    iron = int(resp.get("iron", 0))
-                    stone = int(resp.get("stone", 0))
-                    food = int(resp.get("food", 0))
-                    max_storage = int(resp.get("max_storage", resp.get("storage", 1000000)))
-                    if max_storage <= 0:
-                        max_storage = 1000000
+                    money = snap.get("money")
+                    max_storage = snap.get("max_storage") or 1000000
 
                     # 2. Kiểm tra ngưỡng vàng
                     try:
                         gold_th = int(self.res_gold_thresh_var.get().replace(",", "").replace(".", "").strip())
                     except ValueError:
                         gold_th = 100000000
+                    need_gold = money is not None and money < gold_th
 
-                    if money < gold_th:
+                    # 3. Kiểm tra ngưỡng khoáng sản %
+                    try:
+                        w_pct = float(self.res_wood_pct_var.get()) / 100.0
+                        i_pct = float(self.res_iron_pct_var.get()) / 100.0
+                        s_pct = float(self.res_stone_pct_var.get()) / 100.0
+                        f_pct = float(self.res_food_pct_var.get()) / 100.0
+                    except ValueError:
+                        w_pct = i_pct = s_pct = f_pct = 0.7
+
+                    need_tn = bool(snap.get("has_resources")) and any(
+                        snap.get(k) is not None and snap.get(k) < max_storage * pct
+                        for k, pct in (("wood", w_pct), ("iron", i_pct), ("stone", s_pct), ("food", f_pct))
+                    )
+
+                    if need_gold or need_tn:
+                        self.gateway.call("City.ashx", 50, {"tid": str(cid), "_": ""})
+
+                    if need_gold:
                         g_box_str = self.res_gold_box_combo.get() if hasattr(self, "res_gold_box_combo") else "11"
                         try:
                             g_box_id = int(g_box_str.split(":")[0].strip())
@@ -489,22 +502,6 @@ class InternalAuxMixin:
                             self.after(0, self._append_bld_log, f"💰 [{cname}] Vàng={money:,} < ngưỡng {gold_th:,}: Đã mở rương vàng #{g_box_id}.")
                         else:
                             self.after(0, self._append_bld_log, f"⚠️ [{cname}] Mở rương vàng #{g_box_id} thất bại (mã {ret}).")
-
-                    # 3. Kiểm tra ngưỡng khoáng sản %
-                    try:
-                        w_pct = float(self.res_wood_pct_var.get()) / 100.0
-                        i_pct = float(self.res_iron_pct_var.get()) / 100.0
-                        s_pct = float(self.res_stone_pct_var.get()) / 100.0
-                        f_pct = float(self.res_food_pct_var.get()) / 100.0
-                    except ValueError:
-                        w_pct = i_pct = s_pct = f_pct = 0.7
-
-                    need_tn = (
-                        wood < max_storage * w_pct
-                        or iron < max_storage * i_pct
-                        or stone < max_storage * s_pct
-                        or food < max_storage * f_pct
-                    )
 
                     if need_tn:
                         tn_box_str = self.res_tn_box_combo.get() if hasattr(self, "res_tn_box_combo") else "24"

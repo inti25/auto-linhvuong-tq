@@ -549,3 +549,76 @@ def test_aux_countdown_ticks_in_snapshot_and_app_js_has_ticker(tmp_path, monkeyp
     )
     assert "setInterval(" in app_js
     assert "renderAuxCountdownsOnly" in app_js
+
+
+def test_resource_monitor_reads_city_id6_gold_and_list_resources(tmp_path):
+    import requests
+    import time
+    from linhvuong.runtime import AccountSession
+
+    sess = AccountSession("resmon @ S53", requests.Session(), 53, "resmon", data_dir=tmp_path)
+    sess.roster = _fake_roster()
+    sess.profile.resource.resource_cities = [1001]
+    sess.profile.resource.gold_threshold = "10000"
+    sess.profile.resource.wood_pct = "3"
+    sess.profile.resource.iron_pct = "70"
+    sess.profile.resource.stone_pct = "70"
+    sess.profile.resource.food_pct = "70"
+    sess.profile.resource.gold_box_idx = 4
+    sess.profile.resource.tn_box_idx = 4
+
+    calls = []
+
+    def _call(ep, api_id, params=None):
+        calls.append((ep, api_id, params))
+        if ep == "City.ashx" and api_id == 20:
+            return {
+                "ret": 0,
+                "food": [56986651, 446710, 2553439],
+                "wood": [2658009, 93],
+                "stone": [65785076, 85],
+                "iron": [66467629, 81],
+                "max_storage": 69227200,
+            }
+        if ep == "City.ashx" and api_id == 6:
+            return {"ret": 0, "name": "Lạc Dương", "money": [182764933, -610860]}
+        return {"ret": 0}
+
+    sess.gateway.call = _call  # type: ignore[method-assign]
+    sess.start_resource_monitor()
+    time.sleep(0.15)
+    sess.stop_resource_monitor()
+    assert not any(ep == "Common.ashx" and aid == 48 for ep, aid, _ in calls)
+
+    # Khi wood dưới ngưỡng (70%) nhưng vàng vẫn dư (182M >= 10k): chỉ mở rương TN, phải chuyển thành trước
+    calls.clear()
+    sess.profile.resource.wood_pct = "70"
+    sess.start_resource_monitor()
+    time.sleep(0.15)
+    sess.stop_resource_monitor()
+    box_calls = [p for ep, aid, p in calls if ep == "Common.ashx" and aid == 48]
+    switch_calls = [p for ep, aid, p in calls if ep == "City.ashx" and aid == 50]
+    assert box_calls == [{"lBoxID": "24", "_": ""}]
+    assert switch_calls == [{"tid": "1001", "_": ""}]
+
+    # Khi API trả lỗi ret != 0: không suy diễn thành 0 để mở nhầm rương
+    calls.clear()
+    sess.gateway.call = lambda ep, aid, params=None: (calls.append((ep, aid, params)), {"ret": 1})[-1]  # type: ignore[method-assign]
+    sess.start_resource_monitor()
+    time.sleep(0.15)
+    sess.stop_resource_monitor()
+    assert not any(ep == "Common.ashx" and aid == 48 for ep, aid, _ in calls)
+
+    sess.destroy()
+
+
+def test_start_all_accounts_skips_resource_monitor(tmp_path, monkeypatch):
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    sess = wm.login_account(server_id=53, username="batchuser", password="pw")
+    resumed = []
+    monkeypatch.setattr(sess, "resume_tasks", lambda names: resumed.extend(names) or list(names))
+    assert wm.start_all_accounts() == 1
+    assert "resource_monitor" not in resumed
+    assert "building" in resumed
+    wm.graceful_shutdown()

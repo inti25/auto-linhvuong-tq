@@ -68,6 +68,7 @@ from .tasks.building import (
     BuildingPlan,
     BuildingTask,
     chest_needs_city_switch,
+    fetch_city_resources_snapshot,
     parse_boost_remaining_time,
     run_batch_open_chest,
 )
@@ -104,12 +105,12 @@ RESUMABLE_TASKS = (
 AUTO_START_TASK_LABELS = (
     ("building", "🏛️ Xây dựng"),
     ("research", "🔬 Nghiên cứu"),
-    ("resource_monitor", "🌾 An dân / Tài nguyên"),
     ("thaophat", "⚔️ Thảo phạt"),
     ("binhman", "🏕️ Bình man"),
     ("goidan", "🧛 Gọi man"),
     ("nienthu", "🧧 Niên thú"),
     ("crafting", "🛡️ Chế tạo quân giới"),
+    ("resource_monitor", "📦 Tự mở rương TN/Vàng"),
 )
 
 
@@ -1214,36 +1215,47 @@ class AccountSession:
         if not res_cids:
             raise ValueError("Vui lòng chọn ít nhất 1 thành hợp lệ để giám sát tài nguyên.")
 
+        stop_ev = threading.Event()
+        self._res_monitor_stop = stop_ev
         self._res_monitor_running = True
-        self._res_monitor_stop.clear()
         self.append_log("building", f"▶️ Bắt đầu giám sát ngưỡng tài nguyên cho {len(res_cids)} thành...")
         box_ids = [1, 6, 11, 16, 24, 35]
 
         def _loop():
-            while self._res_monitor_running and not self._res_monitor_stop.is_set():
+            while self._res_monitor_running and not stop_ev.is_set():
                 r_cfg = self.profile.resource
                 cur_valid_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
                 raw_cids = list(r_cfg.resource_cities) or res_cids
                 cids = [cid for cid in raw_cids if cur_valid_ids is None or cid in cur_valid_ids]
                 for cid in cids:
-                    if not self._res_monitor_running or self._res_monitor_stop.is_set():
+                    if not self._res_monitor_running or stop_ev.is_set():
                         break
                     try:
                         base = self.roster.base_by_id(cid)
                         cname = base.name if base else f"Thành {cid}"
-                        resp = self.gateway.call("City.ashx", 20, {"tid": str(cid), "_": ""}) or {}
-                        if resp.get("ret", 0) == 4:
+                        snap = fetch_city_resources_snapshot(self.gateway, cid, include_gold=True)
+                        if snap.get("ret", 0) == 4:
                             self._trigger_roster_resync_async(cid)
                             continue
-                        money = _safe_int(resp.get("money", resp.get("gold", 0)), 0)
-                        wood = _safe_int(resp.get("wood", 0), 0)
-                        iron = _safe_int(resp.get("iron", 0), 0)
-                        stone = _safe_int(resp.get("stone", 0), 0)
-                        food = _safe_int(resp.get("food", 0), 0)
-                        max_storage = max(1, _safe_int(resp.get("max_storage", resp.get("storage", 1000000)), 1000000))
 
+                        money = snap.get("money")
                         gold_th = _safe_int(r_cfg.gold_threshold, 100000000)
-                        if money < gold_th:
+                        need_gold = money is not None and money < gold_th
+
+                        max_storage = snap.get("max_storage") or 1000000
+                        w_pct = max(0.0, _safe_float(r_cfg.wood_pct, 70.0) / 100.0)
+                        i_pct = max(0.0, _safe_float(r_cfg.iron_pct, 70.0) / 100.0)
+                        s_pct = max(0.0, _safe_float(r_cfg.stone_pct, 70.0) / 100.0)
+                        f_pct = max(0.0, _safe_float(r_cfg.food_pct, 70.0) / 100.0)
+                        need_tn = bool(snap.get("has_resources")) and any(
+                            snap.get(k) is not None and snap.get(k) < max_storage * pct
+                            for k, pct in (("wood", w_pct), ("iron", i_pct), ("stone", s_pct), ("food", f_pct))
+                        )
+
+                        if need_gold or need_tn:
+                            self.gateway.call("City.ashx", 50, {"tid": str(cid), "_": ""})
+
+                        if need_gold:
                             g_idx = max(0, min(len(box_ids) - 1, int(r_cfg.gold_box_idx)))
                             g_box_id = box_ids[g_idx]
                             r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(g_box_id), "_": ""}) or {}
@@ -1252,16 +1264,7 @@ class AccountSession:
                             else:
                                 self.append_log("building", f"⚠️ [{cname}] Mở rương vàng #{g_box_id} lỗi (ret={r_box.get('ret')}).")
 
-                        w_pct = max(0.0, _safe_float(r_cfg.wood_pct, 70.0) / 100.0)
-                        i_pct = max(0.0, _safe_float(r_cfg.iron_pct, 70.0) / 100.0)
-                        s_pct = max(0.0, _safe_float(r_cfg.stone_pct, 70.0) / 100.0)
-                        f_pct = max(0.0, _safe_float(r_cfg.food_pct, 70.0) / 100.0)
-                        if (
-                            wood < max_storage * w_pct
-                            or iron < max_storage * i_pct
-                            or stone < max_storage * s_pct
-                            or food < max_storage * f_pct
-                        ):
+                        if need_tn:
                             tn_idx = max(0, min(len(box_ids) - 1, int(r_cfg.tn_box_idx)))
                             tn_box_id = box_ids[tn_idx]
                             r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(tn_box_id), "_": ""}) or {}
@@ -1269,12 +1272,18 @@ class AccountSession:
                                 self.append_log("building", f"📦 [{cname}] Khoáng sản dưới ngưỡng: Đã mở rương TN #{tn_box_id}.")
                             else:
                                 self.append_log("building", f"⚠️ [{cname}] Mở rương TN #{tn_box_id} lỗi (ret={r_box.get('ret')}).")
+                    except CaptchaRequired:
+                        self._handle_captcha("Giám sát tài nguyên gặp Captcha (mã 110).")
+                        if self._res_monitor_thread is threading.current_thread():
+                            self._res_monitor_running = False
+                        break
                     except Exception as exc:
                         self.append_log("building", f"❌ Lỗi giám sát TN thành {cid}: {exc}")
-                if self._res_monitor_stop.wait(30.0):
+                if stop_ev.wait(30.0):
                     break
-            self._res_monitor_running = False
-            self._emit("status_changed", self.get_status_snapshot())
+            if self._res_monitor_thread is threading.current_thread():
+                self._res_monitor_running = False
+                self._emit("status_changed", self.get_status_snapshot())
 
         self._res_monitor_thread = threading.Thread(target=_loop, daemon=True)
         self._res_monitor_thread.start()
@@ -2811,11 +2820,12 @@ class WorkspaceManager:
 
     def start_all_accounts(self) -> int:
         count = 0
+        batch_tasks = [t for t in RESUMABLE_TASKS if t != "resource_monitor"]
         with self._lock:
             sessions = list(self.sessions.values())
         for sess in sessions:
             try:
-                started = sess.resume_tasks(list(RESUMABLE_TASKS))
+                started = sess.resume_tasks(batch_tasks)
                 if started:
                     count += 1
             except Exception:

@@ -205,6 +205,77 @@ def open_single_chest(
     return False, ret, f"Mở thất bại (mã {ret})"
 
 
+def parse_city_resource_amount(raw: Any) -> Optional[int]:
+    """Chuẩn hóa giá trị tài nguyên/vàng từ API (hỗ trợ cả dạng list `[val, ...]` lẫn scalar)."""
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return None
+        raw = raw[0]
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        if isinstance(raw, str):
+            raw = raw.replace(",", "").strip()
+            if not raw:
+                return None
+        return int(float(raw))
+    except (ValueError, TypeError):
+        return None
+
+
+def fetch_city_resources_snapshot(
+    gateway: Any,
+    city_id: int,
+    *,
+    include_gold: bool = True,
+) -> dict[str, Any]:
+    """Đọc tài nguyên thành (`City.ashx?id=20`) và vàng hiện có (`City.ashx?id=6`)."""
+    resp20 = gateway.call("City.ashx", 20, {"tid": str(city_id), "_": ""}) or {}
+    if not isinstance(resp20, dict):
+        resp20 = {}
+    ret20 = resp20.get("ret", RET_OK)
+    if ret20 in (110, RET_CAPTCHA_REQUIRED):
+        raise CaptchaRequired()
+    if ret20 == RET_CITY_NOT_FOUND:
+        return {"ret": RET_CITY_NOT_FOUND}
+
+    data20 = resp20.get("data") if isinstance(resp20.get("data"), dict) and resp20.get("data") else resp20
+    wood = parse_city_resource_amount(data20.get("wood")) if ret20 == RET_OK else None
+    iron = parse_city_resource_amount(data20.get("iron")) if ret20 == RET_OK else None
+    stone = parse_city_resource_amount(data20.get("stone")) if ret20 == RET_OK else None
+    food = parse_city_resource_amount(data20.get("food")) if ret20 == RET_OK else None
+    raw_storage = parse_city_resource_amount(data20.get("max_storage", data20.get("storage"))) if ret20 == RET_OK else None
+    max_storage = raw_storage if (raw_storage is not None and raw_storage > 0) else 0
+    has_resources = ret20 == RET_OK and any(v is not None for v in (wood, iron, stone, food))
+
+    money: Optional[int] = None
+    if ret20 == RET_OK:
+        money = parse_city_resource_amount(data20.get("money", data20.get("gold")))
+
+    if include_gold and money is None:
+        resp6 = gateway.call("City.ashx", 6, {"tid": str(city_id), "_": ""}) or {}
+        if isinstance(resp6, dict) and resp6:
+            ret6 = resp6.get("ret", RET_OK)
+            if ret6 in (110, RET_CAPTCHA_REQUIRED):
+                raise CaptchaRequired()
+            if ret6 == RET_CITY_NOT_FOUND:
+                return {"ret": RET_CITY_NOT_FOUND}
+            if ret6 == RET_OK:
+                data6 = resp6.get("data") if isinstance(resp6.get("data"), dict) and resp6.get("data") else resp6
+                money = parse_city_resource_amount(data6.get("money", data6.get("gold")))
+
+    return {
+        "ret": RET_OK if (ret20 == RET_OK or money is not None) else ret20,
+        "has_resources": has_resources,
+        "wood": wood,
+        "iron": iron,
+        "stone": stone,
+        "food": food,
+        "max_storage": max_storage,
+        "money": money,
+    }
+
+
 def run_batch_open_chest(
     gateway: GatewayClient,
     chest_name: str,
@@ -888,18 +959,16 @@ class BuildingTask:
             self._log(f"🎁 Đã mở thành công 1 {box_label} (toàn bộ công trình thiếu tài nguyên).")
 
             # Kiểm tra sức chứa tối đa của kho tài nguyên để tránh tràn kho ở các lần tiếp theo
-            res_resp = self.gateway.call("City.ashx", 20, {"tid": str(self.city_id), "_": ""}) or {}
-            res_data = res_resp.get("data", {})
-            if res_data:
-                max_storage = int(res_data.get("max_storage", 0))
-                if max_storage > 0:
-                    is_storage_full = all(
-                        int(res_data.get(k, 0)) >= max_storage
-                        for k in ("wood", "stone", "iron", "food")
-                    )
-                    if is_storage_full:
-                        self._log("⚠️ Kho tài nguyên đã đầy sức chứa tối đa, ngừng mở thêm đạo cụ.")
-                        self._storage_full = True
+            snap = fetch_city_resources_snapshot(self.gateway, self.city_id, include_gold=False)
+            max_storage = int(snap.get("max_storage") or 0)
+            if max_storage > 0 and snap.get("has_resources"):
+                is_storage_full = all(
+                    (snap.get(k) or 0) >= max_storage
+                    for k in ("wood", "stone", "iron", "food")
+                )
+                if is_storage_full:
+                    self._log("⚠️ Kho tài nguyên đã đầy sức chứa tối đa, ngừng mở thêm đạo cụ.")
+                    self._storage_full = True
             return True
 
         self._log("⚠️ Không còn rương tài nguyên nào trong túi đồ có thể mở.")
