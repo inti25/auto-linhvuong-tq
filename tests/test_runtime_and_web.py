@@ -549,3 +549,102 @@ def test_aux_countdown_ticks_in_snapshot_and_app_js_has_ticker(tmp_path, monkeyp
     )
     assert "setInterval(" in app_js
     assert "renderAuxCountdownsOnly" in app_js
+
+
+def test_resource_monitor_uses_s58_city_and_resource_info(tmp_path):
+    import threading
+    import time
+    import requests
+    from linhvuong.roster import City, Roster
+    from linhvuong.runtime import AccountSession
+
+    sess = AccountSession("resmon @ S58", requests.Session(), 58, "resmon", data_dir=tmp_path)
+    sess.roster = Roster(cities=[City(id=401, name="ThienCo")])
+    sess.profile.resource.resource_cities = [401]
+    sess.profile.resource.gold_threshold = 10000
+    sess.profile.resource.gold_box_idx = 4
+    sess.profile.resource.tn_box_idx = 4
+    sess.profile.resource.wood_pct = 70.0
+    sess.profile.resource.iron_pct = 70.0
+    sess.profile.resource.stone_pct = 70.0
+    sess.profile.resource.food_pct = 70.0
+
+    opened_boxes: list[tuple[int, str]] = []
+    switched_cities: list[int] = []
+    opened_event = threading.Event()
+    mode = {"case": "high_gold_low_wood"}
+
+    def fake_city_info(cid: int):
+        if mode["case"] == "api_error":
+            return {"ret": -1}
+        return {"ret": 0, "m_lmoney_balance": 2_000_000}
+
+    def fake_resource_info(cid: int):
+        if mode["case"] == "api_error":
+            return None
+        return {
+            "ret": 0,
+            "m_lwood_balance": 100,
+            "m_liron_balance": 900_000,
+            "m_lstone_balance": 900_000,
+            "m_lfood_balance": 900_000,
+            "m_lmax_storage": 1_000_000,
+        }
+
+    def fake_set_current_city(cid: int):
+        switched_cities.append(cid)
+        return {"ret": 0}
+
+    def fake_call(ep, api_id, params=None):
+        if ep == "Common.ashx" and api_id == 48:
+            opened_boxes.append((int(params["lBoxID"]), mode["case"]))
+            opened_event.set()
+            return {"ret": 0}
+        return {"ret": 0}
+
+    sess.gateway.city_info = fake_city_info  # type: ignore[method-assign]
+    sess.gateway.resource_info = fake_resource_info  # type: ignore[method-assign]
+    sess.gateway.set_current_city = fake_set_current_city  # type: ignore[method-assign]
+    sess.gateway.call = fake_call  # type: ignore[method-assign]
+
+    sess.start_resource_monitor()
+    assert opened_event.wait(timeout=2.0)
+    sess.stop_resource_monitor()
+    if sess._res_monitor_thread:
+        sess._res_monitor_thread.join(timeout=1.5)
+
+    assert switched_cities == [401]
+    assert opened_boxes == [(24, "high_gold_low_wood")]
+    logs_text = "\n".join(str(x) for x in sess.logs["building"])
+    assert "Vàng=" not in logs_text
+    assert "Khoáng sản dưới ngưỡng" in logs_text
+
+    # Khi API trả lỗi (None / ret != 0), tuyệt đối không suy thành vàng=0 để mở rương
+    opened_boxes.clear()
+    switched_cities.clear()
+    mode["case"] = "api_error"
+    sess.start_resource_monitor()
+    time.sleep(0.2)
+    sess.stop_resource_monitor()
+    if sess._res_monitor_thread:
+        sess._res_monitor_thread.join(timeout=1.5)
+    assert opened_boxes == []
+    assert switched_cities == []
+    sess.destroy()
+
+
+def test_start_all_accounts_skips_resource_monitor(tmp_path):
+    import requests
+    from linhvuong.runtime import AccountSession, WorkspaceManager
+
+    wm = WorkspaceManager(data_dir=tmp_path)
+    sess = AccountSession("batch @ S58", requests.Session(), 58, "batch", data_dir=tmp_path)
+    called_tasks: list[str] = []
+    sess.resume_tasks = lambda names: called_tasks.extend(names) or list(names)  # type: ignore[method-assign]
+    wm.sessions[sess.account_key] = sess
+
+    assert wm.start_all_accounts() == 1
+    assert "resource_monitor" not in called_tasks
+    assert "building" in called_tasks
+    assert "binhman" in called_tasks
+    wm.graceful_shutdown()
