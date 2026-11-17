@@ -21,13 +21,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--host",
-        default=os.environ.get("LINHVUONG_WEB_HOST", "127.0.0.1"),
+        default=os.environ.get("LINHVUONG_WEB_HOST") or "127.0.0.1",
         help="Địa chỉ IP lắng nghe (mặc định: 127.0.0.1; dùng 0.0.0.0 để mở truy cập mạng).",
     )
     p.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("LINHVUONG_WEB_PORT", "8000")),
+        default=int(os.environ.get("LINHVUONG_WEB_PORT") or "8000"),
         help="Cổng HTTP/WebSocket (mặc định: 8000).",
     )
     p.add_argument(

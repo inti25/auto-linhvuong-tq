@@ -232,3 +232,35 @@ def test_web_ws_rejects_unauth_and_building_fetch(tmp_path, monkeypatch):
         assert plans[0]["cur_lvl"] == 5
 
     wm.graceful_shutdown()
+
+
+def test_systemd_unit_execstart_no_bash_default_expansion_and_env_parser(monkeypatch):
+    from pathlib import Path
+    from linhvuong.web.server import build_parser
+
+    repo_root = Path(__file__).resolve().parents[1]
+    service_text = (repo_root / "deploy" / "ubuntu" / "linhvuong-web.service").read_text(encoding="utf-8")
+    install_text = (repo_root / "deploy" / "ubuntu" / "install.sh").read_text(encoding="utf-8")
+
+    # systemd ExecStart không hỗ trợ cú pháp bash ${VAR:-default}; phải để server.py tự đọc env hoặc dùng ExecStart thuần
+    exec_lines = [
+        line.strip()
+        for line in (service_text + "\n" + install_text).splitlines()
+        if line.strip().startswith("ExecStart=")
+    ]
+    assert exec_lines, "Phải có dòng ExecStart= trong unit systemd"
+    for line in exec_lines:
+        assert ":-" not in line, f"ExecStart không được chứa bash default expansion: {line}"
+
+    # Server phải đọc LINHVUONG_WEB_HOST/PORT an toàn kể cả khi biến môi trường rỗng
+    monkeypatch.setenv("LINHVUONG_WEB_HOST", "")
+    monkeypatch.setenv("LINHVUONG_WEB_PORT", "")
+    args = build_parser().parse_args([])
+    assert args.host == "127.0.0.1"
+    assert args.port == 8000
+
+    monkeypatch.setenv("LINHVUONG_WEB_HOST", "0.0.0.0")
+    monkeypatch.setenv("LINHVUONG_WEB_PORT", "9090")
+    args_env = build_parser().parse_args([])
+    assert args_env.host == "0.0.0.0"
+    assert args_env.port == 9090
