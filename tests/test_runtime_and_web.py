@@ -217,11 +217,14 @@ def test_web_ws_rejects_unauth_and_building_fetch(tmp_path, monkeypatch):
         assert r_login.status_code == 200
 
         sess = wm.get_session("blduser @ S53")
-        sess.gateway.call = lambda ep, api_id, params=None: (  # type: ignore[method-assign]
-            {"infos": [[1, 1, "官府", 5], [2, 3, "民房", 3]]}
-            if ep == "City.ashx" and api_id == 5
-            else {"ret": 0}
-        )
+        sess.gateway.building_list = lambda cid: {  # type: ignore[method-assign]
+            "ret": 0,
+            "items": [
+                {"m_lpos": 1, "m_lgid": 1, "m_szname": "官府", "m_llevel": 5},
+                {"m_lpos": 2, "m_lgid": 3, "m_szname": "民房", "m_llevel": 3},
+            ],
+        }
+        sess.gateway.call = lambda ep, api_id, params=None: {"ret": 0}  # type: ignore[method-assign]
         r_bld = client.post(
             "/api/accounts/blduser%20%40%20S53/buildings/fetch",
             json={"city_id": 1001},
@@ -519,6 +522,7 @@ def test_aux_countdown_ticks_in_snapshot_and_app_js_has_ticker(tmp_path, monkeyp
     monkeypatch.setattr(runtime_mod.time, "monotonic", lambda: now[0])
 
     sess = AccountSession("aux @ S53", requests.Session(), 53, "aux", data_dir=tmp_path)
+    sess.gateway.page_building = lambda cid: {"ret": 0, "plus_finish": 120}  # type: ignore[method-assign]
     sess.gateway.call = lambda ep, api_id, params=None: (  # type: ignore[method-assign]
         {"ret": 0, "left": 45}
         if ep == "Common.ashx" and api_id == 140
@@ -551,77 +555,138 @@ def test_aux_countdown_ticks_in_snapshot_and_app_js_has_ticker(tmp_path, monkeyp
     assert "renderAuxCountdownsOnly" in app_js
 
 
-def test_resource_monitor_reads_city_id6_gold_and_list_resources(tmp_path):
-    import requests
+def test_resource_monitor_uses_s58_city_and_resource_info(tmp_path):
+    import threading
     import time
+    import requests
+    from linhvuong.roster import City, Roster
     from linhvuong.runtime import AccountSession
 
-    sess = AccountSession("resmon @ S53", requests.Session(), 53, "resmon", data_dir=tmp_path)
-    sess.roster = _fake_roster()
-    sess.profile.resource.resource_cities = [1001]
-    sess.profile.resource.gold_threshold = "10000"
-    sess.profile.resource.wood_pct = "3"
-    sess.profile.resource.iron_pct = "70"
-    sess.profile.resource.stone_pct = "70"
-    sess.profile.resource.food_pct = "70"
+    sess = AccountSession("resmon @ S58", requests.Session(), 58, "resmon", data_dir=tmp_path)
+    sess.roster = Roster(cities=[City(id=401, name="ThienCo")])
+    sess.profile.resource.resource_cities = [401]
+    sess.profile.resource.gold_threshold = 10000
     sess.profile.resource.gold_box_idx = 4
     sess.profile.resource.tn_box_idx = 4
+    sess.profile.resource.wood_pct = 70.0
+    sess.profile.resource.iron_pct = 70.0
+    sess.profile.resource.stone_pct = 70.0
+    sess.profile.resource.food_pct = 70.0
 
-    calls = []
+    opened_boxes: list[tuple[int, str]] = []
+    switched_cities: list[int] = []
+    opened_event = threading.Event()
+    mode = {"case": "high_gold_low_wood"}
 
-    def _call(ep, api_id, params=None):
-        calls.append((ep, api_id, params))
-        if ep == "City.ashx" and api_id == 20:
-            return {
-                "ret": 0,
-                "food": [56986651, 446710, 2553439],
-                "wood": [2658009, 93],
-                "stone": [65785076, 85],
-                "iron": [66467629, 81],
-                "max_storage": 69227200,
-            }
-        if ep == "City.ashx" and api_id == 6:
-            return {"ret": 0, "name": "Lạc Dương", "money": [182764933, -610860]}
+    def fake_city_info(cid: int):
+        if mode["case"] == "api_error":
+            return {"ret": -1}
+        return {"ret": 0, "m_lmoney_balance": 2_000_000}
+
+    def fake_resource_info(cid: int):
+        if mode["case"] == "api_error":
+            return None
+        return {
+            "ret": 0,
+            "m_lwood_balance": 100,
+            "m_liron_balance": 900_000,
+            "m_lstone_balance": 900_000,
+            "m_lfood_balance": 900_000,
+            "m_lmax_storage": 1_000_000,
+        }
+
+    def fake_set_current_city(cid: int):
+        switched_cities.append(cid)
         return {"ret": 0}
 
-    sess.gateway.call = _call  # type: ignore[method-assign]
-    sess.start_resource_monitor()
-    time.sleep(0.15)
-    sess.stop_resource_monitor()
-    assert not any(ep == "Common.ashx" and aid == 48 for ep, aid, _ in calls)
+    def fake_call(ep, api_id, params=None):
+        if ep == "Common.ashx" and api_id == 48:
+            opened_boxes.append((int(params["lBoxID"]), mode["case"]))
+            opened_event.set()
+            return {"ret": 0}
+        return {"ret": 0}
 
-    # Khi wood dưới ngưỡng (70%) nhưng vàng vẫn dư (182M >= 10k): chỉ mở rương TN, phải chuyển thành trước
-    calls.clear()
-    sess.profile.resource.wood_pct = "70"
-    sess.start_resource_monitor()
-    time.sleep(0.15)
-    sess.stop_resource_monitor()
-    box_calls = [p for ep, aid, p in calls if ep == "Common.ashx" and aid == 48]
-    switch_calls = [p for ep, aid, p in calls if ep == "City.ashx" and aid == 50]
-    assert box_calls == [{"lBoxID": "24", "_": ""}]
-    assert switch_calls == [{"tid": "1001", "_": ""}]
+    sess.gateway.city_info = fake_city_info  # type: ignore[method-assign]
+    sess.gateway.resource_info = fake_resource_info  # type: ignore[method-assign]
+    sess.gateway.set_current_city = fake_set_current_city  # type: ignore[method-assign]
+    sess.gateway.call = fake_call  # type: ignore[method-assign]
 
-    # Khi API trả lỗi ret != 0: không suy diễn thành 0 để mở nhầm rương
-    calls.clear()
-    sess.gateway.call = lambda ep, aid, params=None: (calls.append((ep, aid, params)), {"ret": 1})[-1]  # type: ignore[method-assign]
     sess.start_resource_monitor()
-    time.sleep(0.15)
+    assert opened_event.wait(timeout=2.0)
     sess.stop_resource_monitor()
-    assert not any(ep == "Common.ashx" and aid == 48 for ep, aid, _ in calls)
+    if sess._res_monitor_thread:
+        sess._res_monitor_thread.join(timeout=1.5)
 
+    assert switched_cities == [401]
+    assert opened_boxes == [(24, "high_gold_low_wood")]
+    logs_text = "\n".join(str(x) for x in sess.logs["building"])
+    assert "Vàng=" not in logs_text
+    assert "Khoáng sản dưới ngưỡng" in logs_text
+
+    # Khi API trả lỗi (None / ret != 0), tuyệt đối không suy thành vàng=0 để mở rương
+    opened_boxes.clear()
+    switched_cities.clear()
+    mode["case"] = "api_error"
+    sess.start_resource_monitor()
+    time.sleep(0.2)
+    sess.stop_resource_monitor()
+    if sess._res_monitor_thread:
+        sess._res_monitor_thread.join(timeout=1.5)
+    assert opened_boxes == []
+    assert switched_cities == []
     sess.destroy()
 
 
-def test_start_all_accounts_skips_resource_monitor(tmp_path, monkeypatch):
-    _mock_offline(monkeypatch)
-    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
-    sess = wm.login_account(server_id=53, username="batchuser", password="pw")
-    resumed = []
-    monkeypatch.setattr(sess, "resume_tasks", lambda names: resumed.extend(names) or list(names))
+def test_start_all_accounts_skips_resource_monitor(tmp_path):
+    import requests
+    from linhvuong.runtime import AccountSession, WorkspaceManager
+
+    wm = WorkspaceManager(data_dir=tmp_path)
+    sess = AccountSession("batch @ S58", requests.Session(), 58, "batch", data_dir=tmp_path)
+    called_tasks: list[str] = []
+    sess.resume_tasks = lambda names: called_tasks.extend(names) or list(names)  # type: ignore[method-assign]
+    wm.sessions[sess.account_key] = sess
+
     assert wm.start_all_accounts() == 1
-    assert "resource_monitor" not in resumed
-    assert "building" in resumed
+    assert "resource_monitor" not in called_tasks
+    assert "building" in called_tasks
+    assert "binhman" in called_tasks
     wm.graceful_shutdown()
+
+
+def test_s58_boost_and_building_list_use_rest_apis(tmp_path):
+    import requests
+    from linhvuong.roster import City, Roster
+    from linhvuong.runtime import AccountSession
+
+    sess = AccountSession("s58api @ S58", requests.Session(), 58, "s58api", data_dir=tmp_path)
+    sess.roster = Roster(cities=[City(id=10129, name="1")])
+    sess.profile.building.auto_boost = True
+
+    legacy_calls: list[tuple[str, int]] = []
+
+    def fail_if_legacy_call(ep, api_id, params=None):
+        legacy_calls.append((ep, api_id))
+        return {"ret": 1}
+
+    sess.gateway.call = fail_if_legacy_call  # type: ignore[method-assign]
+    sess.gateway.page_building = lambda cid: {"ret": 0, "plus_finish": 4125000, "list": []}  # type: ignore[method-assign]
+    sess.gateway.building_list = lambda cid: {  # type: ignore[method-assign]
+        "ret": 0,
+        "items": [{"m_lpos": 1, "m_lgid": 4, "m_llevel": 30, "m_szname": "仓库"}],
+    }
+
+    sess._check_boost_once()
+    assert sess.get_aux_status()["boost_left_seconds"] == 4125000
+    assert legacy_calls == []
+
+    plans = sess.fetch_city_buildings(10129)
+    assert len(plans) == 1
+    assert plans[0]["pid"] == 1
+    assert plans[0]["gid"] == 4
+    assert plans[0]["cur_lvl"] == 30
+    assert legacy_calls == []
+    sess.destroy()
 
 
 def test_web_scroll_preserved_on_rerender_and_logs():
@@ -907,4 +972,3 @@ Object.assign(windowObj, { Object, Array, Number, String, Boolean, Set, Map, Mat
         timeout=15,
     )
     assert proc.returncode == 0, f"JS scroll regression failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
-
