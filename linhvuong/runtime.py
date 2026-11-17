@@ -393,7 +393,9 @@ class AccountSession:
         self._last_daily_claim_date: Optional[str] = None
         self._last_boost_act_time: float = 0.0
         self._boost_left_seconds: int = 0
+        self._boost_checked_at: Optional[float] = None
         self._explore_left_seconds: int = 0
+        self._explore_checked_at: Optional[float] = None
 
         self._res_monitor_running = False
         self._res_monitor_stop = threading.Event()
@@ -441,6 +443,7 @@ class AccountSession:
 
         # Auxiliary periodic timer (boost/explore/daily)
         self._aux_stop = threading.Event()
+        self._aux_wakeup = threading.Event()
         self._aux_thread: Optional[threading.Thread] = None
 
     def _emit(self, event_type: str, payload: dict) -> None:
@@ -559,10 +562,28 @@ class AccountSession:
             self._handle_captcha(status)
         self._emit("status_changed", self.get_status_snapshot())
 
+    def _set_boost_left(self, seconds: int) -> None:
+        self._boost_left_seconds = max(0, int(seconds))
+        self._boost_checked_at = time.monotonic()
+
+    def _set_explore_left(self, seconds: int) -> None:
+        self._explore_left_seconds = max(0, int(seconds))
+        self._explore_checked_at = time.monotonic()
+
+    @staticmethod
+    def _remaining_countdown(base_seconds: int, checked_at: Optional[float]) -> int:
+        if base_seconds <= 0:
+            return 0
+        if checked_at is None:
+            return base_seconds
+        elapsed = max(0, int(time.monotonic() - checked_at))
+        return max(0, base_seconds - elapsed)
+
     def start_aux_loop(self) -> None:
         if self._aux_thread and self._aux_thread.is_alive():
             return
         self._aux_stop.clear()
+        self._aux_wakeup.clear()
 
         def _loop():
             while not self._aux_stop.is_set() and not self._destroyed:
@@ -572,8 +593,14 @@ class AccountSession:
                     self._check_daily_reward_once()
                 except Exception:
                     pass
-                if self._aux_stop.wait(60.0):
-                    break
+                wait_sec = 60.0
+                aux = self.get_aux_status()
+                if self.profile.building.auto_boost and aux["boost_left_seconds"] > 0:
+                    wait_sec = min(wait_sec, max(1.0, float(aux["boost_left_seconds"])))
+                if self.profile.logistics.auto_explore and aux["explore_left_seconds"] > 0:
+                    wait_sec = min(wait_sec, max(1.0, float(aux["explore_left_seconds"])))
+                self._aux_wakeup.wait(wait_sec)
+                self._aux_wakeup.clear()
 
         self._aux_thread = threading.Thread(target=_loop, name=f"AuxLoop-{self.account_key}", daemon=True)
         self._aux_thread.start()
@@ -582,7 +609,7 @@ class AccountSession:
         cid = self._default_city_id() or 0
         resp = self.gateway.call("Common.ashx", 77, {"cid": str(cid), "_": ""}) or {}
         rem = parse_boost_remaining_time(resp, cid)
-        self._boost_left_seconds = max(0, int(rem))
+        self._set_boost_left(rem)
         if rem <= 0 and self.profile.building.auto_boost:
             now_ts = time.time()
             if now_ts - self._last_boost_act_time > 60:
@@ -592,7 +619,7 @@ class AccountSession:
                 if act.get("ret", 0) == 0:
                     self.append_log("building", "✅ Kích hoạt thành công DS kiến trúc!")
                     resp2 = self.gateway.call("Common.ashx", 77, {"cid": str(cid), "_": ""}) or {}
-                    self._boost_left_seconds = max(0, int(parse_boost_remaining_time(resp2, cid)))
+                    self._set_boost_left(parse_boost_remaining_time(resp2, cid))
         self._emit("aux_updated", self.get_aux_status())
 
     def _check_explore_once(self) -> None:
@@ -600,7 +627,7 @@ class AccountSession:
         if not isinstance(resp, dict) or resp.get("ret", -1) != 0:
             return
         left = max(0, _safe_int(resp.get("left", 0), 0))
-        self._explore_left_seconds = left
+        self._set_explore_left(left)
         if left == 0 and self.profile.logistics.auto_explore:
             r_perf = self.gateway.call("Common.ashx", 140, {"lAction": "1", "lParam": "0", "_": ""})
             if isinstance(r_perf, dict) and r_perf.get("ret", -1) == 0:
@@ -610,7 +637,7 @@ class AccountSession:
                 self.append_log("building", f"🧭 Thám bảo tự động: Nhận được {item_name}")
                 resp2 = self.gateway.call("Common.ashx", 140, {"lAction": "0", "lParam": "0", "_": ""})
                 if isinstance(resp2, dict) and resp2.get("ret", -1) == 0:
-                    self._explore_left_seconds = max(0, _safe_int(resp2.get("left", 0), 0))
+                    self._set_explore_left(_safe_int(resp2.get("left", 0), 0))
         self._emit("aux_updated", self.get_aux_status())
 
     def _check_daily_reward_once(self) -> None:
@@ -642,6 +669,8 @@ class AccountSession:
             self.save_profile()
             data = self.profile.to_dict()
         self._emit("profile_updated", data)
+        if "building" in patch or "logistics" in patch:
+            self._aux_wakeup.set()
         return data
 
     def import_profile(self, data: dict) -> dict:
@@ -669,9 +698,13 @@ class AccountSession:
         }
 
     def get_aux_status(self) -> dict:
+        if self._boost_left_seconds > 0 and self._boost_checked_at is None:
+            self._boost_checked_at = time.monotonic()
+        if self._explore_left_seconds > 0 and self._explore_checked_at is None:
+            self._explore_checked_at = time.monotonic()
         return {
-            "boost_left_seconds": self._boost_left_seconds,
-            "explore_left_seconds": self._explore_left_seconds,
+            "boost_left_seconds": self._remaining_countdown(self._boost_left_seconds, self._boost_checked_at),
+            "explore_left_seconds": self._remaining_countdown(self._explore_left_seconds, self._explore_checked_at),
             "ditrai_running": self._ditrai_running,
             "ditrai_status": self._ditrai_status,
             "chest_running": self._chest_running,
@@ -2312,6 +2345,7 @@ class AccountSession:
     def destroy(self) -> None:
         self._destroyed = True
         self._aux_stop.set()
+        self._aux_wakeup.set()
         try:
             self.save_profile()
         except Exception:

@@ -21,6 +21,8 @@
     selectedResTechId: null,
     battleIdInput: "0",
     saveTimer: null,
+    auxSyncedAt: 0,
+    auxTimer: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -94,6 +96,9 @@
   // ---------------------------------------------------------------------------
   async function init() {
     bindStaticEvents();
+    if (!state.auxTimer) {
+      state.auxTimer = setInterval(renderAuxCountdownsOnly, 1000);
+    }
     const auth = await api("/api/auth/status");
     state.auth = auth;
     renderAuthGate();
@@ -221,6 +226,7 @@
       renderActiveTab();
     } else if (event === "aux_updated") {
       state.snapshot.aux = payload;
+      state.auxSyncedAt = Date.now();
       renderAuxDomOnly();
     } else if (event === "battle_updated") {
       state.snapshot.aux.battle_id = payload.battle_id;
@@ -279,6 +285,7 @@
     try {
       const snap = await api(`/api/accounts/${encodeURIComponent(key)}/snapshot`);
       state.snapshot = snap;
+      state.auxSyncedAt = Date.now();
       showDashboardView();
     } catch {
       showGameLoginView(acc);
@@ -495,13 +502,36 @@
     }
   }
 
+  function getLiveAuxSeconds(field) {
+    const aux = state.snapshot?.aux;
+    if (!aux) return 0;
+    const base = Math.max(0, Number(aux[field] || 0));
+    if (base <= 0) return 0;
+    const elapsed = state.auxSyncedAt ? Math.max(0, Math.floor((Date.now() - state.auxSyncedAt) / 1000)) : 0;
+    return Math.max(0, base - elapsed);
+  }
+
+  function renderAuxCountdownsOnly() {
+    const aux = state.snapshot?.aux;
+    if (!aux) return;
+    const boostLeft = getLiveAuxSeconds("boost_left_seconds");
+    const exploreLeft = getLiveAuxSeconds("explore_left_seconds");
+    const boostEl = $("aux-boost-lbl");
+    if (boostEl) {
+      boostEl.textContent = boostLeft > 0 ? `(Còn ${fmtSec(boostLeft)})` : "(Hết hạn)";
+      boostEl.style.color = boostLeft > 0 ? "#4ade80" : "#f87171";
+    }
+    const expEl = $("aux-explore-lbl");
+    if (expEl) {
+      expEl.textContent = exploreLeft > 0 ? `(Còn ${fmtSec(exploreLeft)})` : "(Sẵn sàng)";
+      expEl.style.color = exploreLeft > 0 ? "#4ade80" : "#fbbf24";
+    }
+  }
+
   function renderAuxDomOnly() {
     const aux = state.snapshot?.aux;
     if (!aux) return;
-    const boostEl = $("aux-boost-lbl");
-    if (boostEl) boostEl.textContent = aux.boost_left_seconds > 0 ? `(Còn ${fmtSec(aux.boost_left_seconds)})` : "(Hết hạn)";
-    const expEl = $("aux-explore-lbl");
-    if (expEl) expEl.textContent = aux.explore_left_seconds > 0 ? `(Còn ${fmtSec(aux.explore_left_seconds)})` : "(Sẵn sàng)";
+    renderAuxCountdownsOnly();
     const dtEl = $("dt-status-lbl");
     if (dtEl) dtEl.textContent = aux.ditrai_status || "Sẵn sàng";
     const chestFill = $("chest-progress-fill");
@@ -2019,6 +2049,7 @@
           },
         });
         state.snapshot = res.snapshot;
+        state.auxSyncedAt = Date.now();
         state.currentKey = res.snapshot.summary.account_key;
         const accRes = await api("/api/accounts");
         state.accounts = accRes.accounts || [];

@@ -508,3 +508,44 @@ def test_web_stop_binhman_does_not_deadlock_and_keeps_api_responsive(tmp_path, m
         runner.join(timeout=1.5)
         assert not runner.is_alive()
     wm.graceful_shutdown()
+
+
+def test_aux_countdown_ticks_in_snapshot_and_app_js_has_ticker(tmp_path, monkeypatch):
+    import requests
+    from pathlib import Path
+    from linhvuong.runtime import AccountSession
+
+    now = [1000.0]
+    monkeypatch.setattr(runtime_mod.time, "monotonic", lambda: now[0])
+
+    sess = AccountSession("aux @ S53", requests.Session(), 53, "aux", data_dir=tmp_path)
+    sess.gateway.call = lambda ep, api_id, params=None: (  # type: ignore[method-assign]
+        {"ret": 0, "left": 45}
+        if ep == "Common.ashx" and api_id == 140
+        else {"ret": 0, "plus_finish": 0}
+    )
+    monkeypatch.setattr(runtime_mod, "parse_boost_remaining_time", lambda resp, cid: 120)
+
+    sess._check_boost_once()
+    sess._check_explore_once()
+    a0 = sess.get_aux_status()
+    assert a0["boost_left_seconds"] == 120
+    assert a0["explore_left_seconds"] == 45
+
+    now[0] += 5.0
+    a1 = sess.get_aux_status()
+    assert a1["boost_left_seconds"] == 115
+    assert a1["explore_left_seconds"] == 40
+
+    now[0] += 100.0
+    a2 = sess.get_aux_status()
+    assert a2["boost_left_seconds"] == 15
+    assert a2["explore_left_seconds"] == 0
+
+    sess.destroy()
+
+    app_js = (Path(__file__).resolve().parents[1] / "linhvuong" / "web" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert "setInterval(" in app_js
+    assert "renderAuxCountdownsOnly" in app_js
