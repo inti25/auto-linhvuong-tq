@@ -470,10 +470,10 @@ class ResearchMixin:
             return
         try:
             lvl = int(self.res_target_lvl_var.get())
-            if lvl < 1 or lvl > 30:
+            if lvl < 1 or lvl > 39:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 30!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 39!")
             return
         for iid in sel:
             vals = list(self.res_tree.item(iid, "values"))
@@ -491,10 +491,10 @@ class ResearchMixin:
         messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
         try:
             lvl = int(self.res_target_lvl_var.get())
-            if lvl < 1 or lvl > 30:
+            if lvl < 1 or lvl > 39:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 30!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 1 đến 39!")
             return
         count = 0
         for iid in self.res_tree.get_children(""):
