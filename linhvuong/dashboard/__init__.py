@@ -41,6 +41,7 @@ from ..tasks.morale import MoraleTrainer
 from ..tasks.research import ResearchTask
 from ..tasks.thao_phat import TargetArmy, ThaoPhatExecutor
 from ..tasks.crafting import WeaponCrafter
+from .add_points_dialog import AddPointsDialogMixin
 from .armament_dialog import ArmamentDialogMixin
 from .battle import BattleMixin
 from .binhman import BinhManMixin
@@ -131,6 +132,7 @@ class Dashboard(
     EquipDialogMixin,
     ArmamentDialogMixin,
     RenameDialogMixin,
+    AddPointsDialogMixin,
     tk.Frame,
 ):
     """Cửa sổ Dashboard chính điều phối toàn bộ các phân hệ tự động hóa."""
@@ -857,6 +859,8 @@ class Dashboard(
                 self._on_equip_roster_updated()
             if hasattr(self, "_on_rename_roster_updated"):
                 self._on_rename_roster_updated()
+            if hasattr(self, "_on_add_points_roster_updated"):
+                self._on_add_points_roster_updated()
 
             today_str = time.strftime("%Y-%m-%d")
             if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():

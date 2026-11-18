@@ -1793,3 +1793,355 @@ def rename_generals(
         f"không hợp lệ {summary.invalid_name}, khóa trạng thái {summary.skipped_blocked}, lỗi {summary.failed}.",
     )
     return summary
+
+
+# ---------------------------------------------------------------------------
+# CỘNG ĐIỂM TƯỚNG (OPT.ashx?id=67)
+# ---------------------------------------------------------------------------
+
+RET_NO_SKILL_POINTS = 38
+RET_NO_SKILL_POINTS_LEGACY = 28
+RET_ATTRIB_DISPARITY = 77
+NO_SKILL_POINTS_RETS = frozenset((RET_NO_SKILL_POINTS, RET_NO_SKILL_POINTS_LEGACY))
+
+ADD_POINTS_MIN_STEP = 1
+ADD_POINTS_MAX_STEP = 500
+ADD_ALL_STEP_SEQUENCE: tuple[int, ...] = (10, 3, 1)
+ADD_POINTS_MAX_LOOPS = 10000
+
+ADD_POINT_MODE_PAIR_1_3 = "pair_1_3"
+ADD_POINT_MODE_PAIR_1_2 = "pair_1_2"
+ADD_POINT_MODE_PAIR_2_3 = "pair_2_3"
+ADD_POINT_MODE_MAX_1 = "max_1"
+ADD_POINT_MODE_MAX_2 = "max_2"
+ADD_POINT_MODE_MAX_3 = "max_3"
+
+ADD_POINT_MODE_ATTRIBS: dict[str, tuple[int, ...]] = {
+    ADD_POINT_MODE_PAIR_1_3: (1, 3),
+    ADD_POINT_MODE_PAIR_1_2: (1, 2),
+    ADD_POINT_MODE_PAIR_2_3: (2, 3),
+    ADD_POINT_MODE_MAX_1: (1,),
+    ADD_POINT_MODE_MAX_2: (2,),
+    ADD_POINT_MODE_MAX_3: (3,),
+}
+ADD_POINT_MODES: tuple[str, ...] = tuple(ADD_POINT_MODE_ATTRIBS.keys())
+
+ADD_POINT_MODE_LABELS: dict[str, str] = {
+    ADD_POINT_MODE_PAIR_1_3: "Cộng 1 & 3 (SM/Mị & TL/Nội)",
+    ADD_POINT_MODE_PAIR_1_2: "Cộng 1 & 2 (SM/Mị & NN/Mưu)",
+    ADD_POINT_MODE_PAIR_2_3: "Cộng 2 & 3 (NN/Mưu & TL/Nội)",
+    ADD_POINT_MODE_MAX_1: "Max 1 (Sức Mạnh / Mị Lực)",
+    ADD_POINT_MODE_MAX_2: "Max 2 (Nhanh Nhẹn / Mưu Trí)",
+    ADD_POINT_MODE_MAX_3: "Max 3 (Thống Lĩnh / Nội Chính)",
+}
+
+ATTRIB_NAMES_VO: dict[int, str] = {1: "Sức Mạnh", 2: "Nhanh Nhẹn", 3: "Thống Lĩnh"}
+ATTRIB_NAMES_VAN: dict[int, str] = {1: "Mị Lực", 2: "Mưu Trí", 3: "Nội Chính"}
+
+ADD_POINTS_ERROR_MESSAGES: dict[int, str] = {
+    **TROOP_ERROR_MESSAGES,
+    1: "Tham số cộng điểm không hợp lệ hoặc thao tác thất bại",
+    20: "Tướng không tồn tại ở căn cứ này",
+    RET_NO_SKILL_POINTS_LEGACY: "Không đủ Điểm Tiềm Năng",
+    RET_NO_SKILL_POINTS: "Không đủ Điểm Tiềm Năng",
+    RET_ATTRIB_DISPARITY: "Không thể cộng quá tổng 2 thuộc tính còn lại",
+}
+
+
+def attrib_name(role: str, attrib_type: int) -> str:
+    """Trả về tên chỉ số theo vai trò Võ tướng hoặc Văn quan."""
+    mapping = ATTRIB_NAMES_VAN if role == "van" else ATTRIB_NAMES_VO
+    return mapping.get(int(attrib_type), f"Chỉ số {attrib_type}")
+
+
+def is_max_add_mode(mode: str) -> bool:
+    """Kiểm tra chế độ cộng dồn tối đa vào một chỉ số."""
+    return len(ADD_POINT_MODE_ATTRIBS.get(mode, ())) == 1
+
+
+@dataclass
+class AddPointsSummary:
+    generals_processed: int = 0
+    generals_succeeded: int = 0
+    requests_sent: int = 0
+    requests_succeeded: int = 0
+    total_points_added: int = 0
+    skipped_no_points: int = 0
+    failed: int = 0
+    stopped: bool = False
+
+
+def add_general_point(
+    gateway: GatewayClient,
+    city_id: int,
+    general_id: int,
+    attrib_type: int,
+    amount: int,
+) -> tuple[bool, int, str]:
+    """Phân bổ Điểm Tiềm Năng cho một Văn quan hoặc Võ tướng qua OPT.ashx?id=67."""
+    attr = int(attrib_type)
+    pts = int(amount)
+    if attr not in (1, 2, 3):
+        return False, 1, f"Loại thuộc tính không hợp lệ: {attr}"
+    if pts < ADD_POINTS_MIN_STEP or pts > ADD_POINTS_MAX_STEP:
+        return False, 1, f"Số điểm mỗi lần phải từ {ADD_POINTS_MIN_STEP} đến {ADD_POINTS_MAX_STEP}"
+
+    payload = {
+        "lCityID": str(int(city_id)),
+        "lGeneralID": str(int(general_id)),
+        "lAttribType": str(attr),
+        "lAdd": str(pts),
+        "_": "",
+    }
+    resp = gateway.call("OPT.ashx", 67, payload)
+    if not isinstance(resp, dict):
+        return False, -1, "Lỗi kết nối"
+    ret = int(resp.get("ret", -1))
+    if ret == 0:
+        return True, 0, "Thành công"
+    err_msg = ADD_POINTS_ERROR_MESSAGES.get(ret) or str(resp.get("errMsg") or f"Mã lỗi {ret}")
+    return False, ret, err_msg
+
+
+def _send_add_step(
+    gateway: GatewayClient,
+    base_id: int,
+    general: General,
+    attrib_type: int,
+    step: int,
+    summary: AddPointsSummary,
+) -> tuple[bool, int, str]:
+    """Gửi một nhịp cộng điểm và cập nhật bộ đếm request của summary."""
+    ok, ret, msg = add_general_point(gateway, base_id, general.id, attrib_type, step)
+    summary.requests_sent += 1
+    if ok:
+        summary.requests_succeeded += 1
+        summary.total_points_added += step
+    return ok, ret, msg
+
+
+def _allocate_max_for_general(
+    gateway: GatewayClient,
+    base_id: int,
+    base_name: str,
+    general: General,
+    attrib_type: int,
+    points_per_add: int,
+    add_all: bool,
+    summary: AddPointsSummary,
+    added_by_type: dict[int, int],
+    stop_event: Optional[threading.Event],
+    on_log: Optional[Callable[[str], None]],
+) -> tuple[bool, bool]:
+    """Cộng dồn tối đa vào một chỉ số; trả về (had_error, stopped)."""
+    steps = ADD_ALL_STEP_SEQUENCE if add_all else (points_per_add,)
+    stat_label = attrib_name(general.role, attrib_type)
+
+    for step in steps:
+        for _ in range(ADD_POINTS_MAX_LOOPS):
+            if stop_event is not None and stop_event.is_set():
+                summary.stopped = True
+                return False, True
+            ok, ret, msg = _send_add_step(gateway, base_id, general, attrib_type, step, summary)
+            if ok:
+                added_by_type[attrib_type] = added_by_type.get(attrib_type, 0) + step
+                continue
+            if ret in NO_SKILL_POINTS_RETS:
+                if not add_all or step == 1:
+                    _emit(on_log, f"   ℹ️ [{base_name}] {general.name} ({stat_label}): hết điểm hoặc không đủ +{step} (ret={ret}).")
+                    return False, False
+                break
+            if ret == RET_ATTRIB_DISPARITY:
+                if not add_all or step == 1:
+                    _emit(on_log, f"   ⚠️ [{base_name}] {general.name} ({stat_label}): chạm trần chênh lệch (ret={ret}).")
+                    return False, False
+                break
+            _emit(on_log, f"   ❌ [{base_name}] {general.name} ({stat_label} +{step}): {msg} (ret={ret}).")
+            return True, False
+    return False, False
+
+
+def _allocate_pair_for_general(
+    gateway: GatewayClient,
+    base_id: int,
+    base_name: str,
+    general: General,
+    attribs: tuple[int, ...],
+    points_per_add: int,
+    times: int,
+    add_all: bool,
+    summary: AddPointsSummary,
+    added_by_type: dict[int, int],
+    stop_event: Optional[threading.Event],
+    on_log: Optional[Callable[[str], None]],
+) -> tuple[bool, bool]:
+    """Cộng xen kẽ cặp 2 chỉ số; trả về (had_error, stopped)."""
+    if not add_all:
+        for _ in range(times):
+            capped_in_round = 0
+            for attrib_type in attribs:
+                if stop_event is not None and stop_event.is_set():
+                    summary.stopped = True
+                    return False, True
+                stat_label = attrib_name(general.role, attrib_type)
+                ok, ret, msg = _send_add_step(gateway, base_id, general, attrib_type, points_per_add, summary)
+                if ok:
+                    added_by_type[attrib_type] = added_by_type.get(attrib_type, 0) + points_per_add
+                    continue
+                if ret in NO_SKILL_POINTS_RETS:
+                    _emit(on_log, f"   ℹ️ [{base_name}] {general.name} ({stat_label}): không đủ +{points_per_add} điểm (ret={ret}).")
+                    return False, False
+                if ret == RET_ATTRIB_DISPARITY:
+                    capped_in_round += 1
+                    _emit(on_log, f"   ⚠️ [{base_name}] {general.name} ({stat_label}): chạm trần chênh lệch (ret={ret}), thử chỉ số còn lại.")
+                    continue
+                _emit(on_log, f"   ❌ [{base_name}] {general.name} ({stat_label} +{points_per_add}): {msg} (ret={ret}).")
+                return True, False
+            if capped_in_round >= len(attribs):
+                _emit(on_log, f"   ⚠️ [{base_name}] {general.name}: cả 2 chỉ số đều chạm trần chênh lệch (ret=77).")
+                return False, False
+        return False, False
+
+    for step in ADD_ALL_STEP_SEQUENCE:
+        for _ in range(ADD_POINTS_MAX_LOOPS):
+            round_added = 0
+            capped_in_round = 0
+            out_of_points = False
+            for attrib_type in attribs:
+                if stop_event is not None and stop_event.is_set():
+                    summary.stopped = True
+                    return False, True
+                stat_label = attrib_name(general.role, attrib_type)
+                ok, ret, msg = _send_add_step(gateway, base_id, general, attrib_type, step, summary)
+                if ok:
+                    added_by_type[attrib_type] = added_by_type.get(attrib_type, 0) + step
+                    round_added += step
+                    continue
+                if ret in NO_SKILL_POINTS_RETS:
+                    out_of_points = True
+                    break
+                if ret == RET_ATTRIB_DISPARITY:
+                    capped_in_round += 1
+                    continue
+                _emit(on_log, f"   ❌ [{base_name}] {general.name} ({stat_label} +{step}): {msg} (ret={ret}).")
+                return True, False
+            if out_of_points:
+                if step == 1:
+                    return False, False
+                break
+            if round_added == 0 and capped_in_round >= len(attribs):
+                if step == 1:
+                    _emit(on_log, f"   ⚠️ [{base_name}] {general.name}: cả 2 chỉ số đều chạm trần chênh lệch (ret=77).")
+                    return False, False
+                break
+    return False, False
+
+
+def _index_roster_generals(roster: Roster) -> dict[int, tuple[int, str, General]]:
+    by_id: dict[int, tuple[int, str, General]] = {}
+    for base in roster.bases:
+        for gen in roster.generals_of(base.id):
+            if gen.id not in by_id:
+                by_id[gen.id] = (base.id, base.name, gen)
+    return by_id
+
+
+def add_points_generals(
+    gateway: GatewayClient,
+    roster: Roster,
+    general_ids: list[int],
+    mode: str = ADD_POINT_MODE_PAIR_1_3,
+    points_per_add: int = 10,
+    times: int = 1,
+    add_all: bool = False,
+    stop_event: Optional[threading.Event] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> AddPointsSummary:
+    """Thực thi Cộng Điểm Tướng hàng loạt cho danh sách general_ids."""
+    if mode not in ADD_POINT_MODE_ATTRIBS:
+        raise ValueError(f"Chế độ cộng điểm không hợp lệ: {mode}")
+    pts = int(points_per_add)
+    iters = int(times)
+    is_max = is_max_add_mode(mode)
+    if not add_all:
+        if pts < ADD_POINTS_MIN_STEP or pts > ADD_POINTS_MAX_STEP:
+            raise ValueError(f"Số điểm mỗi lần phải từ {ADD_POINTS_MIN_STEP} đến {ADD_POINTS_MAX_STEP}.")
+        if not is_max and iters < 1:
+            raise ValueError("Số lần mỗi loại phải lớn hơn hoặc bằng 1.")
+
+    summary = AddPointsSummary()
+    unique_ids: list[int] = []
+    seen: set[int] = set()
+    for raw_id in general_ids:
+        gid = int(raw_id)
+        if gid not in seen:
+            seen.add(gid)
+            unique_ids.append(gid)
+    if not unique_ids:
+        return summary
+
+    by_id = _index_roster_generals(roster)
+    attribs = ADD_POINT_MODE_ATTRIBS[mode]
+    mode_label = ADD_POINT_MODE_LABELS.get(mode, mode)
+    cfg_desc = "Cộng hết (+10 → +3 → +1)" if add_all else (
+        f"+{pts}/lần (Max)" if is_max else f"+{pts}/lần × {iters} lượt"
+    )
+    _emit(on_log, f"✨ Bắt đầu Cộng Điểm Tướng ({len(unique_ids)} tướng) | {mode_label} | {cfg_desc}")
+
+    total = len(unique_ids)
+    _emit_progress(on_progress, 0, total)
+
+    for idx, gid in enumerate(unique_ids, start=1):
+        if stop_event is not None and stop_event.is_set():
+            summary.stopped = True
+            _emit(on_log, "⏹️ Đã dừng tác vụ Cộng Điểm Tướng theo yêu cầu.")
+            return summary
+
+        found = by_id.get(gid)
+        if found is None:
+            summary.failed += 1
+            _emit(on_log, f"   ❌ Không tìm thấy tướng ID {gid}.")
+            _emit_progress(on_progress, idx, total)
+            continue
+
+        base_id, base_name, gen = found
+        summary.generals_processed += 1
+
+        if gen.skill_point <= 0:
+            summary.skipped_no_points += 1
+            _emit(on_log, f"   ℹ️ [{base_name}] Bỏ qua {gen.name}: hết Điểm Tiềm Năng (0).")
+            _emit_progress(on_progress, idx, total)
+            continue
+
+        added_by_type: dict[int, int] = {}
+        if is_max:
+            had_error, stopped = _allocate_max_for_general(
+                gateway, base_id, base_name, gen, attribs[0], pts, add_all,
+                summary, added_by_type, stop_event, on_log,
+            )
+        else:
+            had_error, stopped = _allocate_pair_for_general(
+                gateway, base_id, base_name, gen, attribs, pts, iters, add_all,
+                summary, added_by_type, stop_event, on_log,
+            )
+
+        if added_by_type:
+            summary.generals_succeeded += 1
+            parts = [f"+{amt} {attrib_name(gen.role, attr)}" for attr, amt in added_by_type.items() if amt > 0]
+            _emit(on_log, f"   ✅ [{base_name}] {gen.name}: {', '.join(parts)}")
+        elif had_error:
+            summary.failed += 1
+
+        _emit_progress(on_progress, idx, total)
+        if stopped:
+            _emit(on_log, "⏹️ Đã dừng tác vụ Cộng Điểm Tướng theo yêu cầu.")
+            return summary
+
+    _emit(
+        on_log,
+        f"✨ Kết quả Cộng Điểm: {summary.generals_succeeded} tướng có điểm tăng (+{summary.total_points_added} điểm, "
+        f"{summary.requests_succeeded}/{summary.requests_sent} lệnh), hết điểm {summary.skipped_no_points}, "
+        f"lỗi {summary.failed}.",
+    )
+    return summary

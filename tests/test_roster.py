@@ -312,3 +312,5 @@ def test_fetch_roster_resolves_tacticians_for_zero_troop_martial_generals():
     assert r.active_tactician_ids() == {6331, 6332}
     # Chỉ gọi Common.ashx?id=14 cho Văn quan chưa xuất hiện trong pagemytroopslist (6331)
     assert [d["lGeneralID"] for _, d in session.post_calls] == ["6331"]
+    assert (by_id[15061].stat1, by_id[15061].stat2, by_id[15061].stat3, by_id[15061].skill_point) == (58, 70, 75, 219)
+    assert (by_id[6330].stat1, by_id[6330].stat2, by_id[6330].stat3, by_id[6330].skill_point) == (890, 136, 746, 3)

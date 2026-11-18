@@ -62,6 +62,13 @@ class OverviewMixin:
             command=self._open_rename_dialog,
         )
         self.rename_btn.pack(side="left", padx=3)
+        self.add_points_btn = ttk.Button(
+            actions_frame,
+            text="✨ Cộng Điểm",
+            style="Action.TButton",
+            command=self._open_add_points_dialog,
+        )
+        self.add_points_btn.pack(side="left", padx=3)
 
         # Tầng trên: Thành & Doanh trại, Tướng đồn trú, Chi tiết biên chế
         top_body = tk.Frame(parent, bg=BG)

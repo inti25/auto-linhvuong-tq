@@ -15,7 +15,16 @@ from pydantic import BaseModel
 from ..armament import ALL_SCOPES as ARM_ALL_SCOPES, SCOPE_NAMES as ARM_SCOPE_NAMES
 from ..auth import LoginError
 from ..battle import ATTACK_ACTION_COMBO_OPTIONS, FORMATION_NAMES, STRATAGEMS
-from ..generals import RENAME_MAX_WIDTH, RENAME_STATUS_BLOCKED
+from ..generals import (
+    ADD_POINT_MODES,
+    ADD_POINT_MODE_LABELS,
+    ADD_POINT_MODE_PAIR_1_3,
+    ADD_POINTS_MAX_STEP,
+    ADD_POINTS_MIN_STEP,
+    RENAME_MAX_WIDTH,
+    RENAME_STATUS_BLOCKED,
+    is_max_add_mode,
+)
 from ..logger import list_log_files, read_log_tail
 from ..paths import logs_dir
 from ..proxy import DEFAULT_FREE_PROXY_URL
@@ -293,6 +302,12 @@ def create_app(
             "armament_scopes": [{"id": s, "name": ARM_SCOPE_NAMES[s]} for s in ARM_ALL_SCOPES],
             "rename_max_width": RENAME_MAX_WIDTH,
             "rename_status_blocked": RENAME_STATUS_BLOCKED,
+            "add_point_modes": [
+                {"id": m, "label": ADD_POINT_MODE_LABELS[m], "is_max": is_max_add_mode(m)}
+                for m in ADD_POINT_MODES
+            ],
+            "add_points_min_step": ADD_POINTS_MIN_STEP,
+            "add_points_max_step": ADD_POINTS_MAX_STEP,
         }
 
     # -------------------------------------------------------------------------
@@ -755,6 +770,25 @@ def create_app(
     @app.post("/api/accounts/{account_key}/rename/stop", dependencies=[Depends(require_admin)])
     def rename_stop(account_key: str) -> dict:
         _get_session(account_key).stop_rename()
+        return {"ok": True}
+
+    @app.post("/api/accounts/{account_key}/add-points/run", dependencies=[Depends(require_admin)])
+    def add_points_run(account_key: str, body: dict = Body(...)) -> dict:
+        try:
+            _get_session(account_key).run_add_points(
+                [int(x) for x in body.get("general_ids", [])],
+                mode=str(body.get("mode", ADD_POINT_MODE_PAIR_1_3)),
+                points_per_add=int(body.get("points_per_add", 10) or 10),
+                times=int(body.get("times", 1) or 1),
+                add_all=bool(body.get("add_all", False)),
+            )
+            return {"ok": True}
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/add-points/stop", dependencies=[Depends(require_admin)])
+    def add_points_stop(account_key: str) -> dict:
+        _get_session(account_key).stop_add_points()
         return {"ok": True}
     @app.post("/api/accounts/{account_key}/battle/load", dependencies=[Depends(require_admin)])
     def battle_load(account_key: str, body: dict = Body(...)) -> dict:

@@ -437,6 +437,7 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `OPT.ashx?id=57` (Trận hình & tỷ lệ) | `lGeneralID, lRatioAttack, lRatioPK, lRatioStra (tổng 100), lBattleArray, lWithdrawLoss, lWithdrawMorale` | `{"ret":0}` |
 | `OPT.ashx?id=55` | `tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=63` | `{}` | `{"ret":86}` *(đã nhận chuyên cần trong ngày)* |
+| `OPT.ashx?id=67` (Cộng điểm tướng) | `lCityID=10129, lGeneralID=25702, lAttribType=1\|2\|3, lAdd=1` | `{"ret":0}` (cộng được cả khi tướng đang bận `status!=0`); `ret=1` tham số sai (`lAdd<=0` hoặc `lAttribType` ngoài `1..3`), `ret=20` sai căn cứ/ID, `ret=38` (`没有可分配技能点`) hết điểm hoặc `lAdd > skill_point`, `ret=77` (`人物属性点分配过于悬殊`) vượt tổng 2 thuộc tính gốc còn lại |
 | `OPT.ashx?id=69` (`type=1,2,3,33`) | `type=1`/`2`/`3` (`param1=slot, param2=city_id, paytype=1\|2`) | `type=1`: giảm 50% thời gian xây dựng (`10` Coin/Ngân Bảo); `type=2`: giảm 1 giờ (`10` Coin/Ngân Bảo); `{"ret":0,"errMsg":"成功"}`; Quan Phủ/Thành Tường (`gid=1,2,54,55`) hoặc công trình NPC (`22..53`) trả `{"ret":1,"errMsg":"操作失败，请稍后再试"}`; `type=33` khi hết: `{"ret":90,"errMsg":"道具已经用完"}` |
 
 ---
@@ -447,9 +448,11 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | :--- | :--- | :--- |
 | `0` | Thành công | Chung |
 | `1` | Tham số sai hoặc endpoint cũ đã bị vô hiệu hóa | Các `/GateWay/*` bị chuyển sang `/api/*` |
-| `20` | Võ tướng không tồn tại / sai ID | `Common.ashx?id=12,13,14` |
+| `20` | Võ tướng không tồn tại / sai ID | `Common.ashx?id=12,13,14`, `OPT.ashx?id=67` |
 | `21` | `"装备ID不存在"` | `Optimization.ashx?action=equipment` (`kind=2`) |
+| `38` | `"没有可分配技能点"` (Không đủ Điểm Tiềm Năng) | `OPT.ashx?id=67` |
 | `42` | Tướng chưa đủ vũ khí/điều kiện biên chế hoặc cooldown | `OPT.ashx?id=6`, `Common.ashx?id=55` |
+| `77` | `"人物属性点分配过于悬殊"` (Thuộc tính gốc vượt tổng 2 thuộc tính gốc còn lại) | `OPT.ashx?id=67` |
 | `86` | Đã nhận thưởng chuyên cần hôm nay | `OPT.ashx?id=63` |
 | `90` | `"道具已经用完"` (Hết đạo cụ) | `OPT.ashx?id=69` (`type=33`) |
 | `301` | `"该装备仅限女性名(蛮)将使用"` (Trang bị chỉ dành cho nữ danh tướng hoặc tướng Man) | `OPT.ashx?id=58` (mặc trang bị) |

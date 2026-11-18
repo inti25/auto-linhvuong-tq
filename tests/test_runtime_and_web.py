@@ -1076,6 +1076,7 @@ def test_web_armament_rename_equip_and_logistics_endpoints(tmp_path, monkeypatch
         meta = client.get("/api/meta").json()
         assert meta["rename_max_width"] == 17
         assert len(meta["armament_scopes"]) == 4
+        assert len(meta["add_point_modes"]) == 6
 
         r_snaps = client.get("/api/accounts/armuser%20%40%20S53/armament/snapshots")
         assert r_snaps.status_code == 200
@@ -1110,5 +1111,18 @@ def test_web_armament_rename_equip_and_logistics_endpoints(tmp_path, monkeypatch
 
         assert client.post("/api/accounts/armuser%20%40%20S53/armament/stop").status_code == 200
         assert client.post("/api/accounts/armuser%20%40%20S53/rename/stop").status_code == 200
+
+        r_ap = client.post(
+            "/api/accounts/armuser%20%40%20S53/add-points/run",
+            json={"general_ids": [1], "mode": "pair_1_3", "points_per_add": 10, "times": 1, "add_all": False},
+        )
+        assert r_ap.status_code == 200
+        assert client.post("/api/accounts/armuser%20%40%20S53/add-points/stop").status_code == 200
+
+        r_ap_bad = client.post(
+            "/api/accounts/armuser%20%40%20S53/add-points/run",
+            json={"general_ids": [], "mode": "pair_1_3"},
+        )
+        assert r_ap_bad.status_code == 400
 
     wm.graceful_shutdown()
