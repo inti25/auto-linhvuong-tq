@@ -625,7 +625,7 @@ class BuildingTask:
         auto_boost: bool = False,
         auto_open_box: bool = False,
         box_id: int = 24,
-        max_boxes_per_round: int = 5,
+        max_boxes_per_round: int = 10,
         auto_fallback_box: bool = True,
         even_upgrade: bool = False,
         notify: Callable[[str], None] = print,

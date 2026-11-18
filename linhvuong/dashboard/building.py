@@ -1830,7 +1830,7 @@ class BuildingMixin:
                     try:
                         max_boxes = int(self.bld_box_max_var.get())
                     except ValueError:
-                        max_boxes = 5
+                        max_boxes = 10
 
                 auto_open_box = bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False
                 auto_fallback_box = (

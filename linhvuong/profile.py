@@ -44,7 +44,7 @@ class BuildingProfile:
     even_upgrade: bool = False
     auto_open_box: bool = False
     box_type_idx: int = 0
-    box_max: str = "5"
+    box_max: str = "10"
     auto_fallback_box: bool = True
     interval: str = "20"
     plans: list[dict] = field(default_factory=list)
