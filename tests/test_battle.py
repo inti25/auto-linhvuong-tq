@@ -702,7 +702,10 @@ def test_boss_man_detection_ashigaru_taisho_and_tribal_bosses():
     t3 = BattleTroop.from_raw(raw_pos11)
     assert t3.is_boss is False, "足轻大将 tại vị trí 11 (flag 16) không phải là BOSS"
 
-    # 3. Các thủ lĩnh / Boss Man tộc khác có danh hiệu Boss tối cao
+    def _raw_troop(name: str, flag, pos: int = 19, soldiers: int = 2000) -> list:
+        return [pos, "", 0, name, 0, "", 0, 0, 4, 100, 0, soldiers, 0, soldiers, 0, 0, 0, 0, "", flag]
+
+    # 3. Nhận diện BOSS thuần theo cờ flag == 32 (không phụ thuộc tên hay keyword)
     boss_cases = [
         ("南蛮大王", 19),
         ("匈奴单于", 19),
@@ -711,9 +714,13 @@ def test_boss_man_detection_ashigaru_taisho_and_tribal_bosses():
         ("山越大首领", 19),
     ]
     for bname, pos in boss_cases:
-        raw_b = [pos, "", 0, bname, 0, "", 0, 0, 4, 100, 0, 2000, 0, 2000, 0, 0, 0, 0, "", 16]
-        tb = BattleTroop.from_raw(raw_b)
-        assert tb.is_boss is True, f"Boss Man '{bname}' phải được nhận diện là BOSS"
+        assert BattleTroop.from_raw(_raw_troop(bname, 32, pos=pos)).is_boss is True
+        assert BattleTroop.from_raw(_raw_troop(bname, 16, pos=pos)).is_boss is False
+
+    assert BattleTroop.from_raw(_raw_troop("Mục Tiêu Bất Kỳ", 32)).is_boss is True
+    assert BattleTroop.from_raw(_raw_troop("BOSS", 16)).is_boss is False
+    assert BattleTroop.from_raw(_raw_troop("Thử Chuỗi", "32")).is_boss is True
+    assert BattleTroop.from_raw(_raw_troop("Thử Lỗi", "invalid")).flag == 0
 
     # 5. Đảm bảo lính thường và đội trưởng tép không bị nhận diện nhầm thành BOSS
     mob_cases = [
@@ -965,5 +972,42 @@ def test_binh_man_pos_11_regular_troop_and_bujiang_not_identified_as_boss():
         [11, "", 0, "卑弥呼", 0, "", 0, 0, 5, 100, 0, 0, 2207, 2329, 0, 0, 0, 0, "", 32]
     )
     assert real_boss_pos11.is_boss is True, "Boss thật [卑弥呼] tại vị trí 11 phải được nhận diện là BOSS"
+
+
+def test_battle_1047_woguo_escort_jialao_flag_16_not_identified_as_boss():
+    """Hồi quy chiến trường sg58/battle/1047: 家老, 宿老 và các hộ vệ cờ flag=16 không phải BOSS Man."""
+    def _raw_troop(name: str, flag: int, pos: int = 19, soldiers: int = 1000) -> list:
+        return [pos, "", 0, name, 0, "", 0, 0, 4, 100, 0, soldiers, 0, soldiers, 0, 0, 0, 0, "", flag]
+
+    battle_1047_round1 = {
+        "ret": 0,
+        "site": "倭国部队",
+        "mapid": 774193,
+        "bout": 1,
+        "bout_left": 30,
+        "attack_total": 1,
+        "defend_total": 10,
+        "troops": [
+            [1, "inti", 95, "I_01", 6330, "TT", 10254, 5487342, 3, 95, 0, 0, 9860, 0, 0, 14, 12, 6201, "I_01", 1],
+            [11, "", 0, "足轻大将", 0, "", 0, 0, 5, 100, 0, 1148, 0, 1095, 0, 0, 0, 0, "", 16],
+            [12, "", 0, "侍大将", 0, "", 0, 0, 2, 100, 0, 1189, 998, 0, 0, 0, 0, 0, "", 16],
+            _raw_troop("家老", 16, pos=17),
+            _raw_troop("家老", 16, pos=19),
+            _raw_troop("家老", 16, pos=20),
+        ],
+    }
+    state = BattleState.from_json(battle_1047_round1, current_user_id=95)
+    assert state.boss_troops == []
+
+    for name in ("家老", "宿老", "大名", "都督", "大都督", "元帅", "大元帅", "领主", "法师"):
+        assert BattleTroop.from_raw(_raw_troop(name, 16)).is_boss is False, (
+            f"Hộ vệ '{name}' với flag=16 không được nhận diện nhầm là BOSS"
+        )
+
+    # Hộ vệ cấp thấp (家老, 宿老) kể cả cờ 48 (0x20|0x10) cũng không bị nhận diện nhầm, trong khi Boss thật (flag=32) vẫn đúng
+    for name in ("家老", "宿老"):
+        assert BattleTroop.from_raw(_raw_troop(name, 48, pos=17)).is_boss is False
+    assert BattleTroop.from_raw(_raw_troop("织田大名", 32, pos=19, soldiers=2000)).is_boss is True
+
 
 

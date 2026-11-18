@@ -1,11 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
 
 datas = [('linhvuong.ico', '.'), ('linhvuong.png', '.'), ('linhvuong_menu.png', '.'), ('qrcode.png', '.')]
 binaries = []
 hiddenimports = []
-tmp_ret = collect_all('linhvuong')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
@@ -17,7 +14,26 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PIL', 'Pillow', 'numpy'],
+    excludes=[
+        'PIL',
+        'Pillow',
+        'numpy',
+        'linhvuong.web',
+        'linhvuong.security',
+        'linhvuong.runtime',
+        'linhvuong.cli',
+        'fastapi',
+        'uvicorn',
+        'starlette',
+        'pydantic',
+        'pydantic_core',
+        'cryptography',
+        'anyio',
+        'httptools',
+        'h11',
+        'websockets',
+        'setuptools',
+    ],
     noarchive=False,
     optimize=0,
 )

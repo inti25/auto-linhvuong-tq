@@ -307,3 +307,66 @@ class Scanner:
                 return Target(cand[1], cand[2], tid, cand[4])
 
         return None
+
+    def find_empty_mids_near(
+        self,
+        ox: int,
+        oy: int,
+        max_dist: int = 5,
+        skip_capital_radius: int = 0,
+    ) -> list[int]:
+        """Tìm danh sách mid ô đất trống (tile_type=1, owner=0, chưa bị chiếm) quanh tọa độ (ox, oy)."""
+        origin_mid = mid_from_coords(ox, oy)
+        data = self._fetch_map_view(origin_mid, use_cache=False)
+        occupied: set[int] = {origin_mid}
+        raw_points: list[tuple[int, int, int]] = []
+
+        if isinstance(data, dict):
+            for npc in data.get("npc_tent") or []:
+                if isinstance(npc, (list, tuple)) and len(npc) >= 3:
+                    try:
+                        occupied.add(int(npc[2]))
+                    except (ValueError, TypeError):
+                        continue
+            for city in data.get("citys") or []:
+                if isinstance(city, (list, tuple)) and len(city) >= 4:
+                    try:
+                        occupied.add(int(city[3]))
+                    except (ValueError, TypeError):
+                        continue
+            for row in data.get("infos") or []:
+                if not isinstance(row, (list, tuple)) or len(row) < 6:
+                    continue
+                try:
+                    m_mid = int(row[0])
+                    tile_type = int(row[1])
+                    owner = int(row[5])
+                except (ValueError, TypeError):
+                    continue
+                if tile_type != 1 or owner != 0:
+                    occupied.add(m_mid)
+                elif m_mid not in occupied:
+                    tx, ty = coords_from_mid(m_mid)
+                    raw_points.append((tx, ty, m_mid))
+
+        # Fallback khi map_view không trả infos hoặc infos chỉ liệt kê ô đặc biệt/chiếm chỗ (S1-S57)
+        if not raw_points:
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if dx == 0 and dy == 0:
+                        continue
+                    tx, ty = ox + dx, oy + dy
+                    if MAP_MIN <= tx <= MAP_MAX and MAP_MIN <= ty <= MAP_MAX:
+                        m_mid = mid_from_coords(tx, ty)
+                        if m_mid not in occupied:
+                            raw_points.append((tx, ty, m_mid))
+
+        candidates: list[tuple[float, int, int]] = []
+        for tx, ty, m_mid in raw_points:
+            if skip_capital_radius > 0 and max(abs(tx), abs(ty)) <= skip_capital_radius:
+                continue
+            dist = math.hypot(tx - ox, ty - oy)
+            if 0 < dist <= max_dist:
+                candidates.append((dist, abs(tx - ox) + abs(ty - oy), m_mid))
+        candidates.sort()
+        return [m_mid for _, _, m_mid in candidates]
