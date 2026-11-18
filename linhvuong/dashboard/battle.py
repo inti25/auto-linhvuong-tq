@@ -86,7 +86,7 @@ class BattleMixin:
 
         win = tk.Toplevel(self)
         win.title("🔔 Cài Đặt Thông Báo & Bắt Sống BOSS (Coin)")
-        win.geometry("520x480")
+        win.geometry("520x510")
         win.configure(bg=BG)
         win.resizable(False, False)
         self._notify_win = win
@@ -95,6 +95,7 @@ class BattleMixin:
         v_toast = tk.BooleanVar(value=self.notification_config.notify_desktop_toast)
         v_sound = tk.BooleanVar(value=self.notification_config.notify_sound)
         v_tele = tk.BooleanVar(value=self.notification_config.notify_telegram)
+        v_tele_visit = tk.BooleanVar(value=self.notification_config.telegram_alert_general_visit)
         v_token = tk.StringVar(value=self.notification_config.telegram_bot_token)
         v_chat_id = tk.StringVar(value=self.notification_config.telegram_chat_id)
 
@@ -134,6 +135,15 @@ class BattleMixin:
         c3 = tk.Frame(f_channels, bg=CARD)
         c3.pack(fill="x", padx=8, pady=4)
         ttk.Checkbutton(c3, text="✈️ Gửi tin nhắn qua Telegram Bot", variable=v_tele, style="TCheckbutton").pack(anchor="w")
+
+        c4 = tk.Frame(f_channels, bg=CARD)
+        c4.pack(fill="x", padx=24, pady=2)
+        ttk.Checkbutton(
+            c4,
+            text="🌟 Báo Danh tướng viếng thăm qua Telegram",
+            variable=v_tele_visit,
+            style="TCheckbutton",
+        ).pack(anchor="w")
 
         f_tele = tk.Frame(f_channels, bg=CARD)
         f_tele.pack(fill="x", padx=8, pady=(2, 8))
@@ -205,6 +215,7 @@ class BattleMixin:
             self.notification_config.notify_desktop_toast = bool(v_toast.get())
             self.notification_config.notify_sound = bool(v_sound.get())
             self.notification_config.notify_telegram = bool(v_tele.get())
+            self.notification_config.telegram_alert_general_visit = bool(v_tele_visit.get())
             self.notification_config.telegram_bot_token = v_token.get().strip()
             self.notification_config.telegram_chat_id = v_chat_id.get().strip()
 

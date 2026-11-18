@@ -139,8 +139,12 @@ Tính năng tự động gửi lệnh Cầm Hoạch (`OPT.ashx?id=54, action=5`)
 _Avoid_: Bắt mù quáng, cắn vcoin vô tội vạ, spam action 5 khi sĩ khí cao
 
 **Thông Báo Đa Kênh**:
-Cơ chế phát tín hiệu cảnh báo tức thì đồng thời qua thông báo cục bộ trên nền tảng vận hành (Windows Desktop Toast kèm âm thanh trên bản Desktop, hoặc Web Toast/Browser Notification kèm âm thanh Web Audio trên Bảng Điều Khiển Web), ghi nhật ký tác vụ và đẩy tin nhắn từ xa qua Telegram Bot khi phát hiện sự kiện quan trọng (như BOSS xuất hiện trên chiến trường, tác vụ tạm dừng vì Captcha hoặc gián đoạn phiên kết nối).
+Cơ chế phát tín hiệu cảnh báo tức thì đồng thời qua thông báo cục bộ trên nền tảng vận hành (Windows Desktop Toast kèm âm thanh trên bản Desktop, hoặc Web Toast/Browser Notification kèm âm thanh Web Audio trên Bảng Điều Khiển Web), ghi nhật ký tác vụ và đẩy tin nhắn từ xa qua Telegram Bot khi phát hiện sự kiện quan trọng (như BOSS xuất hiện trên chiến trường, Danh Tướng Viếng Thăm, tác vụ tạm dừng vì Captcha hoặc gián đoạn phiên kết nối).
 _Avoid_: Báo lẻ kênh, notification đơn lẻ, log thông thường
+
+**Danh Tướng Viếng Thăm**:
+Danh tướng võ hoặc danh sỹ văn đang ghé thăm trong **Tửu Quán** / **Tửu Tứ** (`gid=8`/`61`) hoặc **Quán Trọ** / **Thủy Kính Lư** (`gid=7`/`60`) của người chơi, tách biệt với **BOSS** dã ngoại trên chiến trường.
+_Avoid_: Tướng lang bạt thường, BOSS Tửu quán
 
 **An Dân**:
 Hành động tế trời hoặc phát lương thực (`OPT.ashx?id=4`) khôi phục lòng dân và sĩ khí thành trì, triệt tiêu dân nộ để ngăn ngừa bạo loạn.

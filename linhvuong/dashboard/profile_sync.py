@@ -114,6 +114,7 @@ class ProfileSyncMixin:
             "aux_comfort_var",
             "aux_boost_var",
             "aux_tribute_var",
+            "aux_general_visit_var",
             "aux_explore_var",
             "aux_explore_whip_var",
             "aux_explore_coin_var",

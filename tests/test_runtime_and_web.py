@@ -808,6 +808,7 @@ function makeEl(tag, id = "", className = "") {
           "dt-camp","chest-type","chest-city","chest-times","logi-from","logi-to","logi-type",
           "btn-nc-clear","dt-origin-lbl","bld-tgt-lvl","btn-bld-up-lvl","btn-bld-down-lvl",
           "btn-bld-mv-up","btn-bld-mv-down","aux-tribute","aux-tribute-gid","btn-tribute-now",
+          "aux-general-visit","aux-visit-lbl",
           "btn-apply-rsrc","btn-xfer-add","btn-xfer-del","xfer-int","btn-tgl-xfer","xfer-status-lbl"
         ];
         for (const cid of ids) {

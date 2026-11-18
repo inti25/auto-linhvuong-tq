@@ -640,10 +640,26 @@
     }
   }
 
+  function formatGeneralVisitText(aux, enabled) {
+    if (enabled === false) return "Đang tắt";
+    const visits = Array.isArray(aux?.general_visits) ? aux.general_visits : [];
+    if (!visits.length) return "Không có khách viếng thăm";
+    return visits
+      .map((v) => `${v.building_name || (Number(v.gid) === 8 ? "Tửu Quán" : "Quán Trọ")}: ${v.general_name}`)
+      .join(" | ");
+  }
+
   function renderAuxDomOnly() {
     const aux = state.snapshot?.aux;
     if (!aux) return;
     renderAuxCountdownsOnly();
+    const visitLbl = $("aux-visit-lbl");
+    if (visitLbl) {
+      const enabled = state.snapshot?.profile?.logistics?.notify_general_visit !== false;
+      const visits = Array.isArray(aux.general_visits) ? aux.general_visits : [];
+      visitLbl.textContent = formatGeneralVisitText(aux, enabled);
+      visitLbl.style.color = enabled && visits.length ? "var(--warn)" : "var(--muted)";
+    }
     const dtEl = $("dt-status-lbl");
     if (dtEl) dtEl.textContent = aux.ditrai_status || "Sẵn sàng";
     const chestFill = $("chest-progress-fill");
@@ -1085,6 +1101,10 @@
               </select>
               <button id="btn-tribute-now" class="btn-sm">🏛️ Cống quận ngay</button>
             </div>
+            <div class="form-row">
+              <label><input id="aux-general-visit" type="checkbox" ${logi.notify_general_visit !== false ? "checked" : ""}/> Báo danh tướng viếng thăm</label>
+              <span id="aux-visit-lbl" style="font-size:12px;color:${logi.notify_general_visit !== false && (snap.aux?.general_visits || []).length ? "var(--warn)" : "var(--muted)"};">${esc(formatGeneralVisitText(snap.aux, logi.notify_general_visit !== false))}</span>
+            </div>
             <div class="form-row" style="margin-bottom:0;">
               <button id="btn-apply-rsrc" class="btn-primary btn-sm">✅ Áp Dụng Thiết Lập</button>
             </div>
@@ -1377,11 +1397,12 @@
         transfer_interval: $("xfer-int").value,
         tribute_enabled: $("aux-tribute").checked,
         tribute_building_gid: Number($("aux-tribute-gid").value),
+        notify_general_visit: $("aux-general-visit").checked,
       },
       ditrai: { dest_x: $("dt-x").value, dest_y: $("dt-y").value },
     });
     ["rsrc-gold", "rsrc-wood", "rsrc-iron", "rsrc-stone", "rsrc-food", "rsrc-gbox", "rsrc-tnbox",
-      "aux-daily", "aux-explore", "aux-whip", "aux-coin", "aux-turns", "logi-amt", "dt-x", "dt-y", "xfer-int", "aux-tribute", "aux-tribute-gid"].forEach((id) => {
+      "aux-daily", "aux-explore", "aux-whip", "aux-coin", "aux-turns", "logi-amt", "dt-x", "dt-y", "xfer-int", "aux-tribute", "aux-tribute-gid", "aux-general-visit"].forEach((id) => {
       $(id).onchange = () => {
         if (id === "aux-whip" && $("aux-whip").checked) $("aux-coin").checked = false;
         if (id === "aux-coin" && $("aux-coin").checked) $("aux-whip").checked = false;
@@ -2272,6 +2293,7 @@
        <div class="form-row" style="padding-left:20px;">
          <label><input id="nf-cap" type="checkbox" ${np.telegram_alert_captcha !== false ? "checked" : ""}/> Báo Captcha qua Telegram</label>
          <label><input id="nf-disc" type="checkbox" ${np.telegram_alert_disconnect !== false ? "checked" : ""}/> Báo mất kết nối qua Telegram</label>
+         <label><input id="nf-visit" type="checkbox" ${np.telegram_alert_general_visit !== false ? "checked" : ""}/> Báo Danh tướng viếng thăm qua Telegram</label>
        </div>
        <div class="field"><label>Telegram Bot Token</label><input id="nf-tok" type="password" value="${esc(np.telegram_bot_token)}"/></div>
        <div class="field"><label>Telegram Chat ID</label><input id="nf-cid" type="text" value="${esc(np.telegram_chat_id)}"/></div>
@@ -2288,6 +2310,7 @@
           telegram_enabled: $("nf-tele").checked,
           telegram_alert_captcha: $("nf-cap").checked,
           telegram_alert_disconnect: $("nf-disc").checked,
+          telegram_alert_general_visit: $("nf-visit").checked,
           telegram_bot_token: $("nf-tok").value.trim(),
           telegram_chat_id: $("nf-cid").value.trim(),
         },

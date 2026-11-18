@@ -57,9 +57,11 @@ from .locks import TargetLocks
 from .logger import setup_logger
 from .notifications import (
     NotificationConfig,
+    clear_general_visit_alerts,
     dispatch_boss_alert,
     dispatch_system_alert,
     reset_system_alert,
+    sync_general_visit_alerts,
 )
 from .paths import (
     DataDirLock,
@@ -82,9 +84,11 @@ from .tasks.building import (
     CHEST_MAPPING,
     BuildingPlan,
     BuildingTask,
+    check_general_visits,
     chest_needs_city_switch,
     parse_boost_remaining_time,
     run_batch_open_chest,
+    select_general_visit_city,
     switch_city_verified,
 )
 from .tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
@@ -479,6 +483,9 @@ class AccountSession:
 
         self._nien_thu_ann: Optional[dict] = None
         self._last_roster_err: Optional[str] = None
+        self._general_visits: list[dict] = []
+        self._general_visit_city_id: Optional[int] = None
+        self._general_visit_last_check: float = 0.0
 
         # Auxiliary periodic timer (boost/explore/daily)
         self._aux_stop = threading.Event()
@@ -501,6 +508,7 @@ class AccountSession:
             telegram_enabled=np.telegram_enabled,
             telegram_alert_captcha=np.telegram_alert_captcha,
             telegram_alert_disconnect=np.telegram_alert_disconnect,
+            telegram_alert_general_visit=np.telegram_alert_general_visit,
             telegram_bot_token=np.telegram_bot_token,
             telegram_chat_id=np.telegram_chat_id,
         )
@@ -631,6 +639,7 @@ class AccountSession:
                     self._check_explore_once()
                     self._check_daily_reward_once()
                     self._check_tribute_once()
+                    self._check_general_visit_once()
                 except Exception:
                     pass
                 wait_sec = 60.0
@@ -714,6 +723,13 @@ class AccountSession:
             self.save_profile()
             data = self.profile.to_dict()
         self._emit("profile_updated", data)
+        if "logistics" in patch:
+            self._general_visit_last_check = 0.0
+            if not self.profile.logistics.notify_general_visit:
+                clear_general_visit_alerts(self.account_key)
+                if self._general_visits:
+                    self._general_visits = []
+                    self._emit("aux_updated", self.get_aux_status())
         if "building" in patch or "logistics" in patch:
             self._aux_wakeup.set()
         return data
@@ -776,6 +792,7 @@ class AccountSession:
             "rename_status": self._ren_status,
             "rename_progress": dict(self._ren_progress),
             "nien_thu_announcement": self._nien_thu_ann,
+            "general_visits": list(self._general_visits),
         }
 
     def get_task_states(self) -> dict[str, dict]:
@@ -1544,6 +1561,51 @@ class AccountSession:
             if valid is not None and cid not in valid:
                 continue
             self.tribute_city(cid, lg.tribute_building_gid)
+
+    def _check_general_visit_once(self) -> None:
+        """Kiểm tra Danh tướng / Danh sỹ viếng thăm tại 1 Thành chính duy nhất (chu kỳ ~60s)."""
+        if not self.profile.logistics.notify_general_visit:
+            clear_general_visit_alerts(self.account_key)
+            if self._general_visits:
+                self._general_visits = []
+                self._emit("aux_updated", self.get_aux_status())
+            return
+
+        now_mono = time.monotonic()
+        if self._general_visit_last_check > 0.0 and (now_mono - self._general_visit_last_check) < 55.0:
+            return
+        self._general_visit_last_check = now_mono
+
+        self._ensure_roster_loaded()
+        cities = list(self.roster.cities or []) if self.roster else []
+        city = select_general_visit_city(
+            self.gateway,
+            cities,
+            preferred_city_id=self._general_visit_city_id,
+        )
+        if not city:
+            return
+        self._general_visit_city_id = int(city.id)
+
+        try:
+            visits = check_general_visits(self.gateway, city.id, city.name)
+        except CaptchaRequired:
+            self._handle_captcha("Kiểm tra Danh tướng viếng thăm gặp Captcha (mã 110).")
+            return
+
+        serialized = [v.to_dict() for v in visits]
+        changed = serialized != self._general_visits
+        self._general_visits = serialized
+        if changed:
+            self._emit("aux_updated", self.get_aux_status())
+
+        sync_general_visit_alerts(
+            account_key=self.account_key,
+            visits=visits,
+            config=self._notification_config(),
+            on_log=lambda m: self.append_log("building", m),
+            on_web_event=lambda ev: self._emit("notification", ev),
+        )
 
     def transfer_loop_orders(self) -> list[ArmyTransferOrder]:
         return [
@@ -2798,6 +2860,7 @@ class AccountSession:
         self._destroyed = True
         self._aux_stop.set()
         self._aux_wakeup.set()
+        clear_general_visit_alerts(self.account_key)
         try:
             self.save_profile()
         except Exception:

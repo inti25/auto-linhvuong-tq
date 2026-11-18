@@ -603,6 +603,31 @@ class BuildingMixin:
         self.aux_tribute_bld_combo.set("官府 (Quan Phủ)")
         self.aux_tribute_bld_combo.pack(side="left", padx=4)
 
+        r_aux_visit = tk.Frame(f_aux, bg=BG)
+        r_aux_visit.pack(fill="x", padx=4, pady=2)
+        tk.Checkbutton(
+            r_aux_visit,
+            text="Báo danh tướng viếng thăm",
+            variable=self.aux_general_visit_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            activeforeground=FG,
+            font=("Segoe UI", 9),
+            command=lambda: self._check_and_notify_general_visit(async_check=True)
+            if hasattr(self, "_check_and_notify_general_visit")
+            else None,
+        ).pack(side="left", padx=2)
+        self.aux_visit_lbl = tk.Label(
+            r_aux_visit,
+            text="(Chưa kiểm tra)",
+            bg=BG,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+        )
+        self.aux_visit_lbl.pack(side="left", padx=(6, 0))
+
         r_aux4 = tk.Frame(f_aux, bg=BG)
         r_aux4.pack(fill="x", padx=4, pady=2)
         tk.Checkbutton(

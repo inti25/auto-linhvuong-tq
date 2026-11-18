@@ -1437,3 +1437,122 @@ class BuildingTask:
         if remaining_times:
             self._busy_until = time.monotonic() + min(float(min(remaining_times)), 1800.0)
 
+
+GENERAL_VISIT_BUILDINGS: tuple[tuple[int, str, str], ...] = (
+    (8, "Tửu Quán", "danh tướng"),
+    (7, "Quán Trọ", "danh sỹ"),
+)
+_VISIT_BUILDING_GIDS: frozenset[int] = frozenset({7, 8, 60, 61})
+
+
+@dataclass(frozen=True)
+class GeneralVisit:
+    """Thông tin Danh Tướng Viếng Thăm tại Tửu Quán hoặc Quán Trọ."""
+
+    city_id: int
+    city_name: str
+    gid: int
+    building_name: str
+    role_label: str
+    general_name: str
+    rumor: tuple[Any, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "city_id": self.city_id,
+            "city_name": self.city_name,
+            "gid": self.gid,
+            "building_name": self.building_name,
+            "role_label": self.role_label,
+            "general_name": self.general_name,
+        }
+
+
+def select_general_visit_city(
+    gateway: Any,
+    cities: list[Any],
+    preferred_city_id: Optional[int] = None,
+) -> Optional[Any]:
+    """Chọn một Thành chính đại diện để kiểm tra Danh Tướng Viếng Thăm (bỏ qua Doanh trại)."""
+    non_camps = [
+        c for c in (cities or [])
+        if not getattr(c, "is_camp", False) and int(getattr(c, "id", 0) or 0) > 0
+    ]
+    if not non_camps:
+        return None
+    if preferred_city_id is not None:
+        for c in non_camps:
+            if int(c.id) == int(preferred_city_id):
+                return c
+
+    bld_list_fn = getattr(gateway, "building_list", None)
+    if callable(bld_list_fn):
+        for c in non_camps:
+            try:
+                resp = bld_list_fn(int(c.id)) or {}
+            except Exception:
+                continue
+            items = resp.get("items")
+            if items is None and isinstance(resp.get("data"), dict):
+                items = resp["data"].get("items")
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    gid_val = int(item.get("m_lgid", item.get("gid", 0)) or 0)
+                except (ValueError, TypeError):
+                    continue
+                if gid_val in _VISIT_BUILDING_GIDS:
+                    return c
+    return non_camps[0]
+
+
+def check_general_visits(
+    gateway: Any,
+    city_id: int,
+    city_name: str = "",
+) -> list[GeneralVisit]:
+    """Kiểm tra Danh Tướng / Danh Sỹ đang viếng thăm tại Tửu Quán (gid=8) và Quán Trọ (gid=7)."""
+    cid = int(city_id)
+    visits: list[GeneralVisit] = []
+    with gateway_city_context(gateway):
+        ok, sw_ret, _ = switch_city_verified(gateway, cid)
+        if sw_ret in (110, RET_CAPTCHA_REQUIRED):
+            raise CaptchaRequired()
+        if not ok:
+            return []
+
+        for gid, b_name, r_label in GENERAL_VISIT_BUILDINGS:
+            resp = gateway.call(
+                "Build.ashx",
+                2,
+                {"gid": str(gid), "pid": "-1", "tab": "2", "tid": "0", "_": ""},
+            ) or {}
+            try:
+                ret_val = int(resp.get("ret", RET_OK))
+            except (ValueError, TypeError):
+                ret_val = -1
+            if ret_val in (110, RET_CAPTCHA_REQUIRED):
+                raise CaptchaRequired()
+            if ret_val != RET_OK:
+                continue
+            rumor = resp.get("rumor")
+            if isinstance(rumor, (list, tuple)) and len(rumor) >= 4:
+                gname = str(rumor[3] or "").strip()
+                if gname:
+                    visits.append(
+                        GeneralVisit(
+                            city_id=cid,
+                            city_name=city_name or str(cid),
+                            gid=gid,
+                            building_name=b_name,
+                            role_label=r_label,
+                            general_name=gname,
+                            rumor=tuple(rumor),
+                        )
+                    )
+    return visits
+
+

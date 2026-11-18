@@ -423,6 +423,7 @@ class LogisticsProfile:
     transfer_interval: str = "60"
     tribute_enabled: bool = False
     tribute_building_gid: int = 1  # 1: Quan Phủ, 2: Tường Thành
+    notify_general_visit: bool = True
 
     @classmethod
     def from_dict(cls, data: dict) -> "LogisticsProfile":
@@ -456,6 +457,7 @@ class LogisticsProfile:
             transfer_interval=str(data.get("transfer_interval", "60")),
             tribute_enabled=bool(data.get("tribute_enabled", False)),
             tribute_building_gid=t_gid,
+            notify_general_visit=bool(data.get("notify_general_visit", True)),
             army_type_idx=int(data.get("army_type_idx", 0)),
             amount=str(data.get("amount", "1000")),
             auto_daily_reward=bool(data.get("auto_daily_reward", True)),
@@ -489,6 +491,7 @@ class NotificationProfile:
     telegram_enabled: bool = False
     telegram_alert_captcha: bool = True
     telegram_alert_disconnect: bool = True
+    telegram_alert_general_visit: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
@@ -506,6 +509,7 @@ class NotificationProfile:
         notify_web: Optional[bool] = None,
         telegram_alert_captcha: Optional[bool] = None,
         telegram_alert_disconnect: Optional[bool] = None,
+        telegram_alert_general_visit: Optional[bool] = None,
         **kwargs,
     ):
         d_val = notify_desktop_toast if notify_desktop_toast is not None else desktop_enabled
@@ -522,6 +526,9 @@ class NotificationProfile:
 
         self.telegram_alert_captcha = True if telegram_alert_captcha is None else bool(telegram_alert_captcha)
         self.telegram_alert_disconnect = True if telegram_alert_disconnect is None else bool(telegram_alert_disconnect)
+        self.telegram_alert_general_visit = (
+            True if telegram_alert_general_visit is None else bool(telegram_alert_general_visit)
+        )
 
         self.telegram_bot_token = str(kwargs.get("telegram_bot_token", telegram_bot_token)).strip()
         self.telegram_chat_id = str(kwargs.get("telegram_chat_id", telegram_chat_id)).strip()
@@ -585,6 +592,7 @@ class NotificationProfile:
             telegram_enabled=bool(t_val),
             telegram_alert_captcha=bool(data.get("telegram_alert_captcha", True)),
             telegram_alert_disconnect=bool(data.get("telegram_alert_disconnect", True)),
+            telegram_alert_general_visit=bool(data.get("telegram_alert_general_visit", True)),
             telegram_bot_token=str(data.get("telegram_bot_token", "")).strip(),
             telegram_chat_id=str(data.get("telegram_chat_id", "")).strip(),
         )
@@ -597,6 +605,7 @@ class NotificationProfile:
             "telegram_enabled": self.telegram_enabled,
             "telegram_alert_captcha": self.telegram_alert_captcha,
             "telegram_alert_disconnect": self.telegram_alert_disconnect,
+            "telegram_alert_general_visit": self.telegram_alert_general_visit,
             "notify_desktop_toast": self.desktop_enabled,
             "notify_sound": self.sound_enabled,
             "notify_web": self.web_enabled,

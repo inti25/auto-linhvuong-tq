@@ -10,15 +10,19 @@ from tkinter import messagebox as _default_messagebox
 from typing import Any, Callable, Optional
 
 from ..gateway import gateway_city_context
+from ..notifications import clear_general_visit_alerts, sync_general_visit_alerts
+from ..tasks.base import CaptchaRequired
 from ..tasks.building import (
     CHEST_MAPPING,
     BuildingTask as _DefaultBuildingTask,
+    check_general_visits,
     chest_needs_city_switch,
     parse_boost_remaining_time,
     run_batch_open_chest,
+    select_general_visit_city,
     switch_city_verified,
 )
-from .shared import resolve_dashboard_symbol
+from .shared import BG, MUTED, resolve_dashboard_symbol
 
 logger = logging.getLogger("linhvuong.dashboard")
 
@@ -97,6 +101,9 @@ class InternalAuxMixin:
                 bool(self.aux_explore_coin_var.get()) if hasattr(self, "aux_explore_coin_var") else False
             ),
             "explore_turns": self.aux_explore_turns_var.get() if hasattr(self, "aux_explore_turns_var") else "1",
+            "notify_general_visit": (
+                bool(self.aux_general_visit_var.get()) if hasattr(self, "aux_general_visit_var") else True
+            ),
         }
 
     def _apply_logistics_profile_dict(self, log_data: dict) -> str:
@@ -132,6 +139,8 @@ class InternalAuxMixin:
                 self.aux_explore_coin_var.set(use_coin)
         if hasattr(self, "aux_explore_turns_var") and "explore_turns" in log_data:
             self.aux_explore_turns_var.set(str(log_data["explore_turns"]))
+        if hasattr(self, "aux_general_visit_var") and "notify_general_visit" in log_data:
+            self.aux_general_visit_var.set(bool(log_data["notify_general_visit"]))
         self._update_explore_turns_visibility()
         return "Hậu Cần"
 
@@ -959,6 +968,96 @@ class InternalAuxMixin:
         run_check()
         return None
 
+    def _general_visit_account_key(self) -> str:
+        uname = str(getattr(self, "username", "") or "").strip()
+        gw = getattr(self, "gateway", None)
+        sid = getattr(gw, "server_id", None) if gw else None
+        if sid is None:
+            sid = getattr(getattr(self, "roster", None), "server_id", 0)
+        return f"{uname}@{int(sid or 0)}"
+
+    def _set_general_visit_label(self, text: str, color: str = MUTED, *, async_ui: bool = True) -> None:
+        def apply_ui():
+            try:
+                lbl = getattr(self, "aux_visit_lbl", None)
+                if lbl is not None and lbl.winfo_exists():
+                    lbl.config(text=text, fg=color)
+            except (RuntimeError, tk.TclError):
+                pass
+
+        if async_ui and hasattr(self, "after"):
+            try:
+                self.after(0, apply_ui)
+            except (RuntimeError, tk.TclError):
+                pass
+        else:
+            apply_ui()
+
+    def _check_and_notify_general_visit(self, async_check: bool = True):
+        lock = getattr(self, "_general_visit_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._general_visit_lock = lock
+        if not lock.acquire(blocking=False):
+            return None
+
+        enabled = (
+            bool(self.aux_general_visit_var.get())
+            if hasattr(self, "aux_general_visit_var")
+            else True
+        )
+        account_key = self._general_visit_account_key()
+
+        def run_check():
+            try:
+                if not enabled:
+                    clear_general_visit_alerts(account_key)
+                    self._set_general_visit_label("(Đang tắt)", MUTED, async_ui=async_check)
+                    return
+
+                gw = getattr(self, "gateway", None)
+                roster = getattr(self, "roster", None)
+                cities = list(getattr(roster, "cities", None) or []) if roster else []
+                if gw is None or not cities:
+                    return
+
+                with gateway_city_context(gw):
+                    city = select_general_visit_city(
+                        gw,
+                        cities,
+                        preferred_city_id=getattr(self, "_general_visit_city_id", None),
+                    )
+                    if not city:
+                        return
+                    self._general_visit_city_id = int(city.id)
+                    visits = check_general_visits(gw, city.id, city.name)
+
+                sync_general_visit_alerts(
+                    account_key=account_key,
+                    visits=visits,
+                    config=getattr(self, "notification_config", None),
+                    on_log=lambda m: self._append_bld_log(m) if hasattr(self, "_append_bld_log") else None,
+                )
+                if visits:
+                    text = " | ".join(f"{v.building_name}: {v.general_name}" for v in visits)
+                    self._set_general_visit_label(text, "#ff9f43", async_ui=async_check)
+                else:
+                    self._set_general_visit_label("Không có khách viếng thăm", MUTED, async_ui=async_check)
+            except CaptchaRequired:
+                if hasattr(self, "_append_bld_log"):
+                    self._append_bld_log("⚠️ Kiểm tra Danh tướng viếng thăm gặp Captcha (mã 110).")
+            except Exception as exc:
+                logger.debug(f"Lỗi kiểm tra Danh tướng viếng thăm: {exc}")
+            finally:
+                lock.release()
+
+        if async_check:
+            t = threading.Thread(target=run_check, daemon=True)
+            t.start()
+            return t
+        run_check()
+        return None
+
     def _schedule_periodic_boost_check(self):
         old_id = getattr(self, "_boost_after_id", None)
         if old_id is not None:
@@ -971,6 +1070,7 @@ class InternalAuxMixin:
             if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
                 self._check_and_update_boost_status(async_check=True)
                 self._check_and_run_explore(async_check=True)
+                self._check_and_notify_general_visit(async_check=True)
                 today_str = time.strftime("%Y-%m-%d")
                 if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():
                     if getattr(self, "_last_daily_claim_date", None) != today_str:

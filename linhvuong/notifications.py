@@ -24,6 +24,8 @@ _ = platform.system()  # Warm platform uname cache before tests patch subprocess
 # Bộ nhớ chống lặp: (battle_id, boss_position) -> đã thông báo
 _notified_boss_keys: Set[Tuple[int, int]] = set()
 _notified_system_keys: Set[Tuple[str, str]] = set()
+# Bộ nhớ chống lặp viếng thăm: (account_key, gid) -> general_name đang hiện diện
+_active_general_visits: dict[Tuple[str, int], str] = {}
 _lock = threading.Lock()
 
 
@@ -32,6 +34,7 @@ def reset_notified_bosses() -> None:
     with _lock:
         _notified_boss_keys.clear()
         _notified_system_keys.clear()
+        _active_general_visits.clear()
 
 
 def reset_system_alert(account_key: str, event_type: Optional[str] = None) -> None:
@@ -41,8 +44,19 @@ def reset_system_alert(account_key: str, event_type: Optional[str] = None) -> No
             for k in list(_notified_system_keys):
                 if k[0] == account_key:
                     _notified_system_keys.discard(k)
+            for k in list(_active_general_visits):
+                if k[0] == account_key:
+                    _active_general_visits.pop(k, None)
         else:
             _notified_system_keys.discard((account_key, event_type))
+
+
+def clear_general_visit_alerts(account_key: str) -> None:
+    """Xóa bộ nhớ chống lặp Danh tướng viếng thăm cho tài khoản khi tắt theo dõi hoặc hủy phiên."""
+    with _lock:
+        for k in list(_active_general_visits):
+            if k[0] == account_key:
+                _active_general_visits.pop(k, None)
 
 
 @dataclass(init=False)
@@ -53,6 +67,7 @@ class NotificationConfig:
     telegram_enabled: bool = False
     telegram_alert_captcha: bool = True
     telegram_alert_disconnect: bool = True
+    telegram_alert_general_visit: bool = True
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
@@ -70,6 +85,7 @@ class NotificationConfig:
         notify_web: Optional[bool] = None,
         telegram_alert_captcha: Optional[bool] = None,
         telegram_alert_disconnect: Optional[bool] = None,
+        telegram_alert_general_visit: Optional[bool] = None,
         **kwargs,
     ):
         d_val = notify_desktop_toast if notify_desktop_toast is not None else desktop_enabled
@@ -86,6 +102,9 @@ class NotificationConfig:
 
         self.telegram_alert_captcha = True if telegram_alert_captcha is None else bool(telegram_alert_captcha)
         self.telegram_alert_disconnect = True if telegram_alert_disconnect is None else bool(telegram_alert_disconnect)
+        self.telegram_alert_general_visit = (
+            True if telegram_alert_general_visit is None else bool(telegram_alert_general_visit)
+        )
 
         self.telegram_bot_token = str(kwargs.get("telegram_bot_token", telegram_bot_token)).strip()
         self.telegram_chat_id = str(kwargs.get("telegram_chat_id", telegram_chat_id)).strip()
@@ -149,6 +168,7 @@ class NotificationConfig:
             telegram_enabled=bool(t_val),
             telegram_alert_captcha=bool(data.get("telegram_alert_captcha", True)),
             telegram_alert_disconnect=bool(data.get("telegram_alert_disconnect", True)),
+            telegram_alert_general_visit=bool(data.get("telegram_alert_general_visit", True)),
             telegram_bot_token=str(data.get("telegram_bot_token", "")).strip(),
             telegram_chat_id=str(data.get("telegram_chat_id", "")).strip(),
         )
@@ -161,6 +181,7 @@ class NotificationConfig:
             "telegram_enabled": self.telegram_enabled,
             "telegram_alert_captcha": self.telegram_alert_captcha,
             "telegram_alert_disconnect": self.telegram_alert_disconnect,
+            "telegram_alert_general_visit": self.telegram_alert_general_visit,
             "notify_desktop_toast": self.desktop_enabled,
             "notify_sound": self.sound_enabled,
             "notify_web": self.web_enabled,
@@ -254,6 +275,39 @@ def send_telegram_message(
         return False, f"Không thể kết nối tới Telegram: {e}"
 
 
+def _spawn_desktop_and_telegram_worker(
+    plain_title: str,
+    plain_body: str,
+    telegram_msg: str,
+    cfg: NotificationConfig,
+    on_log: Optional[Callable[[str], None]],
+    thread_name: str,
+    send_desktop: bool = True,
+    allow_telegram: bool = True,
+) -> None:
+    """Chạy gửi Desktop Toast/Sound và Telegram trên luồng nền daemon."""
+    def _worker():
+        if send_desktop:
+            if cfg.desktop_enabled:
+                send_desktop_toast(plain_title, plain_body, sound=cfg.sound_enabled)
+            elif cfg.sound_enabled:
+                play_alert_sound()
+
+        if allow_telegram and cfg.telegram_enabled and cfg.telegram_bot_token and cfg.telegram_chat_id:
+            ok, res_msg = send_telegram_message(
+                bot_token=cfg.telegram_bot_token,
+                chat_id=cfg.telegram_chat_id,
+                message=telegram_msg,
+            )
+            if not ok and on_log:
+                try:
+                    on_log(f"⚠️ [Telegram] {res_msg}")
+                except Exception:
+                    pass
+
+    threading.Thread(target=_worker, name=thread_name, daemon=True).start()
+
+
 def dispatch_boss_alert(
     boss_name: str,
     position: int = 11,
@@ -314,29 +368,109 @@ def dispatch_boss_alert(
         except Exception:
             pass
 
-    def _worker():
-        # 1. Desktop Toast & Sound
-        if cfg.desktop_enabled:
-            send_desktop_toast(plain_title, plain_body, sound=cfg.sound_enabled)
-        elif cfg.sound_enabled:
-            play_alert_sound()
-
-        # 2. Telegram Webhook
-        if cfg.telegram_enabled and cfg.telegram_bot_token and cfg.telegram_chat_id:
-            ok, res_msg = send_telegram_message(
-                bot_token=cfg.telegram_bot_token,
-                chat_id=cfg.telegram_chat_id,
-                message=telegram_msg,
-            )
-            if not ok and on_log:
-                try:
-                    on_log(f"⚠️ [Telegram] {res_msg}")
-                except Exception:
-                    pass
-
-    t = threading.Thread(target=_worker, name="BossNotificationWorker", daemon=True)
-    t.start()
+    _spawn_desktop_and_telegram_worker(
+        plain_title,
+        plain_body,
+        telegram_msg,
+        cfg,
+        on_log,
+        thread_name="BossNotificationWorker",
+    )
     return True
+
+
+def dispatch_general_visit_alert(
+    account_key: str,
+    general_name: str,
+    building_name: str = "Tửu Quán",
+    role_label: str = "danh tướng",
+    city_name: str = "",
+    gid: int = 8,
+    config: Optional[NotificationConfig] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_web_event: Optional[Callable[[dict], None]] = None,
+) -> bool:
+    """Phát thông báo đa kênh khi có Danh Tướng / Danh Sỹ viếng thăm tại Tửu Quán hoặc Quán Trọ."""
+    cfg = config or NotificationConfig()
+    place = f"{building_name} ({city_name})" if city_name else building_name
+    plain_title = f"🌟 {role_label.capitalize()} [{general_name}] viếng thăm!"
+    plain_body = f"Tài khoản {account_key} | {place}"
+
+    telegram_msg = (
+        f"🌟 <b>[Linh Vương] DANH TƯỚNG VIẾNG THĂM!</b>\n"
+        f"👤 <b>Tài khoản:</b> {account_key}\n"
+        f"🏯 <b>Địa điểm:</b> {place}\n"
+        f"🎖️ <b>{role_label.capitalize()}:</b> {general_name}"
+    )
+
+    if on_log:
+        try:
+            on_log(f"🌟 [Viếng thăm] Đang có {role_label} [{general_name}] viếng thăm trong {place}!")
+        except Exception:
+            pass
+
+    if on_web_event and cfg.web_enabled:
+        try:
+            on_web_event({
+                "kind": "general_visit",
+                "account_key": account_key,
+                "title": plain_title,
+                "body": plain_body,
+                "sound": cfg.sound_enabled,
+                "gid": gid,
+                "general_name": general_name,
+                "building_name": building_name,
+                "city_name": city_name,
+            })
+        except Exception:
+            pass
+
+    _spawn_desktop_and_telegram_worker(
+        plain_title,
+        plain_body,
+        telegram_msg,
+        cfg,
+        on_log,
+        thread_name="GeneralVisitNotificationWorker",
+        allow_telegram=cfg.telegram_alert_general_visit,
+    )
+    return True
+
+
+def sync_general_visit_alerts(
+    account_key: str,
+    visits: list[Any],
+    config: Optional[NotificationConfig] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_web_event: Optional[Callable[[dict], None]] = None,
+) -> list[Any]:
+    """Cập nhật trạng thái chống lặp theo phiên viếng thăm và phát thông báo cho khách mới đến."""
+    by_gid = {int(v.gid): v for v in visits if getattr(v, "general_name", "")}
+    newly_arrived: list[Any] = []
+    with _lock:
+        for gid in (8, 7):
+            key = (account_key, gid)
+            visit = by_gid.get(gid)
+            if visit is None:
+                _active_general_visits.pop(key, None)
+                continue
+            if _active_general_visits.get(key) != visit.general_name:
+                _active_general_visits[key] = visit.general_name
+                newly_arrived.append(visit)
+
+    for v in newly_arrived:
+        dispatch_general_visit_alert(
+            account_key=account_key,
+            general_name=v.general_name,
+            building_name=v.building_name,
+            role_label=v.role_label,
+            city_name=v.city_name,
+            gid=int(v.gid),
+            config=config,
+            on_log=on_log,
+            on_web_event=on_web_event,
+        )
+    return newly_arrived
 
 
 def dispatch_system_alert(

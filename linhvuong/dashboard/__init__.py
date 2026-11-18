@@ -314,6 +314,8 @@ class Dashboard(
         self._boost_left_seconds: int = 0
         self._boost_countdown_after_id: Optional[str] = None
         self.aux_tribute_var = tk.BooleanVar(value=False)
+        self.aux_general_visit_var = tk.BooleanVar(value=True)
+        self._general_visit_city_id: Optional[int] = None
         self.aux_explore_var = tk.BooleanVar(value=False)
         self.aux_explore_whip_var = tk.BooleanVar(value=False)
         self.aux_explore_coin_var = tk.BooleanVar(value=False)
@@ -861,6 +863,8 @@ class Dashboard(
                 if getattr(self, "_last_daily_claim_date", None) != today_str:
                     self._last_daily_claim_date = today_str
                     self._do_claim_daily()
+            if hasattr(self, "_check_and_notify_general_visit"):
+                self._check_and_notify_general_visit(async_check=True)
 
         if sync_changed and getattr(self, "_auto_save_enabled", False) and hasattr(self, "_resolve_active_profile_target"):
             try:
@@ -890,6 +894,13 @@ class Dashboard(
         except Exception:
             pass
         self._res_monitor_running = False
+        try:
+            if hasattr(self, "_general_visit_account_key"):
+                from ..notifications import clear_general_visit_alerts
+
+                clear_general_visit_alerts(self._general_visit_account_key())
+        except Exception:
+            pass
         try:
             if getattr(self, "_boost_after_id", None) is not None:
                 self.after_cancel(self._boost_after_id)
