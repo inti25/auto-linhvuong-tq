@@ -880,10 +880,10 @@ class BuildingMixin:
             return
         try:
             lvl = int(self.bld_target_lvl_var.get())
-            if lvl < 0 or lvl > 40:
+            if lvl < 0 or lvl > 45:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 40 (0: dỡ bỏ)!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 45 (0: dỡ bỏ)!")
             return
 
         for item in sel:
@@ -1114,10 +1114,10 @@ class BuildingMixin:
             return
         try:
             lvl = int(self.bld_target_lvl_var.get())
-            if lvl < 0 or lvl > 40:
+            if lvl < 0 or lvl > 45:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 40 (0: dỡ bỏ)!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 45 (0: dỡ bỏ)!")
             return
 
         for item in sel:
@@ -1149,10 +1149,10 @@ class BuildingMixin:
         messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
         try:
             lvl = int(self.bld_target_lvl_var.get())
-            if lvl < 0 or lvl > 40:
+            if lvl < 0 or lvl > 45:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 40 (0: dỡ bỏ)!")
+            messagebox.showerror("Lỗi", "Cấp mục tiêu phải là số nguyên từ 0 đến 45 (0: dỡ bỏ)!")
             return
 
         count = 0
