@@ -2708,7 +2708,7 @@ class AccountSession:
                 summary = configure_equipment(
                     self.gateway,
                     roster=fresh,
-                    target_general_ids=list(general_ids),
+                    selected_general_ids=list(general_ids),
                     mode=mode,
                     reassign_existing=reassign,
                     stop_event=self._equip_stop,
