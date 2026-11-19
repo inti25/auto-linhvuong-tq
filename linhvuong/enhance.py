@@ -439,6 +439,16 @@ def level_after_low_failure(current_level: int, used_protect: bool) -> int:
     return 1
 
 
+def _format_api_error(data: dict[str, Any], ret: int, prefix: str = "Lỗi API") -> str:
+    """Định dạng thông báo lỗi máy chủ, giải thích rõ các mã lỗi đặc thù như ret=27."""
+    err_msg = str(data.get("errMsg") or "").strip()
+    if int(ret) == 27:
+        return f"Tài khoản chưa gia nhập Liên Minh (ret=27: {err_msg})" if err_msg else "Tài khoản chưa gia nhập Liên Minh (ret=27)"
+    if err_msg:
+        return f"{prefix} {ret}: {err_msg}"
+    return f"{prefix} {ret}"
+
+
 def call_enhance_low(
     gateway: GatewayClient,
     item_id: int,
@@ -466,7 +476,7 @@ def call_enhance_low(
         return True, 0, "Thành công"
     if ret == RET_ENHANCE_LOW_FAIL:
         return False, RET_ENHANCE_LOW_FAIL, "Thất bại"
-    return False, ret, f"Lỗi API {ret}"
+    return False, ret, _format_api_error(data, ret, "Lỗi API")
 
 
 def call_enhance_high(gateway: GatewayClient, item_id: int) -> tuple[bool, int, str]:
@@ -485,7 +495,7 @@ def call_enhance_high(gateway: GatewayClient, item_id: int) -> tuple[bool, int, 
         return True, 0, "Thành công"
     if ret == RET_ENHANCE_HIGH_FAIL:
         return False, RET_ENHANCE_HIGH_FAIL, "Thất bại"
-    return False, ret, f"Lỗi API {ret}"
+    return False, ret, _format_api_error(data, ret, "Lỗi API")
 
 
 def call_destroy_equipment(gateway: GatewayClient, equip_id: int) -> tuple[bool, int, str]:
@@ -502,7 +512,7 @@ def call_destroy_equipment(gateway: GatewayClient, equip_id: int) -> tuple[bool,
         raise CaptchaRequired("Hủy trang bị gặp Captcha (mã 110).")
     if ret == 0:
         return True, 0, "Thành công"
-    return False, ret, f"Mã lỗi {ret}"
+    return False, ret, _format_api_error(data, ret, "Mã lỗi")
 
 
 def rollback_materials(used_entries: list[MaterialEntry]) -> None:
@@ -729,7 +739,7 @@ def run_enhance_batch(
                     network_retries = 0
                     if ret not in (0, RET_ENHANCE_LOW_FAIL):
                         rollback_materials(used_entries)
-                        summary.stop_reason = f"Lỗi API {ret}"
+                        summary.stop_reason = msg
                         _emit(on_log, f"❌ Dừng do máy chủ báo lỗi (ret={ret}): {msg}")
                         break
 
@@ -792,7 +802,7 @@ def run_enhance_batch(
 
                     network_retries = 0
                     if ret not in (0, RET_ENHANCE_HIGH_FAIL):
-                        summary.stop_reason = f"Lỗi API {ret}"
+                        summary.stop_reason = msg
                         _emit(on_log, f"❌ Dừng do máy chủ báo lỗi (ret={ret}): {msg}")
                         break
 

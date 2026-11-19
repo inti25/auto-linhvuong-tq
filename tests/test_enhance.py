@@ -343,3 +343,30 @@ def test_run_destroy_batch_handles_stacks_stop_and_captcha():
     )
     assert s_stop.stopped is True
     assert s_stop.destroyed == 0
+
+
+def test_call_enhance_high_formats_alliance_required_error_ret_27():
+    """Mã ret=27 (联盟编号不存在) từ OPT.ashx?id=188 được diễn giải rõ sang tiếng Việt."""
+    gw = FakeGateway(
+        lambda ep, oid, _b: {"ret": 27, "errMsg": "联盟编号不存在"}
+        if ep == "OPT.ashx" and oid == 188
+        else {"ret": 0, "Table": [{"gem_id": PROP_CRYSTAL, "counts": 20}]}
+    )
+    ok, ret, msg = call_enhance_high(gw, 95937)
+    assert ok is False
+    assert ret == 27
+    assert "Liên Minh" in msg and "联盟编号不存在" in msg
+
+    cfg = EnhanceConfig(
+        equip_type=2,
+        role="vo",
+        item_id=95937,
+        item_type_id=2142,
+        start_level=9,
+        target_level=10,
+        loop_count=1,
+    )
+    summary = run_enhance_batch(gw, cfg, sleep=lambda _s: None)
+    assert summary.completed_items == 0
+    assert summary.final_level == 9
+    assert "Liên Minh" in summary.stop_reason
