@@ -6,6 +6,7 @@ thời gian thực mà hoàn toàn không phụ thuộc Tkinter.
 """
 
 from collections import deque
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import re
@@ -13,6 +14,14 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
+
+_GAME_TZ = timezone(timedelta(hours=7))
+
+
+def _game_today_str(now: Optional[datetime] = None) -> str:
+    """Trả về chuỗi YYYY-MM-DD theo múi giờ game (UTC+7 / Việt Nam)."""
+    dt = now.astimezone(_GAME_TZ) if now is not None else datetime.now(_GAME_TZ)
+    return dt.strftime("%Y-%m-%d")
 
 import requests
 
@@ -656,16 +665,27 @@ class AccountSession:
         self._aux_stop.clear()
         self._aux_wakeup.clear()
 
+        checks = (
+            ("boost", self._check_boost_once),
+            ("explore", self._check_explore_once),
+            ("daily_reward", self._check_daily_reward_once),
+            ("tribute", self._check_tribute_once),
+            ("general_visit", self._check_general_visit_once),
+        )
+
         def _loop():
             while not self._aux_stop.is_set() and not self._destroyed:
-                try:
-                    self._check_boost_once()
-                    self._check_explore_once()
-                    self._check_daily_reward_once()
-                    self._check_tribute_once()
-                    self._check_general_visit_once()
-                except Exception:
-                    pass
+                if not self.captcha_required:
+                    for check_name, check_fn in checks:
+                        if self._aux_stop.is_set() or self._destroyed or self.captcha_required:
+                            break
+                        try:
+                            check_fn()
+                        except CaptchaRequired:
+                            self._handle_captcha(f"Tác vụ nền ({check_name}) gặp Captcha (mã 110).")
+                            break
+                        except Exception as exc:
+                            logger.warning("[%s] Aux check '%s' error: %s", self.account_key, check_name, exc)
                 wait_sec = 60.0
                 aux = self.get_aux_status()
                 if self.profile.building.auto_boost and aux["boost_left_seconds"] > 0:
@@ -717,11 +737,19 @@ class AccountSession:
         self._emit("aux_updated", self.get_aux_status())
 
     def _check_daily_reward_once(self) -> None:
-        today = time.strftime("%Y-%m-%d")
-        if self.profile.logistics.auto_daily_reward and self._last_daily_claim_date != today:
+        if self.captcha_required or not self.profile.logistics.auto_daily_reward:
+            return
+        today = _game_today_str()
+        if self._last_daily_claim_date == today:
+            return
+        task = LogisticsTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
+        try:
+            claimed = task.claim_daily_reward()
+        except CaptchaRequired:
+            self._handle_captcha("Tự nhận thưởng hàng ngày gặp Captcha (mã 110).")
+            return
+        if claimed:
             self._last_daily_claim_date = today
-            task = LogisticsTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
-            task.claim_daily_reward()
 
     # -------------------------------------------------------------------------
     # HỒ SƠ & TRẠNG THÁI TỔNG HỢP
@@ -766,6 +794,7 @@ class AccountSession:
             self.save_profile()
             out = self.profile.to_dict()
         self._emit("profile_updated", out)
+        self._aux_wakeup.set()
         return out
 
     def get_proxy_status(self) -> dict:
@@ -1580,8 +1609,17 @@ class AccountSession:
         threading.Thread(target=lambda: task.comfort_city_if_needed(city_id), daemon=True).start()
 
     def claim_daily_reward(self) -> None:
-        task = LogisticsTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
-        threading.Thread(target=lambda: task.claim_daily_reward(), daemon=True).start()
+        def _run() -> None:
+            task = LogisticsTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
+            try:
+                if task.claim_daily_reward():
+                    self._last_daily_claim_date = _game_today_str()
+            except CaptchaRequired:
+                self._handle_captcha("Nhận thưởng hàng ngày gặp Captcha (mã 110).")
+            except Exception as exc:
+                self.append_log("logistics", f"❌ Lỗi nhận thưởng hàng ngày: {exc}")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def tribute_city(self, city_id: int, building_gid: int = 1) -> None:
         def _worker():
@@ -1601,7 +1639,7 @@ class AccountSession:
     def _check_tribute_once(self) -> None:
         """Cống quận tự động tối đa 1 lần/ngày cho các Thành đang bật Xây (bỏ qua Doanh trại)."""
         lg = self.profile.logistics
-        today = time.strftime("%Y-%m-%d")
+        today = _game_today_str()
         if not lg.tribute_enabled or self._tribute_last_date == today:
             return
         self._tribute_last_date = today
@@ -2985,6 +3023,7 @@ class AccountSession:
             self.engine.resume(tid)
         self.append_log("global", "▶️ Đã xác nhận giải Captcha — tiếp tục các tác vụ tạm dừng.")
         self._emit("status_changed", self.get_status_snapshot())
+        self._aux_wakeup.set()
 
     def rotate_proxy(self) -> dict:
         if not self.proxy_pool:
@@ -3451,7 +3490,7 @@ class WorkspaceManager:
                 acc_sess.reload_roster()
             except Exception as exc:
                 acc_sess.append_log("global", f"⚠️ Không thể tải danh sách thành ngay sau đăng nhập: {exc}")
-            acc_sess.start_aux_loop()
+        acc_sess.start_aux_loop()
 
         self._broadcast(canonical, "accounts_changed", {"accounts": self.list_accounts()})
         return acc_sess
