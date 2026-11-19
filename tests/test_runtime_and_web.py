@@ -1178,3 +1178,82 @@ def test_web_equip_and_tactician_run_forward_selected_general_ids(tmp_path, monk
         assert sess._tac_status.startswith("Hoàn tất:")
 
     wm.graceful_shutdown()
+
+
+def test_aux_loop_daily_reward_isolation_retry_timezone_and_captcha(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from linhvuong.tasks.base import CaptchaRequired
+
+    reset_notified_bosses()
+    monkeypatch.setattr(runtime_mod, "login", lambda *a, **kw: None)
+    monkeypatch.setattr(runtime_mod, "fetch_roster", lambda gw: _fake_roster())
+
+    fixed_utc = datetime(2026, 11, 19, 21, 25, 0, tzinfo=timezone.utc)
+    assert hasattr(runtime_mod, "_game_today_str"), "_game_today_str chưa được định nghĩa trong runtime"
+    assert runtime_mod._game_today_str(fixed_utc) == "2026-11-20"
+
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    responses = iter([
+        {"ret": -1},          # Lần 1: lỗi tạm thời -> KHÔNG khóa ngày hôm nay
+        CaptchaRequired,      # Lần 2: gặp Captcha 110 -> pause & không khóa ngày hôm nay
+        {"ret": 0},           # Lần 3 (sau resume): thành công -> khóa ngày hôm nay
+    ])
+    opt63_calls = []
+
+    def fake_call(gw, page, action_id, payload=None, **kw):
+        if page == "OPT.ashx" and action_id == 63:
+            opt63_calls.append((page, action_id, dict(payload or {})))
+            nxt = next(responses)
+            if nxt is CaptchaRequired:
+                raise CaptchaRequired("Yêu cầu Captcha")
+            return nxt
+        return {"ret": 0}
+
+    monkeypatch.setattr(runtime_mod.GatewayClient, "call", fake_call)
+    monkeypatch.setattr(runtime_mod.AccountSession, "_check_boost_once", MagicMock(side_effect=RuntimeError("boom boost")))
+    monkeypatch.setattr(runtime_mod.AccountSession, "_check_explore_once", lambda self: None)
+    monkeypatch.setattr(runtime_mod.AccountSession, "_check_tribute_once", lambda self: None)
+
+    sess = wm.login_account(
+        server_id=53,
+        username="dailyuser",
+        password="pw",
+        fetch_initial_roster=False,
+    )
+    try:
+        assert sess._aux_thread is not None and sess._aux_thread.is_alive()
+
+        with patch.object(runtime_mod, "_game_today_str", return_value="2026-11-20"):
+            prof = sess.profile.to_dict()
+            prof["logistics"]["auto_daily_reward"] = True
+            sess.import_profile(prof)
+
+            import time as _t
+            deadline = _t.monotonic() + 2.0
+            while len(opt63_calls) < 1 and _t.monotonic() < deadline:
+                _t.sleep(0.02)
+
+            sess._aux_stop.set()
+            sess._aux_wakeup.set()
+            sess._aux_thread.join(timeout=2.0)
+
+            assert len(opt63_calls) == 1
+            assert sess._last_daily_claim_date is None
+
+            sess._check_daily_reward_once()
+            assert len(opt63_calls) == 2
+            assert sess.captcha_required is True
+            assert sess._last_daily_claim_date is None
+
+            sess._check_daily_reward_once()
+            assert len(opt63_calls) == 2
+
+            sess.resume_after_captcha()
+            assert sess.captcha_required is False
+            assert sess._aux_wakeup.is_set()
+            sess._check_daily_reward_once()
+            assert len(opt63_calls) == 3
+            assert sess._last_daily_claim_date == "2026-11-20"
+    finally:
+        wm.graceful_shutdown()
