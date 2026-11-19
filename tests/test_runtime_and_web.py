@@ -1136,3 +1136,45 @@ def test_web_armament_rename_equip_and_logistics_endpoints(tmp_path, monkeypatch
         assert lg["army_transfer_loop"] is False
 
     wm.graceful_shutdown()
+
+
+def test_web_equip_and_tactician_run_forward_selected_general_ids(tmp_path, monkeypatch):
+    import time
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="pw")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "pw"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 53, "username": "eqweb", "password": "pw"},
+        ).status_code == 200
+
+        sess = wm.get_session("eqweb @ S53")
+        sess.gateway.call = lambda *a, **kw: {"ret": 0, "list": []}
+
+        r_eq = client.post(
+            "/api/accounts/eqweb%20%40%20S53/equip/run",
+            json={"mode": "assign", "general_ids": [1], "reassign": False},
+        )
+        assert r_eq.status_code == 200
+
+        r_tac = client.post(
+            "/api/accounts/eqweb%20%40%20S53/tactician/run",
+            json={"mode": "remove", "general_ids": [1], "reassign": False},
+        )
+        assert r_tac.status_code == 200
+
+        deadline = time.monotonic() + 2.0
+        while (sess._equip_running or sess._tac_running) and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        assert "Lỗi" not in sess._equip_status, f"Equip failed: {sess._equip_status} | {sess.get_logs('equip')}"
+        assert sess._equip_status.startswith("Hoàn tất:")
+        assert "Lỗi" not in sess._tac_status, f"Tactician failed: {sess._tac_status} | {sess.get_logs('tactician')}"
+        assert sess._tac_status.startswith("Hoàn tất:")
+
+    wm.graceful_shutdown()
