@@ -3724,6 +3724,44 @@ def test_dashboard_binhman_goidan_attack_action_config_runtime_and_profile(tmp_p
         dash.destroy()
 
 
+def test_dashboard_transfer_mode_radio_switches_ui_and_syncs_profile():
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        assert dash.log_transfer_mode_var.get() == "market"
+        assert dash.log_market_frame.winfo_manager() == "pack"
+        assert dash.log_army_frame.winfo_manager() == ""
+
+        dash.log_transfer_mode_var.set("army")
+        dash._on_transfer_mode_changed()
+        assert dash.log_army_frame.winfo_manager() == "pack"
+        assert dash.log_market_frame.winfo_manager() == ""
+
+        dash.army_xfer_from_combo.current(0)
+        dash.army_xfer_to_combo.current(1)
+        dash._select_weapon_in_combo(dash.army_xfer_weapon_combo, 452)
+        dash._army_xfer_selected_gids = {1001}
+        dash.army_xfer_loop_var.set(False)
+        dash._market_xfer_orders = [{"from_city_id": 15230, "to_city_id": 15231, "army_id": 108, "amount": 2500}]
+
+        collected = dash._collect_logistics_profile_dict()
+        assert collected["transfer_mode"] == "army"
+        assert collected["army_transfer_weapon_id"] == 452
+        assert collected["army_transfer_general_ids"] == [1001]
+        assert collected["army_transfer_loop"] is False
+        assert collected["transfer_orders"][0]["army_id"] == 108
+
+        collected["transfer_mode"] = "market"
+        dash._apply_logistics_profile_dict(collected)
+        assert dash.log_transfer_mode_var.get() == "market"
+        assert dash.log_market_frame.winfo_manager() == "pack"
+        assert len(dash.log_transfers_tree.get_children()) == 1
+    finally:
+        dash.destroy()
+
+
 
 
 

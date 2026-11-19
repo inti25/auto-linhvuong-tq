@@ -418,9 +418,15 @@ class LogisticsProfile:
     explore_use_whip: bool = False
     explore_use_coin: bool = False
     explore_turns: str = "1"
-    # ADR-0042: hàng đợi Chuyển quân giới chạy lặp + Cống quận tự động
+    # ADR-0042 + Chuyển quân giới 2 chế độ (Chợ / Quân đội)
+    transfer_mode: str = "market"  # "market" | "army"
     transfer_orders: list[dict] = field(default_factory=list)  # {from_city_id,to_city_id,army_id,amount}
     transfer_interval: str = "60"
+    army_transfer_from_city_id: int = 0
+    army_transfer_to_city_id: int = 0
+    army_transfer_weapon_id: int = 406
+    army_transfer_general_ids: list[int] = field(default_factory=list)
+    army_transfer_loop: bool = True
     tribute_enabled: bool = False
     tribute_building_gid: int = 1  # 1: Quan Phủ, 2: Tường Thành
 
@@ -432,6 +438,8 @@ class LogisticsProfile:
         use_coin = bool(data.get("explore_use_coin", False))
         if use_whip and use_coin:
             use_coin = False
+        raw_mode = str(data.get("transfer_mode", "market")).strip().lower()
+        transfer_mode = raw_mode if raw_mode in ("market", "army") else "market"
         orders: list[dict] = []
         raw_orders = data.get("transfer_orders")
         if isinstance(raw_orders, list):
@@ -445,6 +453,28 @@ class LogisticsProfile:
                     })
                 except (KeyError, TypeError, ValueError):
                     continue
+        raw_gids = data.get("army_transfer_general_ids")
+        army_gids: list[int] = []
+        if isinstance(raw_gids, list):
+            for g in raw_gids:
+                try:
+                    gi = int(g)
+                    if gi > 0 and gi not in army_gids:
+                        army_gids.append(gi)
+                except (TypeError, ValueError):
+                    continue
+        try:
+            army_from = int(data.get("army_transfer_from_city_id", 0) or 0)
+        except (TypeError, ValueError):
+            army_from = 0
+        try:
+            army_to = int(data.get("army_transfer_to_city_id", 0) or 0)
+        except (TypeError, ValueError):
+            army_to = 0
+        try:
+            army_wid = int(data.get("army_transfer_weapon_id", 406) or 406)
+        except (TypeError, ValueError):
+            army_wid = 406
         try:
             t_gid = int(data.get("tribute_building_gid", 1))
         except (TypeError, ValueError):
@@ -452,8 +482,14 @@ class LogisticsProfile:
         if t_gid not in (1, 2):
             t_gid = 1
         return cls(
+            transfer_mode=transfer_mode,
             transfer_orders=orders,
             transfer_interval=str(data.get("transfer_interval", "60")),
+            army_transfer_from_city_id=army_from,
+            army_transfer_to_city_id=army_to,
+            army_transfer_weapon_id=army_wid,
+            army_transfer_general_ids=army_gids,
+            army_transfer_loop=bool(data.get("army_transfer_loop", True)),
             tribute_enabled=bool(data.get("tribute_enabled", False)),
             tribute_building_gid=t_gid,
             army_type_idx=int(data.get("army_type_idx", 0)),

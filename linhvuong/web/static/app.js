@@ -25,7 +25,8 @@
     selectedDtCampId: null,
     logiFromId: null,
     logiToId: null,
-    logiType: "1",
+    logiType: "108",
+    cityWeaponsCache: {},
     chestType: null,
     chestCityId: null,
     battleIdInput: "0",
@@ -663,6 +664,8 @@
     if (tacLbl) tacLbl.textContent = aux.tactician_status || "Sẵn sàng";
     const xferLbl = $("xfer-status-lbl");
     if (xferLbl) xferLbl.textContent = aux.transfer_status || "Sẵn sàng";
+    const armyXferLbl = $("army-xfer-status-lbl");
+    if (armyXferLbl) armyXferLbl.textContent = aux.army_transfer_status || "Sẵn sàng";
     const armLbl = $("arm-status-lbl");
     if (armLbl) armLbl.textContent = aux.armament_status || "Sẵn sàng";
     const renLbl = $("ren-status-lbl");
@@ -700,6 +703,7 @@
     bindBtn("btn-tgl-nt", t.nienthu?.running, "⏹️ Dừng Niên Thú", "▶️ Bắt đầu Niên Thú");
     bindBtn("btn-tgl-craft", t.crafting?.running, "⏹️ Dừng Chế Tạo", "▶️ Chạy Chế Tạo");
     bindBtn("btn-tgl-xfer", t.transfer_loop?.running, "⏹️ Dừng lặp", "▶️ Chạy lặp");
+    bindBtn("btn-tgl-army-xfer", t.army_transfer?.running, "⏹️ Dừng chuyển", "▶️ Chạy lặp");
   }
 
   function fmtSec(s) {
@@ -846,8 +850,13 @@
     const mkOpts = (list, selId, lbl = "display_name") => list.map((x) => `<option value="${x.id}" ${String(x.id) === String(selId) ? "selected" : ""}>${esc(x[lbl])}</option>`).join("");
     const chestSel = state.chestType || state.meta?.chests?.[0]?.name || "";
     const chestOpts = (state.meta?.chests || []).map((c) => `<option value="${esc(c.name)}" ${c.name === chestSel ? "selected" : ""}>${esc(c.name)}</option>`).join("");
-    const baseOptsFrom = mkOpts(bases, state.logiFromId ?? bases[0]?.id);
-    const baseOptsTo = mkOpts(bases, state.logiToId ?? bases[1]?.id ?? bases[0]?.id);
+    const cityListOnly = cities.length ? cities : bases.filter((b) => Number(b.id) > 0);
+    const baseOptsFrom = mkOpts(cityListOnly, state.logiFromId ?? cityListOnly[0]?.id);
+    const baseOptsTo = mkOpts(cityListOnly, state.logiToId ?? cityListOnly[1]?.id ?? cityListOnly[0]?.id);
+    const armyFromCid = Number(logi.army_transfer_from_city_id || cityListOnly[0]?.id || 0);
+    const armyToCid = Number(logi.army_transfer_to_city_id || cityListOnly[1]?.id || cityListOnly[0]?.id || 0);
+    const armyOptsFrom = mkOpts(cityListOnly, armyFromCid);
+    const armyOptsTo = mkOpts(cityListOnly, armyToCid);
     const cityOpts = mkOpts(cities, state.chestCityId ?? cities[0]?.id);
     const campOpts = mkOpts(camps, state.selectedDtCampId ?? camps[0]?.id);
 
@@ -905,12 +914,61 @@
       : (state.meta?.tech_names || []).map((t) => ({ id: t.id, name: t.name, enabled: false, target_level: 20, current_level: snap.tech_levels[t.id] ?? "-" }));
 
     const mergedLogs = [...(snap.logs.building || []), ...(snap.logs.logistics || [])].slice(-250);
-    const ARMY_NAMES = { 1: "Bộ binh", 2: "Kỵ binh", 3: "Cung binh" };
+    const transferWeapons = state.meta?.transfer_weapons || state.meta?.weapons || [];
+    const weaponNameMap = Object.fromEntries(transferWeapons.map((w) => [Number(w.id), w.name]));
+    const buildWeaponOpts = (cid, selectedId, { excludeSiege = false } = {}) => {
+      const stocks = state.cityWeaponsCache[String(cid)] || [];
+      const seen = new Set();
+      const opts = [];
+      for (const s of stocks) {
+        const wid = Number(s.id);
+        if (excludeSiege && wid >= 500) continue;
+        seen.add(wid);
+        const label = `${wid}. ${s.name} [Kho: ${Number(s.count || 0).toLocaleString()}]`;
+        opts.push(`<option value="${wid}" ${wid === Number(selectedId) ? "selected" : ""}>${esc(label)}</option>`);
+      }
+      for (const w of transferWeapons) {
+        const wid = Number(w.id);
+        if (seen.has(wid)) continue;
+        if (excludeSiege && wid >= 500) continue;
+        const label = `${wid}. ${w.name} (${w.category})`;
+        opts.push(`<option value="${wid}" ${wid === Number(selectedId) ? "selected" : ""}>${esc(label)}</option>`);
+      }
+      if (selectedId && !seen.has(Number(selectedId)) && !transferWeapons.some((w) => Number(w.id) === Number(selectedId))) {
+        opts.unshift(`<option value="${selectedId}" selected>${selectedId}. Quân giới #${selectedId}</option>`);
+      }
+      return opts.join("");
+    };
+    const curMarketFromCid = Number(state.logiFromId ?? cityListOnly[0]?.id ?? 0);
+    const marketWeaponOpts = buildWeaponOpts(curMarketFromCid, state.logiType);
+    const armyWeaponId = Number(logi.army_transfer_weapon_id || 406);
+    const armyWeaponOpts = buildWeaponOpts(armyFromCid, armyWeaponId, { excludeSiege: true });
+    const xferMode = logi.transfer_mode === "army" ? "army" : "market";
     const baseNameOf = (id) => bases.find((b) => b.id === Number(id))?.name || id;
     const xferOrders = logi.transfer_orders || [];
     const xferRows = xferOrders.length
-      ? xferOrders.map((o, i) => `<tr class="xfer-row row-clickable ${i === state.selectedXferIdx ? "selected" : ""}" data-idx="${i}"><td>${esc(baseNameOf(o.from_city_id))} ➔ ${esc(baseNameOf(o.to_city_id))}</td><td>${o.amount}</td><td>${esc(ARMY_NAMES[o.army_id] || o.army_id)}</td></tr>`).join("")
-      : '<tr><td colspan="3" style="color:var(--muted);">Chưa có lệnh. Chọn Từ ➔ Đến, loại quân, SL rồi bấm Add.</td></tr>';
+      ? xferOrders.map((o, i) => `<tr class="xfer-row row-clickable ${i === state.selectedXferIdx ? "selected" : ""}" data-idx="${i}"><td>${esc(baseNameOf(o.from_city_id))} ➔ ${esc(baseNameOf(o.to_city_id))}</td><td>${Number(o.amount).toLocaleString()}</td><td>${esc(weaponNameMap[Number(o.army_id)] ? `${o.army_id}. ${weaponNameMap[Number(o.army_id)]}` : `QG #${o.army_id}`)}</td></tr>`).join("")
+      : '<tr><td colspan="3" style="color:var(--muted);">Chưa có lệnh. Chọn Từ ➔ Đến, quân giới, SL rồi bấm Add.</td></tr>';
+    const seenVoIds = new Set();
+    const voGenerals = (snap.roster.generals || []).filter((g) => {
+      if (g.role !== "vo" || seenVoIds.has(Number(g.id))) return false;
+      seenVoIds.add(Number(g.id));
+      return true;
+    });
+    const selectedArmyGids = new Set((logi.army_transfer_general_ids || []).map((x) => Number(x)));
+    const armyGenRows = voGenerals.length
+      ? voGenerals.map((g) => {
+          const checked = selectedArmyGids.has(Number(g.id)) ? "checked" : "";
+          const troops = Number(g.army?.total ?? (Number(g.infantry || 0) + Number(g.cavalry || 0) + Number(g.bowman || 0)));
+          return `<tr>
+            <td><input type="checkbox" class="army-xfer-gen-chk" value="${g.id}" ${checked}/></td>
+            <td>${esc(g.name)}</td>
+            <td>${esc(baseNameOf(g.city_id))}</td>
+            <td>${troops.toLocaleString()}</td>
+            <td>${esc(g.status_text || (g.status === 0 ? "Rảnh" : "Bận"))}</td>
+          </tr>`;
+        }).join("")
+      : '<tr><td colspan="5" style="color:var(--muted);">Chưa có Võ tướng.</td></tr>';
     const tc = snap.tech_current;
     const techCurHtml = tc ? ` <small style="color:var(--info);font-weight:400;">• Đang NC: ${esc(tc.name)} (${esc(tc.cur)} ➔ ${esc(tc.next)}, còn ${esc(tc.left)})</small>` : "";
 
@@ -1104,23 +1162,58 @@
             <div class="progress-track"><div id="chest-progress-fill" class="progress-fill"></div></div>
             <div id="chest-progress-lbl" style="font-size:12px;color:var(--muted);margin:4px 0 8px;">Sẵn sàng</div>
 
-            <div class="card-title" style="margin-top:6px;">🚚 Chuyển Quân Giới</div>
-            <div class="form-row">
-              <select id="logi-from">${baseOptsFrom}</select> ➔ <select id="logi-to">${baseOptsTo}</select>
-              <select id="logi-type"><option value="1" ${state.logiType === "1" ? "selected" : ""}>1: Bộ binh</option><option value="2" ${state.logiType === "2" ? "selected" : ""}>2: Kỵ binh</option><option value="3" ${state.logiType === "3" ? "selected" : ""}>3: Cung binh</option></select>
-              <input id="logi-amt" type="number" value="${esc(logi.amount)}" style="width:75px;" title="SL"/>
-              <button id="btn-xfer-add" class="btn-sm">➕ Add</button>
-              <button id="btn-xfer-del" class="btn-sm">🗑️ Xóa</button>
+            <div class="card-title" style="margin-top:6px;">
+              <span>🚚 Chuyển Quân Giới</span>
+              <span style="font-size:12px;font-weight:400;display:inline-flex;gap:10px;">
+                <label style="cursor:pointer;"><input type="radio" class="xfer-mode-rad" name="xfer-mode" value="market" ${xferMode === "market" ? "checked" : ""}/> 🏪 Bằng Chợ</label>
+                <label style="cursor:pointer;"><input type="radio" class="xfer-mode-rad" name="xfer-mode" value="army" ${xferMode === "army" ? "checked" : ""}/> 🐎 Bằng Quân đội</label>
+              </span>
             </div>
-            <div class="table-wrap" style="max-height:120px;">
-              <table><thead><tr><th>Từ – Đến</th><th>SL</th><th>Quân giới</th></tr></thead><tbody>${xferRows}</tbody></table>
+
+            <div id="xfer-panel-market" style="${xferMode === "market" ? "" : "display:none;"}">
+              <div class="form-row">
+                <select id="logi-from">${baseOptsFrom}</select> ➔ <select id="logi-to">${baseOptsTo}</select>
+                <button id="btn-logi-load-stock" class="btn-sm" title="Tải kho Quân giới thực tế của Thành gửi">🔄 Tải kho</button>
+              </div>
+              <div class="form-row">
+                <select id="logi-type" style="flex:1;min-width:140px;">${marketWeaponOpts}</select>
+                <input id="logi-amt" type="number" min="1" value="${esc(logi.amount)}" style="width:75px;" title="SL"/>
+                <button id="btn-xfer-add" class="btn-sm">➕ Add</button>
+                <button id="btn-xfer-del" class="btn-sm">🗑️ Xóa</button>
+              </div>
+              <div class="table-wrap" style="max-height:120px;">
+                <table><thead><tr><th>Từ – Đến</th><th>SL</th><th>Quân giới</th></tr></thead><tbody>${xferRows}</tbody></table>
+              </div>
+              <div class="form-row" style="margin-top:6px;">
+                <label>Lặp lại (giây) <input id="xfer-int" type="number" min="3" value="${esc(logi.transfer_interval)}" style="width:62px;"/></label>
+                <button id="btn-tgl-xfer" class="btn-success btn-sm">▶️ Chạy lặp</button>
+                <button id="btn-logi-xfer" class="btn-sm" title="Chuyển ngay một lần theo lựa chọn đang nhập">🚚 Chuyển ngay</button>
+              </div>
+              <div id="xfer-status-lbl" style="font-size:12px;color:var(--info);margin-bottom:6px;">Sẵn sàng</div>
             </div>
-            <div class="form-row" style="margin-top:6px;">
-              <label>Lặp lại (giây) <input id="xfer-int" type="number" min="3" value="${esc(logi.transfer_interval)}" style="width:62px;"/></label>
-              <button id="btn-tgl-xfer" class="btn-success btn-sm">▶️ Chạy lặp</button>
-              <button id="btn-logi-xfer" class="btn-sm" title="Chuyển ngay một lần theo lựa chọn đang nhập">🚚 Chuyển ngay</button>
+
+            <div id="xfer-panel-army" style="${xferMode === "army" ? "" : "display:none;"}">
+              <div class="form-row">
+                <label>Thành chứa QG <select id="army-xfer-from">${armyOptsFrom}</select></label> ➔
+                <label>Thành nhận <select id="army-xfer-to">${armyOptsTo}</select></label>
+                <button id="btn-army-xfer-load-stock" class="btn-sm" title="Tải kho Quân giới thực tế của Thành chứa QG">🔄 Tải kho</button>
+              </div>
+              <div class="form-row">
+                <select id="army-xfer-weapon" style="flex:1;min-width:160px;">${armyWeaponOpts}</select>
+                <label><input id="army-xfer-loop" type="checkbox" ${logi.army_transfer_loop !== false ? "checked" : ""}/> Lặp vô tận</label>
+              </div>
+              <div class="table-wrap" style="max-height:130px;">
+                <table>
+                  <thead><tr><th></th><th>Võ tướng</th><th>Căn cứ</th><th>Quân số</th><th>Trạng thái</th></tr></thead>
+                  <tbody>${armyGenRows}</tbody>
+                </table>
+              </div>
+              <div class="form-row" style="margin-top:6px;">
+                <button id="btn-tgl-army-xfer" class="btn-success btn-sm">▶️ Chạy lặp</button>
+                <button id="btn-army-xfer-once" class="btn-sm" title="Chuyển 1 chuyến bằng các Võ tướng đã chọn">🐎 Chuyển 1 chuyến</button>
+              </div>
+              <div id="army-xfer-status-lbl" style="font-size:12px;color:var(--info);margin-bottom:6px;">Sẵn sàng</div>
             </div>
-            <div id="xfer-status-lbl" style="font-size:12px;color:var(--info);margin-bottom:6px;">Sẵn sàng</div>
             <div class="form-row" style="margin-bottom:0;">
               <button id="btn-logi-comfort" class="btn-sm">🕊️ An Dân</button>
               <button id="btn-logi-daily" class="btn-sm">🎁 Điểm danh</button>
@@ -1402,18 +1495,28 @@
       } catch (e) { showToast("Lỗi mở rương", e.message, "error"); }
     };
     $("btn-chest-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/chests/stop`, { method: "POST" });
-    $("btn-logi-xfer").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/transfer`, {
-      method: "POST",
-      body: {
-        from_city_id: Number($("logi-from").value),
-        to_city_id: Number($("logi-to").value),
-        army_id: Number($("logi-type").value),
-        amount: Number($("logi-amt").value || 1000),
-      },
-    });
-    $("btn-logi-comfort").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/comfort`, {
-      method: "POST", body: { city_id: Number($("logi-from").value) },
-    });
+    $("btn-logi-xfer").onclick = async () => {
+      const from = Number($("logi-from").value);
+      const to = Number($("logi-to").value);
+      const wid = Number($("logi-type").value);
+      const amt = Number($("logi-amt").value || 0);
+      if (!from || !to || from === to) return showToast("Cảnh báo", "Vui lòng chọn 2 Thành khác nhau!", "warn");
+      if (wid <= 0 || amt <= 0) return showToast("Cảnh báo", "Vui lòng chọn Quân giới và số lượng > 0!", "warn");
+      try {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/transfer`, {
+          method: "POST",
+          body: { from_city_id: from, to_city_id: to, army_id: wid, amount: amt },
+        });
+        showToast("Chuyển quân giới", "Đã gửi lệnh chuyển qua Chợ.");
+      } catch (e) { showToast("Lỗi Chuyển quân giới", e.message, "error"); }
+    };
+    $("btn-logi-comfort").onclick = () => {
+      const mode = root.querySelector(".xfer-mode-rad:checked")?.value || (logi.transfer_mode === "army" ? "army" : "market");
+      const cid = mode === "army" ? Number($("army-xfer-to").value) : Number($("logi-from").value);
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/comfort`, {
+        method: "POST", body: { city_id: cid },
+      });
+    };
     $("btn-logi-daily").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/daily-reward`, { method: "POST" });
     $("btn-dt-start").onclick = async () => {
       try {
@@ -1440,9 +1543,93 @@
     $("dt-camp").onchange = updateDtOrigin;
     updateDtOrigin();
 
-    $("logi-from").onchange = () => { state.logiFromId = $("logi-from").value; };
+    const loadCityWeaponStock = async (cid, selectId, excludeSiege = false) => {
+      if (!cid || Number(cid) <= 0) return showToast("Cảnh báo", "Vui lòng chọn Thành hợp lệ!", "warn");
+      try {
+        const resStock = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/city-weapons?city_id=${cid}`);
+        state.cityWeaponsCache[String(cid)] = resStock.items || [];
+        if (selectId === "logi-type" && resStock.items?.length) {
+          if (!resStock.items.some((x) => Number(x.id) === Number(state.logiType))) {
+            state.logiType = String(resStock.items[0].id);
+          }
+        }
+        if (selectId === "army-xfer-weapon" && resStock.items?.length) {
+          const firstNonSiege = resStock.items.find((x) => !excludeSiege || Number(x.id) < 500);
+          if (firstNonSiege && !resStock.items.some((x) => Number(x.id) === Number(logi.army_transfer_weapon_id))) {
+            logi.army_transfer_weapon_id = Number(firstNonSiege.id);
+            scheduleProfileSave({ logistics: { army_transfer_weapon_id: logi.army_transfer_weapon_id } });
+          }
+        }
+        renderActiveTab();
+        showToast("Đã tải kho", `Tìm thấy ${(resStock.items || []).length} loại Quân giới tại Thành ${baseNameOf(cid)}.`);
+      } catch (e) { showToast("Lỗi tải kho", e.message, "error"); }
+    };
+
+    root.querySelectorAll(".xfer-mode-rad").forEach((r) => {
+      r.onchange = () => {
+        if (!r.checked) return;
+        logi.transfer_mode = r.value;
+        scheduleProfileSave({ logistics: { transfer_mode: r.value } });
+        $("xfer-panel-market").style.display = r.value === "market" ? "" : "none";
+        $("xfer-panel-army").style.display = r.value === "army" ? "" : "none";
+      };
+    });
+
+    $("logi-from").onchange = () => { state.logiFromId = $("logi-from").value; renderActiveTab(); };
     $("logi-to").onchange = () => { state.logiToId = $("logi-to").value; };
     $("logi-type").onchange = () => { state.logiType = $("logi-type").value; };
+    $("btn-logi-load-stock").onclick = () => loadCityWeaponStock(Number($("logi-from").value), "logi-type", false);
+
+    const saveArmyXferCfg = () => {
+      const gids = [...root.querySelectorAll(".army-xfer-gen-chk:checked")].map((c) => Number(c.value)).filter((n) => n > 0);
+      logi.army_transfer_from_city_id = Number($("army-xfer-from").value || 0);
+      logi.army_transfer_to_city_id = Number($("army-xfer-to").value || 0);
+      logi.army_transfer_weapon_id = Number($("army-xfer-weapon").value || 406);
+      logi.army_transfer_general_ids = gids;
+      logi.army_transfer_loop = $("army-xfer-loop").checked;
+      scheduleProfileSave({
+        logistics: {
+          army_transfer_from_city_id: logi.army_transfer_from_city_id,
+          army_transfer_to_city_id: logi.army_transfer_to_city_id,
+          army_transfer_weapon_id: logi.army_transfer_weapon_id,
+          army_transfer_general_ids: gids,
+          army_transfer_loop: logi.army_transfer_loop,
+        },
+      });
+    };
+    $("army-xfer-from").onchange = () => { saveArmyXferCfg(); renderActiveTab(); };
+    $("army-xfer-to").onchange = saveArmyXferCfg;
+    $("army-xfer-weapon").onchange = saveArmyXferCfg;
+    $("army-xfer-loop").onchange = saveArmyXferCfg;
+    root.querySelectorAll(".army-xfer-gen-chk").forEach((chk) => (chk.onchange = saveArmyXferCfg));
+    $("btn-army-xfer-load-stock").onclick = () => loadCityWeaponStock(Number($("army-xfer-from").value), "army-xfer-weapon", true);
+
+    const startArmyXfer = async (loopMode) => {
+      saveArmyXferCfg();
+      const from = Number($("army-xfer-from").value);
+      const to = Number($("army-xfer-to").value);
+      const wid = Number($("army-xfer-weapon").value);
+      const gids = [...root.querySelectorAll(".army-xfer-gen-chk:checked")].map((c) => Number(c.value)).filter((n) => n > 0);
+      if (!from || !to || from === to) return showToast("Cảnh báo", "Vui lòng chọn 2 Thành khác nhau!", "warn");
+      if (!gids.length) return showToast("Cảnh báo", "Vui lòng chọn ít nhất 1 Võ tướng!", "warn");
+      try {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/army-transfer/start`, {
+          method: "POST",
+          body: { from_city_id: from, to_city_id: to, weapon_id: wid, general_ids: gids, loop: loopMode },
+        });
+        await refreshSnapshot();
+      } catch (e) { showToast("Lỗi Chuyển bằng Quân đội", e.message, "error"); }
+    };
+    $("btn-tgl-army-xfer").onclick = async () => {
+      const running = state.snapshot?.summary?.tasks?.army_transfer?.running;
+      if (running) {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/army-transfer/stop`, { method: "POST" });
+        await refreshSnapshot();
+      } else {
+        await startArmyXfer($("army-xfer-loop").checked);
+      }
+    };
+    $("btn-army-xfer-once").onclick = () => startArmyXfer(false);
     $("chest-city").onchange = () => { state.chestCityId = $("chest-city").value; };
 
     // Rương cấp tài khoản không cần chọn Thành
@@ -1481,7 +1668,7 @@
     $("btn-xfer-add").onclick = () => {
       const from = Number($("logi-from").value);
       const to = Number($("logi-to").value);
-      if (!from || !to || from === to) return showToast("Cảnh báo", "Vui lòng chọn thành đi và thành đến khác nhau!", "warn");
+      if (!from || !to || from === to) return showToast("Cảnh báo", "Vui lòng chọn 2 Thành khác nhau!", "warn");
       const amt = Math.max(1, Number($("logi-amt").value || 1));
       logi.transfer_orders = [...(logi.transfer_orders || []), { from_city_id: from, to_city_id: to, army_id: Number($("logi-type").value), amount: amt }];
       scheduleProfileSave({ logistics: { transfer_orders: logi.transfer_orders } });
@@ -1489,7 +1676,7 @@
     };
     $("btn-xfer-del").onclick = () => {
       const i = state.selectedXferIdx;
-      if (i < 0 || i >= (logi.transfer_orders || []).length) return showToast("Cảnh báo", "Vui lòng chọn 1 lệnh chuyển quân trong bảng để xóa!", "warn");
+      if (i < 0 || i >= (logi.transfer_orders || []).length) return showToast("Cảnh báo", "Vui lòng chọn 1 lệnh chuyển quân giới trong bảng để xóa!", "warn");
       logi.transfer_orders = logi.transfer_orders.filter((_, k) => k !== i);
       state.selectedXferIdx = -1;
       scheduleProfileSave({ logistics: { transfer_orders: logi.transfer_orders } });
