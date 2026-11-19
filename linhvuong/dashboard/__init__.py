@@ -50,6 +50,7 @@ from .binhman import BinhManMixin
 from .building import BuildingMixin
 from .crafting import CraftingMixin
 from .ditrai import DiTraiMixin
+from .enhance import EnhanceMixin
 from .equip_dialog import EquipDialogMixin
 from .goidan import GoiDanMixin
 from .internal_aux import InternalAuxMixin
@@ -101,6 +102,7 @@ class Dashboard(
     DiTraiMixin,
     BattleMixin,
     NienThuMixin,
+    EnhanceMixin,
     tk.Frame,
 ):
     """Cửa sổ / Frame Dashboard hợp nhất các phân hệ tự động hóa theo mixin."""
@@ -317,6 +319,11 @@ class Dashboard(
         self._chest_thread: Optional[threading.Thread] = None
         self._chest_queue: Optional[queue.Queue] = None
 
+        # Trạng thái Cường Hóa Trang Bị & Hủy Đồ (ADR-0043)
+        self._enhance_running: bool = False
+        self._enhance_stop_event = threading.Event()
+        self._enhance_auto_loaded: bool = False
+
         # Widget log đệm
         self.bld_log_text = tk.Text(self)
         self.logis_log_text = tk.Text(self)
@@ -485,6 +492,22 @@ class Dashboard(
         self.notebook.add(t7, text="🧧 Niên Thú")
         self._build_nien_thu_tab(t7)
 
+        # Tab 8: Cường Hóa Trang Bị & Hủy Đồ
+        t8 = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(t8, text="🔨 Cường Hóa")
+        self._build_enhance_tab(t8)
+
+        def _on_main_tab_changed(_event=None):
+            try:
+                if self.notebook.index(self.notebook.select()) == 7 and not getattr(self, "_enhance_auto_loaded", False):
+                    self._enhance_auto_loaded = True
+                    self._load_enhance_resources()
+                    self._load_enhance_warehouse(getattr(self, "_enh_equip_type", 1))
+            except Exception:
+                pass
+
+        self.notebook.bind("<<NotebookTabChanged>>", _on_main_tab_changed)
+
         # Gắn cơ chế tự động lưu cấu hình khi người dùng chỉnh trên giao diện
         self._bind_auto_save_hooks()
 
@@ -590,6 +613,7 @@ class Dashboard(
                 "bld_log_text",
                 "logis_log_text",
                 "bt_log_text",
+                "enhance_log_text",
             ):
                 widget = getattr(self, attr, None)
                 if widget and hasattr(widget, "winfo_exists"):
@@ -911,6 +935,9 @@ class Dashboard(
                 self._tac_stop_event.set()
             if getattr(self, "_equip_stop_event", None):
                 self._equip_stop_event.set()
+            if getattr(self, "_enhance_stop_event", None):
+                self._enhance_stop_event.set()
+                self._enhance_running = False
             if getattr(self, "_chest_stop_event", None):
                 self._chest_stop_event.set()
                 self._chest_running = False

@@ -138,3 +138,18 @@ def test_gateway_relogin_recent_skips_duplicate_relogin():
     assert res is not None
     assert res.get("ret") == 0
     assert len(session.calls) == 2
+
+
+def test_gateway_parses_relaxed_json_with_table_payload():
+    raw = "{ret:0,Table:[{gem_id:341,counts:12},{gem_id:342,counts:5},{gem_id:354,counts:80}]}"
+    session = MockSession([MockRawResponse(raw)])
+    client = GatewayClient(53, session, sleep=lambda s: None)
+    res = client.call("Common.ashx", 2, {"nid": "1", "_": ""})
+    assert res == {
+        "ret": 0,
+        "Table": [
+            {"gem_id": 341, "counts": 12},
+            {"gem_id": 342, "counts": 5},
+            {"gem_id": 354, "counts": 80},
+        ],
+    }

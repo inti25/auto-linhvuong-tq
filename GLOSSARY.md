@@ -423,6 +423,30 @@ _Avoid_: Đào bảo, quay thưởng, explore
 Cơ chế truy vấn kho đồ đạc và trang bị đang mặc của toàn bộ tướng qua `Common.ashx?id=24` (`lType` ∈ {`1: Mũ`, `2: Vũ khí`, `3: Giáp`, `4: Thú cưỡi`}) và tự động phân bổ hoặc tháo trang bị qua `OPT.ashx?id=58` (`lCityTentID`, `lGeneralID`, `lEquipType`, `lEquipID`; với `lEquipID=0` là tháo đồ). Mã loại `item_type_id = XYZZ` (`item[2]`) quy định ô trang bị ở `X` (`1..4`) và phân hệ ở `Y` (`Y=1` cho **Võ tướng**, `Y=2` cho **Văn quan**). Hệ thống chỉ thao tác trên tướng rảnh (`status == 0`), tách riêng từng hệ và hỗ trợ tùy chọn **Đổi trang bị** (tháo về kho chia lại từ đầu) và **Tháo trang bị**. Với **Võ tướng**, ưu tiên theo cấp độ giảm dần (`Cao → Thấp`) và ghép trang bị theo bậc/phẩm chất giảm dần (`(-level, -item_type_id, item_id)`). Với **Văn quan**, phân bổ thông minh theo 3 tầng ưu tiên (**Thái thú** → **Mưu sĩ đang biên chế** → **Quan văn nhàn rỗi**, trong mỗi tầng xếp theo cấp độ giảm dần `Cao → Thấp`): **Thái thú** ưu tiên chọn trang bị có chỉ số **Nội chính** (`item[6]`) cao nhất trước, nhường trang bị thuần Trí mưu/Mị lực (`Nội chính = 0`) cho **Mưu sĩ đang biên chế** và **Quan văn nhàn rỗi**, sau đó mới vét đồ còn dư trong kho vào các ô còn trống của Thái thú.
 _Avoid_: Mặc đồ ngẫu nhiên, auto-gear chung hệ, đồng bộ đồ mù quáng
 
+**Cường Hóa Trang Bị**:
+Hoạt động nâng cấp bậc cường hóa của trang bị tướng trong kho từ cấp 1 đến cấp 15, chia làm hai giai đoạn (cấp 1→9 dùng Huyền Thiết, Phôi Cường Hóa, Búa Bảo Hộ; cấp 9→15 dùng Pha Lê).
+_Avoid_: Ép đồ, đập đồ, rèn đồ, chế tạo quân giới
+
+**Phôi Cường Hóa**:
+Trang bị phụ chưa sử dụng trong kho được ghép kèm (tối đa 3 ô) vào mỗi lượt cường hóa giai đoạn cấp 1→9 nhằm gia tăng tỷ lệ thành công.
+_Avoid_: Đồ mồi, nguyên liệu ép, fodder
+
+**Huyền Thiết**:
+Vật phẩm tiêu hao cơ bản dùng cho mỗi lượt Cường Hóa Trang Bị ở giai đoạn cấp 1→9.
+_Avoid_: Sắt, đá cường hóa, iron
+
+**Búa Bảo Hộ**:
+Vật phẩm bảo vệ ghép kèm khi Cường Hóa Trang Bị ở giai đoạn cấp 1→9 giúp giữ nguyên cấp độ hiện tại nếu cường hóa thất bại.
+_Avoid_: Bùa chống tụt, bảo hộ phù, hammer
+
+**Pha Lê**:
+Vật phẩm tiêu hao dùng cho mỗi lượt Cường Hóa Trang Bị ở giai đoạn cấp 9→15 với chi phí tăng dần theo cấp độ và không tụt cấp khi thất bại.
+_Avoid_: Ngọc cường hóa, đá tím, crystal
+
+**Hủy Trang Bị**:
+Hành động tiêu hủy vĩnh viễn một hoặc nhiều trang bị chưa mặc trong kho để giải phóng chỗ chứa.
+_Avoid_: Xóa đồ, bán đồ, rã đồ
+
 **Bảng Điều Khiển Web** (`Web Dashboard`):
 Giao diện điều khiển từ xa trên trình duyệt phục vụ quản lý Không Gian Đa Tài Khoản và điều phối các phân hệ tự động hóa khi vận hành bot trên máy chủ không màn hình.
 _Avoid_: Web GUI, trang quản trị, web panel

@@ -840,6 +840,14 @@ class EquipSummary:
     stopped: bool = False
 
 
+def parse_equipment_level(raw_level: Any) -> int:
+    """Chuyển chỉ số cấp 0-based (row[7] từ Common.ashx?id=24/117) sang cấp hiển thị 1-based."""
+    try:
+        return max(1, int(raw_level or 0) + 1)
+    except (ValueError, TypeError):
+        return 1
+
+
 def _parse_inventory_rows_for_type(
     equip_type: int,
     rows: list[Any],
@@ -856,7 +864,7 @@ def _parse_inventory_rows_for_type(
         quantity = max(1, int(row[1] or 1))
         item_type_id = int(row[2] or 0)
         politics = max(0, int(row[6] or 0))
-        level = max(1, int(row[7] or 1))
+        level = parse_equipment_level(row[7])
         general_id = int(row[8] or 0)
         general_name = str(row[9] or "") if len(row) > 9 else ""
         if item_id <= 0 or item_type_id <= 0:

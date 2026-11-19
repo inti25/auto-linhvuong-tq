@@ -154,15 +154,15 @@ class GatewayClient:
                 result = resp.json()
             except ValueError as e:
                 raw_sample = getattr(resp, "text", "") or ""
-                # Hỗ trợ định dạng JSON không chuẩn từ server game (e.g. {ret:198599})
-                m = re.search(r"ret:\s*(\d+)", raw_sample)
-                if m:
-                    result = {"ret": int(m.group(1))}
-                else:
-                    try:
-                        fixed_json = re.sub(r'([{,])\s*([a-zA-Z_]\w*)\s*:', r'\1"\2":', raw_sample)
-                        result = json.loads(fixed_json)
-                    except Exception:
+                # Hỗ trợ định dạng JSON không chuẩn từ server game (e.g. {ret:0,Table:[...]} hoặc {ret:198599})
+                try:
+                    fixed_json = re.sub(r'([{,])\s*([a-zA-Z_]\w*)\s*:', r'\1"\2":', raw_sample)
+                    result = json.loads(fixed_json)
+                except Exception:
+                    m = re.search(r"ret:\s*(-?\d+)", raw_sample)
+                    if m:
+                        result = {"ret": int(m.group(1))}
+                    else:
                         sample = raw_sample[:200]
                         logger.warning(
                             f"Không thể parse JSON từ phản hồi {endpoint}?id={api_id}: {sample} (lỗi: {e})"

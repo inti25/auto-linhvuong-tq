@@ -382,7 +382,7 @@ def test_configure_tacticians_remove_sequential_and_camp_warning():
 
 
 def test_classify_item_role_and_fetch_equipment_inventory():
-    """Phân hệ đúng đồ Võ (x1xx) / đồ Văn (x2xx), tách stack và sắp xếp Cao -> Thấp."""
+    """Phân hệ đúng đồ Võ (x1xx) / đồ Văn (x2xx), tách stack, cấp 0-based row[7]+1 và sắp xếp Cao -> Thấp."""
     assert classify_item_role(1135) == "vo"
     assert classify_item_role(4112) == "vo"
     assert classify_item_role(1220) == "van"
@@ -396,19 +396,27 @@ def test_classify_item_role_and_fetch_equipment_inventory():
             return {
                 "ret": 0,
                 "list": [
-                    # [0]=id, [1]=qty, [2]=type_id, ..., [7]=level, [8]=gen_id, [9]=gen_name
-                    [101, 2, 1104, 0, 0, 0, 0, 1, 0, ""],       # 2x Mũ võ Lv.1 trong kho
-                    [102, 1, 1135, 0, 0, 0, 0, 10, 0, ""],      # Mũ võ Lv.10 trong kho
-                    [103, 1, 1120, 0, 0, 0, 0, 10, 0, ""],      # Mũ võ Lv.10 type thấp hơn 1135
-                    [104, 1, 1220, 0, 0, 0, 0, 8, 10, "VanA"],   # Mũ văn Lv.8 đang mặc bởi ID 10
+                    # [0]=id, [1]=qty, [2]=type_id, ..., [7]=level(0-based), [8]=gen_id, [9]=gen_name
+                    [101, 2, 1104, 0, 0, 0, 0, 0, 0, ""],       # 2x Mũ võ Lv.1 (row[7]=0) trong kho
+                    [105, 1, 1106, 0, 0, 0, 0, 1, 0, ""],       # 1x Mũ võ Lv.2 (row[7]=1) trong kho
+                    [102, 1, 1135, 0, 0, 0, 0, 9, 0, ""],       # Mũ võ Lv.10 (row[7]=9) trong kho
+                    [103, 1, 1120, 0, 0, 0, 0, 9, 0, ""],       # Mũ võ Lv.10 type thấp hơn 1135
+                    [104, 1, 1220, 0, 0, 0, 0, 7, 10, "VanA"],   # Mũ văn Lv.8 (row[7]=7) đang mặc bởi ID 10
                 ],
             }
         if lt == "2":  # Vũ khí
             return {
                 "ret": 0,
                 "list": [
-                    [201, 1, 2217, 0, 0, 0, 0, 12, 0, ""],      # Quạt văn Lv.12
-                    [202, 1, 2142, 0, 0, 0, 0, 9, 0, ""],       # Phương thiên kích Lv.9
+                    [201, 1, 2217, 0, 0, 0, 0, 11, 0, ""],      # Quạt văn Lv.12 (row[7]=11)
+                    [202, 1, 2142, 0, 0, 0, 0, 8, 0, ""],       # Phương thiên kích Lv.9 (row[7]=8)
+                ],
+            }
+        if lt == "3":  # Giáp
+            return {
+                "ret": 0,
+                "list": [
+                    [301, 1, 3133, 0, 0, 0, 0, 14, 0, ""],      # Giáp võ Lv.15 (row[7]=14)
                 ],
             }
         return {"ret": 0, "list": []}
@@ -417,10 +425,14 @@ def test_classify_item_role_and_fetch_equipment_inventory():
     inv = fetch_equipment_inventory(gw)
 
     vo_helms = inv.free_items[("vo", 1)]
-    assert [it.item_id for it in vo_helms] == [102, 103, 101, 101]
-    assert [it.item_type_id for it in vo_helms] == [1135, 1120, 1104, 1104]
+    assert [it.item_id for it in vo_helms] == [102, 103, 105, 101, 101]
+    assert [it.level for it in vo_helms] == [10, 10, 2, 1, 1]
+    assert [it.item_type_id for it in vo_helms] == [1135, 1120, 1106, 1104, 1104]
     assert inv.count_free("vo", 2) == 1
+    assert inv.free_items[("vo", 2)][0].level == 9
     assert inv.count_free("van", 2) == 1
+    assert inv.free_items[("van", 2)][0].level == 12
+    assert inv.free_items[("vo", 3)][0].level == 15
     assert inv.equipped_by_general[10][1].item_id == 104
     assert inv.equipped_by_general[10][1].short_label == "武侯纶巾 (Lv.8)"
 
@@ -439,22 +451,22 @@ def test_configure_equipment_priority_role_separation_and_upgrade():
     def _handler(ep, oid, body):
         if ep == "Common.ashx" and oid == 24:
             lt = body["lType"]
-            if lt == "1":  # Mũ: VoHigh đang mặc 1104 Lv.1; kho có 1135 Lv.10 + Mũ văn 1220 Lv.7 & 1205 Lv.2
+            if lt == "1":  # Mũ: VoHigh đang mặc 1104 Lv.1 (row[7]=0); kho có 1135 Lv.10 (row[7]=9) + Mũ văn 1220 Lv.7 & 1205 Lv.2
                 return {
                     "ret": 0,
                     "list": [
-                        [1001, 1, 1104, 0, 0, 0, 0, 1, 1, "VoHigh"],
-                        [1002, 1, 1135, 0, 0, 0, 0, 10, 0, ""],
-                        [1003, 1, 1220, 0, 0, 0, 0, 7, 0, ""],
-                        [1004, 1, 1205, 0, 0, 0, 0, 2, 0, ""],
+                        [1001, 1, 1104, 0, 0, 0, 0, 0, 1, "VoHigh"],
+                        [1002, 1, 1135, 0, 0, 0, 0, 9, 0, ""],
+                        [1003, 1, 1220, 0, 0, 0, 0, 6, 0, ""],
+                        [1004, 1, 1205, 0, 0, 0, 0, 1, 0, ""],
                     ],
                 }
-            if lt == "2":  # Vũ khí: 1 stack x2 món 2109 Lv.1 + 1 kích 2142 Lv.5
+            if lt == "2":  # Vũ khí: 1 stack x2 món 2109 Lv.1 (row[7]=0) + 1 kích 2142 Lv.5 (row[7]=4)
                 return {
                     "ret": 0,
                     "list": [
-                        [2001, 2, 2109, 0, 0, 0, 0, 1, 0, ""],
-                        [2002, 1, 2142, 0, 0, 0, 0, 5, 0, ""],
+                        [2001, 2, 2109, 0, 0, 0, 0, 0, 0, ""],
+                        [2002, 1, 2142, 0, 0, 0, 0, 4, 0, ""],
                     ],
                 }
             return {"ret": 0, "list": []}
@@ -502,9 +514,9 @@ def test_configure_equipment_reassign_existing_and_unequip_mode():
                 return {
                     "ret": 0,
                     "list": [
-                        [301, 1, 2109, 0, 0, 0, 0, 1, 1, "VoHigh"],   # Tướng cao đang mặc cùi
-                        [302, 1, 2142, 0, 0, 0, 0, 12, 2, "VoLow"],   # Tướng thấp đang mặc xịn
-                        [303, 1, 2217, 0, 0, 0, 0, 9, 3, "VanBusy"],  # Tướng bận không được đụng
+                        [301, 1, 2109, 0, 0, 0, 0, 0, 1, "VoHigh"],   # Tướng cao đang mặc cùi (Lv.1 = row[7]=0)
+                        [302, 1, 2142, 0, 0, 0, 0, 11, 2, "VoLow"],   # Tướng thấp đang mặc xịn (Lv.12 = row[7]=11)
+                        [303, 1, 2217, 0, 0, 0, 0, 8, 3, "VanBusy"],  # Tướng bận không được đụng
                     ],
                 }
             return {"ret": 0, "list": []}
@@ -707,24 +719,24 @@ def test_configure_equipment_smart_civil_mayor_tactician_idle_priority():
                 return {
                     "ret": 0,
                     "list": [
-                        [1001, 1, 1220, 60, 10, 27, 0, 1, 0, ""],   # 武侯纶巾 (Nội chính = 0)
-                        [1002, 1, 1207, 20, 0, 0, 14, 1, 0, ""],   # 状元冠 (Nội chính = 14)
+                        [1001, 1, 1220, 60, 10, 27, 0, 0, 0, ""],   # 武侯纶巾 (Nội chính = 0)
+                        [1002, 1, 1207, 20, 0, 0, 14, 0, 0, ""],   # 状元冠 (Nội chính = 14)
                     ],
                 }
             if lt == "2":
                 return {
                     "ret": 0,
                     "list": [
-                        [2000, 1, 2218, 0, 16, 30, 0, 1, 10, "ThaiThu"],  # 智多星羽扇 (Nội chính = 0)
-                        [2001, 1, 2217, 0, 26, 0, 20, 1, 0, ""],           # 文曲星羽扇 (Nội chính = 20)
+                        [2000, 1, 2218, 0, 16, 30, 0, 0, 10, "ThaiThu"],  # 智多星羽扇 (Nội chính = 0)
+                        [2001, 1, 2217, 0, 26, 0, 20, 0, 0, ""],           # 文曲星羽扇 (Nội chính = 20)
                     ],
                 }
             if lt == "4":
                 return {
                     "ret": 0,
                     "list": [
-                        [4001, 1, 4213, 0, 3, 15, 0, 1, 0, ""],   # 白石 (Nội chính = 0)
-                        [4002, 1, 4205, 0, 0, 10, 0, 1, 0, ""],   # 快航 (Nội chính = 0)
+                        [4001, 1, 4213, 0, 3, 15, 0, 0, 0, ""],   # 白石 (Nội chính = 0)
+                        [4002, 1, 4205, 0, 0, 10, 0, 0, 0, ""],   # 快航 (Nội chính = 0)
                     ],
                 }
             return {"ret": 0, "list": []}
@@ -766,10 +778,10 @@ def test_configure_equipment_smart_civil_mayor_tactician_idle_priority():
             return {
                 "ret": 0,
                 "list": [
-                    [4001, 1, 4213, 0, 3, 15, 0, 1, 0, ""],
-                    [4002, 1, 4205, 0, 0, 10, 0, 1, 0, ""],
-                    [4003, 1, 4201, 0, 0, 2, 0, 1, 0, ""],   # 松风 dư thứ 3 -> vét cho Thái thú ở cuối
-                    [4004, 1, 4202, 0, 0, 4, 0, 1, 0, ""],   # 飞镰 -> nhường cho Nhàn rỗi trước Thái thú
+                    [4001, 1, 4213, 0, 3, 15, 0, 0, 0, ""],
+                    [4002, 1, 4205, 0, 0, 10, 0, 0, 0, ""],
+                    [4003, 1, 4201, 0, 0, 2, 0, 0, 0, ""],   # 松风 dư thứ 3 -> vét cho Thái thú ở cuối
+                    [4004, 1, 4202, 0, 0, 4, 0, 0, 0, ""],   # 飞镰 -> nhường cho Nhàn rỗi trước Thái thú
                 ],
             }
         return {"ret": 0, "list": []}

@@ -725,6 +725,48 @@ def create_app(
         _get_session(account_key).stop_equip_action()
         return {"ok": True}
 
+    @app.get("/api/accounts/{account_key}/enhance/resources", dependencies=[Depends(require_admin)])
+    def enhance_resources(account_key: str) -> dict:
+        try:
+            return {"ok": True, "resources": _get_session(account_key).fetch_enhance_resources()}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/accounts/{account_key}/enhance/items", dependencies=[Depends(require_admin)])
+    def enhance_items(account_key: str, equip_type: int = 1) -> dict:
+        try:
+            return {"ok": True, **_get_session(account_key).fetch_enhance_items(equip_type)}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/accounts/{account_key}/enhance/materials", dependencies=[Depends(require_admin)])
+    def enhance_materials(account_key: str, item_id: int) -> dict:
+        try:
+            return {"ok": True, **_get_session(account_key).fetch_enhance_materials(item_id)}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/enhance/start", dependencies=[Depends(require_admin)])
+    def enhance_start(account_key: str, body: dict = Body(...)) -> dict:
+        try:
+            _get_session(account_key).start_enhance(body)
+            return {"ok": True}
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/enhance/destroy", dependencies=[Depends(require_admin)])
+    def enhance_destroy(account_key: str, body: dict = Body(...)) -> dict:
+        try:
+            _get_session(account_key).start_destroy_equipment(body)
+            return {"ok": True}
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/enhance/stop", dependencies=[Depends(require_admin)])
+    def enhance_stop(account_key: str) -> dict:
+        _get_session(account_key).stop_enhance()
+        return {"ok": True}
+
     def _bad_req(fn):
         try:
             return fn()

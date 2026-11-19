@@ -46,6 +46,17 @@ from .battle import (
     parse_attack_action_combo,
 )
 from .engine import AutomationEngine, TaskStatus
+from .enhance import (
+    DESTROY_WARN_LEVEL,
+    EnhanceConfig,
+    EnhanceProgress,
+    EnhanceResources,
+    fetch_enhance_materials,
+    fetch_enhance_resources,
+    fetch_warehouse_equipment,
+    run_destroy_batch,
+    run_enhance_batch,
+)
 from .gateway import GatewayClient
 from .generals import (
     EQUIP_MODE_ASSIGN,
@@ -173,6 +184,7 @@ LOG_CHANNELS = (
     "chest",
     "armament",
     "rename",
+    "enhance",
 )
 
 
@@ -476,6 +488,12 @@ class AccountSession:
         self._equip_stop = threading.Event()
         self._equip_status = "Sẵn sàng"
         self._equip_inventory: Optional[dict] = None
+
+        self._enhance_running = False
+        self._enhance_stop = threading.Event()
+        self._enhance_thread: Optional[threading.Thread] = None
+        self._enhance_resources = EnhanceResources().to_dict()
+        self._enhance_progress = EnhanceProgress().to_dict()
 
         self._transfer_running = False
         self._transfer_stop = threading.Event()
@@ -804,6 +822,9 @@ class AccountSession:
             "tactician_status": self._tac_status,
             "equip_running": self._equip_running,
             "equip_status": self._equip_status,
+            "enhance_running": self._enhance_running,
+            "enhance_progress": dict(self._enhance_progress),
+            "enhance_resources": dict(self._enhance_resources),
             "transfer_running": self._transfer_running,
             "transfer_status": self._transfer_status,
             "army_transfer_running": self._army_xfer_running,
@@ -2656,6 +2677,192 @@ class AccountSession:
         self._equip_stop.set()
 
     # -------------------------------------------------------------------------
+    # CƯỜNG HÓA TRANG BỊ & HỦY TRANG BỊ (ADR-0043)
+    # -------------------------------------------------------------------------
+    def fetch_enhance_resources(self) -> dict:
+        try:
+            res = fetch_enhance_resources(self.gateway)
+        except CaptchaRequired:
+            self._handle_captcha("Tải tài nguyên cường hóa gặp Captcha (mã 110).")
+            raise RuntimeError("Server yêu cầu xác nhận Captcha (mã 110).")
+        self._enhance_resources = res.to_dict()
+        self._enhance_progress["resources"] = dict(self._enhance_resources)
+        self._emit("aux_updated", self.get_aux_status())
+        return dict(self._enhance_resources)
+
+    def fetch_enhance_items(self, equip_type: int) -> dict:
+        try:
+            grouped = fetch_warehouse_equipment(self.gateway, int(equip_type))
+        except CaptchaRequired:
+            self._handle_captcha("Tải kho trang bị gặp Captcha (mã 110).")
+            raise RuntimeError("Server yêu cầu xác nhận Captcha (mã 110).")
+        return {
+            "equip_type": int(equip_type),
+            "vo": [it.to_dict() for it in grouped.get("vo", [])],
+            "van": [it.to_dict() for it in grouped.get("van", [])],
+        }
+
+    def fetch_enhance_materials(self, item_id: int) -> dict:
+        if int(item_id) <= 0:
+            raise ValueError("Mã trang bị không hợp lệ.")
+        try:
+            pool = fetch_enhance_materials(self.gateway, int(item_id))
+        except CaptchaRequired:
+            self._handle_captcha("Tải Phôi Cường Hóa gặp Captcha (mã 110).")
+            raise RuntimeError("Server yêu cầu xác nhận Captcha (mã 110).")
+        return pool.to_dict()
+
+    def _on_enhance_progress(self, prog: EnhanceProgress) -> None:
+        self._enhance_progress = prog.to_dict()
+        if prog.resources:
+            self._enhance_resources = dict(prog.resources)
+        self._emit("aux_updated", self.get_aux_status())
+
+    def start_enhance(self, payload: dict) -> None:
+        if self._enhance_running:
+            raise RuntimeError("Đang thực thi Cường Hóa hoặc Hủy Trang Bị.")
+        protect_raw = payload.get("protect_from_level")
+        protect_from = None if protect_raw in (None, "", 0, "0") else int(protect_raw)
+        raw_mats = list(payload.get("material_keys") or [])
+        while len(raw_mats) < 3:
+            raw_mats.append("")
+        cfg = EnhanceConfig(
+            equip_type=int(payload.get("equip_type", 0)),
+            role=str(payload.get("role", "")).strip(),
+            item_id=int(payload.get("item_id", 0)),
+            item_type_id=int(payload.get("item_type_id", 0)),
+            start_level=int(payload.get("start_level", 1)),
+            target_level=int(payload.get("target_level", 0)),
+            protect_from_level=protect_from,
+            material_from_level=int(payload.get("material_from_level", 1) or 1),
+            material_keys=(
+                str(raw_mats[0] or "").strip(),
+                str(raw_mats[1] or "").strip(),
+                str(raw_mats[2] or "").strip(),
+            ),
+            loop_count=int(payload.get("loop_count", 1) or 1),
+        )
+        cfg.validate()
+
+        self._enhance_running = True
+        self._enhance_stop.clear()
+        self._enhance_progress = EnhanceProgress(
+            running=True,
+            mode="enhance",
+            status="Đang chuẩn bị cường hóa...",
+            item_type_id=cfg.item_type_id,
+            current_item_id=cfg.item_id,
+            current_level=cfg.start_level,
+            target_level=cfg.target_level,
+            item_index=1,
+            total_items=cfg.loop_count,
+            resources=dict(self._enhance_resources),
+        ).to_dict()
+        self._emit("aux_updated", self.get_aux_status())
+
+        def _worker():
+            try:
+                summary = run_enhance_batch(
+                    self.gateway,
+                    cfg,
+                    stop_event=self._enhance_stop,
+                    on_log=lambda m: self.append_log("enhance", m),
+                    on_progress=self._on_enhance_progress,
+                )
+                self._enhance_resources = summary.resources.to_dict()
+            except CaptchaRequired:
+                self._enhance_progress["running"] = False
+                self._enhance_progress["status"] = "Tạm dừng (Captcha)"
+                self.append_log("enhance", "⚠️ Gặp Captcha (mã 110) — đã dừng cường hóa.")
+                self._handle_captcha("Cường hóa trang bị tạm dừng do Captcha (mã 110).")
+            except Exception as exc:
+                self._enhance_progress["running"] = False
+                self._enhance_progress["status"] = f"❌ Lỗi: {exc}"
+                self.append_log("enhance", f"❌ Lỗi cường hóa: {exc}")
+            finally:
+                self._enhance_running = False
+                self._enhance_progress["running"] = False
+                self._emit("aux_updated", self.get_aux_status())
+
+        self._enhance_thread = threading.Thread(target=_worker, daemon=True)
+        self._enhance_thread.start()
+
+    def start_destroy_equipment(self, payload: dict) -> None:
+        if self._enhance_running:
+            raise RuntimeError("Đang thực thi Cường Hóa hoặc Hủy Trang Bị.")
+        equip_type = int(payload.get("equip_type", 0))
+        role = str(payload.get("role", "")).strip()
+        item_id = int(payload.get("item_id", 0))
+        item_type_id = int(payload.get("item_type_id", 0))
+        level = int(payload.get("level", 1))
+        quantity = int(payload.get("quantity", 1))
+        confirm_high = bool(payload.get("confirm_high_level", False))
+
+        if equip_type not in EQUIP_TYPES:
+            raise ValueError(f"Loại trang bị không hợp lệ: {equip_type}")
+        if role not in ("vo", "van"):
+            raise ValueError(f"Phân hệ không hợp lệ: {role}")
+        if item_id <= 0 or item_type_id <= 0:
+            raise ValueError("Vui lòng chọn trang bị cần hủy.")
+        if quantity < 1:
+            raise ValueError("Số lượng hủy phải >= 1.")
+        if level >= DESTROY_WARN_LEVEL and not confirm_high:
+            raise ValueError(
+                f"Trang bị cấp {level} (>= {DESTROY_WARN_LEVEL}) cần xác nhận bổ sung trước khi hủy."
+            )
+
+        self._enhance_running = True
+        self._enhance_stop.clear()
+        self._enhance_progress = EnhanceProgress(
+            running=True,
+            mode="destroy",
+            status="Đang hủy trang bị...",
+            item_type_id=item_type_id,
+            current_item_id=item_id,
+            current_level=level,
+            target_level=level,
+            destroyed_count=0,
+            destroy_total=quantity,
+            resources=dict(self._enhance_resources),
+        ).to_dict()
+        self._emit("aux_updated", self.get_aux_status())
+
+        def _worker():
+            try:
+                run_destroy_batch(
+                    self.gateway,
+                    equip_type=equip_type,
+                    role=role,
+                    start_item_id=item_id,
+                    item_type_id=item_type_id,
+                    target_level=level,
+                    quantity=quantity,
+                    stop_event=self._enhance_stop,
+                    on_log=lambda m: self.append_log("enhance", m),
+                    on_progress=self._on_enhance_progress,
+                )
+            except CaptchaRequired:
+                self._enhance_progress["running"] = False
+                self._enhance_progress["status"] = "Tạm dừng (Captcha)"
+                self.append_log("enhance", "⚠️ Gặp Captcha (mã 110) — đã dừng hủy trang bị.")
+                self._handle_captcha("Hủy trang bị tạm dừng do Captcha (mã 110).")
+            except Exception as exc:
+                self._enhance_progress["running"] = False
+                self._enhance_progress["status"] = f"❌ Lỗi: {exc}"
+                self.append_log("enhance", f"❌ Lỗi hủy trang bị: {exc}")
+            finally:
+                self._enhance_running = False
+                self._enhance_progress["running"] = False
+                self._emit("aux_updated", self.get_aux_status())
+
+        self._enhance_thread = threading.Thread(target=_worker, daemon=True)
+        self._enhance_thread.start()
+
+    def stop_enhance(self) -> None:
+        self._enhance_stop.set()
+        self.append_log("enhance", "⏹️ Đã gửi yêu cầu dừng tác vụ Cường Hóa / Hủy Trang Bị.")
+
+    # -------------------------------------------------------------------------
     # ĐỒNG BỘ QUÂN GIỚI VÕ TƯỚNG (ADR-0041 / ADR-0042)
     # -------------------------------------------------------------------------
     def fetch_all_armaments(self) -> dict:
@@ -2931,6 +3138,7 @@ class AccountSession:
         self._chest_stop.set()
         self._tac_stop.set()
         self._equip_stop.set()
+        self._enhance_stop.set()
         self._emit("status_changed", self.get_status_snapshot())
 
     def destroy(self) -> None:
