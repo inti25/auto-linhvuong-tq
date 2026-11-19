@@ -809,7 +809,10 @@ function makeEl(tag, id = "", className = "") {
           "btn-nc-clear","dt-origin-lbl","bld-tgt-lvl","btn-bld-up-lvl","btn-bld-down-lvl",
           "btn-bld-mv-up","btn-bld-mv-down","aux-tribute","aux-tribute-gid","btn-tribute-now",
           "aux-general-visit","aux-visit-lbl",
-          "btn-apply-rsrc","btn-xfer-add","btn-xfer-del","xfer-int","btn-tgl-xfer","xfer-status-lbl"
+          "btn-apply-rsrc","btn-xfer-add","btn-xfer-del","xfer-int","btn-tgl-xfer","xfer-status-lbl",
+          "btn-logi-load-stock","army-xfer-from","army-xfer-to","btn-army-xfer-load-stock",
+          "army-xfer-weapon","army-xfer-loop","btn-tgl-army-xfer","btn-army-xfer-once",
+          "army-xfer-status-lbl","xfer-panel-market","xfer-panel-army"
         ];
         for (const cid of ids) {
           const c = makeEl("button", cid, "");
@@ -999,7 +1002,7 @@ def test_transfer_loop_stops_when_garrison_lacks_troops(tmp_path, monkeypatch):
     sess = wm.login_account(server_id=53, username="xfer", password="pw")
     sess.update_profile({
         "logistics": {
-            "transfer_orders": [{"from_city_id": 1001, "to_city_id": -2001, "army_id": 1, "amount": 500}],
+            "transfer_orders": [{"from_city_id": 1001, "to_city_id": 1002, "army_id": 108, "amount": 500}],
             "transfer_interval": "3",
         }
     })
@@ -1008,7 +1011,7 @@ def test_transfer_loop_stops_when_garrison_lacks_troops(tmp_path, monkeypatch):
 
     def _fake_garrison(self, cid):
         # Lượt 1 đủ 500, lượt 2 chỉ còn 100 -> phải dừng vòng lặp
-        return {1: 500} if len(calls) == 0 else {1: 100}
+        return {108: 500} if len(calls) == 0 else {108: 100}
 
     monkeypatch.setattr(runtime_mod.LogisticsTask, "get_garrison_troops", _fake_garrison)
     monkeypatch.setattr(runtime_mod.LogisticsTask, "transfer_army", lambda self, order: calls.append(order.amount) or True)
@@ -1124,5 +1127,60 @@ def test_web_armament_rename_equip_and_logistics_endpoints(tmp_path, monkeypatch
             json={"general_ids": [], "mode": "pair_1_3"},
         )
         assert r_ap_bad.status_code == 400
+
+        assert any(w["id"] == 452 for w in meta["transfer_weapons"])
+
+        monkeypatch.setattr(
+            runtime_mod.LogisticsTask,
+            "get_city_weapon_stocks",
+            lambda self, cid: [{"id": 108, "name": "Bách thắng trường đao", "category_mask": 1, "count": 5000}],
+        )
+        r_cw = client.get("/api/accounts/armuser%20%40%20S53/aux/city-weapons?city_id=1")
+        assert r_cw.status_code == 200
+        assert r_cw.json()["items"][0]["count"] == 5000
+
+        # Chợ: từ == đến hoặc trại (<0) bị từ chối HTTP 400
+        assert client.post(
+            "/api/accounts/armuser%20%40%20S53/aux/transfer",
+            json={"from_city_id": 1, "to_city_id": 1, "army_id": 108, "amount": 10},
+        ).status_code == 400
+        assert client.post(
+            "/api/accounts/armuser%20%40%20S53/aux/transfer",
+            json={"from_city_id": 1, "to_city_id": -2001, "army_id": 108, "amount": 10},
+        ).status_code == 400
+
+        # Quân đội: start/stop + lưu profile transfer_mode="army"
+        monkeypatch.setattr(runtime_mod.ArmyWeaponTransferTask, "run", lambda *a, **kw: "completed:2000")
+        r_ax_bad = client.post(
+            "/api/accounts/armuser%20%40%20S53/aux/army-transfer/start",
+            json={"from_city_id": 1, "to_city_id": 2, "weapon_id": 406, "general_ids": []},
+        )
+        assert r_ax_bad.status_code == 400
+        r_ax = client.post(
+            "/api/accounts/armuser%20%40%20S53/aux/army-transfer/start",
+            json={"from_city_id": 1, "to_city_id": 2, "weapon_id": 406, "general_ids": [1], "loop": False},
+        )
+        assert r_ax.status_code == 200
+        assert client.post("/api/accounts/armuser%20%40%20S53/aux/army-transfer/stop").status_code == 200
+
+        r_prof = client.put(
+            "/api/accounts/armuser%20%40%20S53/profile",
+            json={
+                "logistics": {
+                    "transfer_mode": "army",
+                    "army_transfer_from_city_id": 1,
+                    "army_transfer_to_city_id": 2,
+                    "army_transfer_weapon_id": 452,
+                    "army_transfer_general_ids": [1],
+                    "army_transfer_loop": False,
+                }
+            },
+        )
+        assert r_prof.status_code == 200
+        lg = r_prof.json()["profile"]["logistics"]
+        assert lg["transfer_mode"] == "army"
+        assert lg["army_transfer_weapon_id"] == 452
+        assert lg["army_transfer_general_ids"] == [1]
+        assert lg["army_transfer_loop"] is False
 
     wm.graceful_shutdown()

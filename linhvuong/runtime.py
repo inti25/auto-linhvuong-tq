@@ -98,7 +98,13 @@ from .tasks.building import (
 from .tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
 from .tasks.di_trai import DiTrai
 from .tasks.goi_dan import GoiDan
-from .tasks.logistics import ArmyTransferOrder, LogisticsTask
+from .tasks.logistics import (
+    TRANSFER_WEAPONS_DATA,
+    ArmyTransferOrder,
+    ArmyWeaponTransferTask,
+    LogisticsTask,
+    get_transfer_weapon_name,
+)
 from .tasks.morale import MoraleTrainer
 from .tasks.nien_thu import NienThuTask
 from .tasks.research import TECH_NAMES, ResearchTask, TechPlan
@@ -479,6 +485,10 @@ class AccountSession:
         self._transfer_stop = threading.Event()
         self._transfer_thread: Optional[threading.Thread] = None
         self._transfer_status = "Sẵn sàng"
+        self._army_xfer_running = False
+        self._army_xfer_stop = threading.Event()
+        self._army_xfer_thread: Optional[threading.Thread] = None
+        self._army_xfer_status = "Sẵn sàng"
         self._tribute_last_date: Optional[str] = None
 
         self._arm_running = False
@@ -800,6 +810,8 @@ class AccountSession:
             "equip_status": self._equip_status,
             "transfer_running": self._transfer_running,
             "transfer_status": self._transfer_status,
+            "army_transfer_running": self._army_xfer_running,
+            "army_transfer_status": self._army_xfer_status,
             "armament_running": self._arm_running,
             "armament_status": self._arm_status,
             "rename_running": self._ren_running,
@@ -823,6 +835,7 @@ class AccountSession:
             "resource_monitor": {"running": self._res_monitor_running, "status": "Đang chạy..." if self._res_monitor_running else "Đã dừng"},
             "crafting": {"running": self._craft_running, "status": "Đang chạy..." if self._craft_running else "Đã dừng"},
             "transfer_loop": {"running": self._transfer_running, "status": self._transfer_status},
+            "army_transfer": {"running": self._army_xfer_running, "status": self._army_xfer_status},
             "battle": {"running": self._battle_running, "status": "Đang chạy..." if self._battle_running else "Đã dừng"},
             "morale": {"running": self._morale_running, "status": self._morale_status},
             "ditrai": {"running": self._ditrai_running, "status": self._ditrai_status},
@@ -844,6 +857,7 @@ class AccountSession:
             "resource_monitor": "📦 TN",
             "crafting": "🛡️ Rèn",
             "transfer_loop": "🚚 CQG",
+            "army_transfer": "🐎 CQG-QĐ",
         }
         active = [lbl for tid, lbl in label_map.items() if states.get(tid, {}).get("running")]
         eff_status = "captcha" if self.captcha_required else ("connected" if self.status != "error" else "error")
@@ -1533,10 +1547,33 @@ class AccountSession:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def fetch_city_weapons(self, city_id: int) -> list[dict]:
+        """Tải danh sách Quân giới hiện có trong kho Thành từ Common.ashx?id=16."""
+        if int(city_id) <= 0:
+            return []
+        task = LogisticsTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
+        return task.get_city_weapon_stocks(int(city_id))
+
     def transfer_army(self, from_city_id: int, to_city_id: int, army_id: int, amount: int) -> None:
+        if from_city_id <= 0 or to_city_id <= 0:
+            raise ValueError("Chuyển quân giới bằng Chợ chỉ hỗ trợ giữa các Thành (không hỗ trợ Doanh trại).")
+        if from_city_id == to_city_id:
+            raise ValueError("Thành gửi và Thành nhận phải khác nhau.")
+        if army_id <= 0 or amount <= 0:
+            raise ValueError("Mã Quân giới và số lượng phải lớn hơn 0.")
+
         task = LogisticsTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
         order = ArmyTransferOrder(from_city_id=from_city_id, to_city_id=to_city_id, army_id=army_id, amount=amount)
-        threading.Thread(target=lambda: task.transfer_army(order), daemon=True).start()
+
+        def _worker():
+            try:
+                task.transfer_army(order)
+            except CaptchaRequired:
+                self._handle_captcha("Chuyển quân giới tạm dừng do Captcha (mã 110).")
+            except Exception as exc:
+                self.append_log("logistics", f"❌ Lỗi chuyển quân giới: {exc}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def comfort_city(self, city_id: int) -> None:
         task = LogisticsTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
@@ -1636,7 +1673,7 @@ class AccountSession:
         ]
 
     def start_transfer_loop(self) -> None:
-        """Chạy lặp bảng Chuyển quân giới; dừng ngay khi Thành xuất phát thiếu quân (ADR-0043)."""
+        """Chạy lặp bảng Chuyển quân giới bằng Chợ; dừng ngay khi thiếu quân giới hoặc lỗi."""
         if self._transfer_running:
             return
         orders = self.transfer_loop_orders()
@@ -1654,33 +1691,40 @@ class AccountSession:
                 auto_daily_reward=False,
                 notify=lambda m: self.append_log("logistics", m),
             )
+            stopped_reason: Optional[str] = None
             try:
                 while not self._transfer_stop.is_set():
                     for order in self.transfer_loop_orders():
                         if self._transfer_stop.is_set():
                             break
-                        garrison = task.get_garrison_troops(order.from_city_id)
-                        available = garrison.get(order.army_id, 0)
+                        if order.from_city_id <= 0 or order.to_city_id <= 0 or order.from_city_id == order.to_city_id:
+                            self.append_log("logistics", "⏹️ Lệnh Chuyển quân giới không hợp lệ (cần 2 Thành khác nhau) — dừng.")
+                            stopped_reason = "Đã dừng: lệnh không hợp lệ"
+                            return
+                        stock = task.get_garrison_troops(order.from_city_id)
+                        available = stock.get(order.army_id, 0)
+                        wname = get_transfer_weapon_name(order.army_id)
                         if available < order.amount:
                             self.append_log(
                                 "logistics",
-                                f"⏹️ Thành {order.from_city_id} thiếu quân giới loại {order.army_id} "
-                                f"({available}/{order.amount}) — dừng vòng lặp Chuyển quân giới.",
+                                f"⏹️ Thành {order.from_city_id} thiếu {wname} (ID {order.army_id}: "
+                                f"{available:,}/{order.amount:,}) — dừng vòng lặp Chuyển quân giới.",
                             )
-                            self._transfer_status = "Đã dừng: thiếu quân giới"
+                            stopped_reason = "Đã dừng: thiếu quân giới"
                             return
-                        task.transfer_army(order)
+                        if not task.transfer_army(order):
+                            stopped_reason = "Đã dừng: chuyển thất bại"
+                            return
                     if self._transfer_stop.wait(interval):
                         break
-                if not self._transfer_status.startswith("Đã dừng"):
-                    self._transfer_status = "Đã dừng"
             except CaptchaRequired:
                 self._handle_captcha("Chuyển quân giới tạm dừng do Captcha.")
-                self._transfer_status = "Tạm dừng (Captcha)"
+                stopped_reason = "Tạm dừng (Captcha)"
             except Exception as exc:
                 self.append_log("logistics", f"❌ Lỗi vòng lặp Chuyển quân giới: {exc}")
-                self._transfer_status = f"Lỗi: {exc}"
+                stopped_reason = f"Lỗi: {exc}"
             finally:
+                self._transfer_status = stopped_reason or "Đã dừng"
                 self._transfer_running = False
                 self._emit("aux_updated", self.get_aux_status())
                 self._emit("status_changed", self.get_status_snapshot())
@@ -1694,6 +1738,84 @@ class AccountSession:
         self._transfer_running = False
         self._transfer_stop.set()
         self._transfer_status = "Đã dừng"
+        self._emit("aux_updated", self.get_aux_status())
+        self._emit("status_changed", self.get_status_snapshot())
+
+    def start_army_transfer(
+        self,
+        from_city_id: int,
+        to_city_id: int,
+        weapon_id: int,
+        general_ids: list[int],
+        *,
+        loop: bool = True,
+    ) -> None:
+        """Chạy Chuyển quân giới bằng Quân đội (điều phái Võ tướng qua lại giữa 2 Thành)."""
+        if self._army_xfer_running:
+            raise RuntimeError("Tiến trình Chuyển quân giới bằng Quân đội đang chạy.")
+        if int(from_city_id) <= 0 or int(to_city_id) <= 0:
+            raise ValueError("Chuyển quân giới bằng Quân đội chỉ hỗ trợ giữa các Thành.")
+        if int(from_city_id) == int(to_city_id):
+            raise ValueError("Thành chứa Quân giới và Thành nhận phải khác nhau.")
+        clean_gids = [int(g) for g in general_ids if int(g) > 0]
+        if not clean_gids:
+            raise ValueError("Vui lòng chọn ít nhất 1 Võ tướng.")
+        if int(weapon_id) <= 0:
+            raise ValueError("Vui lòng chọn Quân giới hợp lệ.")
+
+        self._ensure_roster_loaded()
+        self._army_xfer_running = True
+        self._army_xfer_stop.clear()
+        wname = get_transfer_weapon_name(int(weapon_id))
+        self._army_xfer_status = f"Đang chạy ({wname}, {len(clean_gids)} tướng)"
+
+        def _set_status(msg: str) -> None:
+            self._army_xfer_status = msg
+            self._emit("aux_updated", self.get_aux_status())
+
+        def _worker():
+            task = ArmyWeaponTransferTask(self.gateway, notify=lambda m: self.append_log("logistics", m))
+            final_status = "Đã dừng"
+            try:
+                res = task.run(
+                    from_city_id=int(from_city_id),
+                    to_city_id=int(to_city_id),
+                    weapon_id=int(weapon_id),
+                    general_ids=clean_gids,
+                    roster=self.roster,
+                    loop=bool(loop),
+                    stop_event=self._army_xfer_stop,
+                    status_cb=_set_status,
+                )
+                if res.startswith("stopped_out_of_stock"):
+                    final_status = "Đã dừng: hết quân giới nguồn"
+                elif res.startswith("stopped_no_carriers"):
+                    final_status = "Đã dừng: không có tướng hợp lệ"
+                elif res.startswith("stopped_dispatch_failed"):
+                    final_status = "Đã dừng: lỗi điều phái tướng"
+                elif res.startswith("completed"):
+                    final_status = "Hoàn tất"
+            except CaptchaRequired:
+                self._handle_captcha("Chuyển quân giới bằng Quân đội tạm dừng do Captcha.")
+                final_status = "Tạm dừng (Captcha)"
+            except Exception as exc:
+                self.append_log("logistics", f"❌ Lỗi Chuyển quân giới bằng Quân đội: {exc}")
+                final_status = f"Lỗi: {exc}"
+            finally:
+                self._army_xfer_running = False
+                self._army_xfer_status = final_status
+                self._emit("aux_updated", self.get_aux_status())
+                self._emit("status_changed", self.get_status_snapshot())
+
+        self._army_xfer_thread = threading.Thread(target=_worker, daemon=True)
+        self._army_xfer_thread.start()
+        self._emit("aux_updated", self.get_aux_status())
+        self._emit("status_changed", self.get_status_snapshot())
+
+    def stop_army_transfer(self) -> None:
+        self._army_xfer_running = False
+        self._army_xfer_stop.set()
+        self._army_xfer_status = "Đã dừng"
         self._emit("aux_updated", self.get_aux_status())
         self._emit("status_changed", self.get_status_snapshot())
     # -------------------------------------------------------------------------
@@ -2931,6 +3053,8 @@ class AccountSession:
         self._craft_stop.set()
         self._transfer_running = False
         self._transfer_stop.set()
+        self._army_xfer_running = False
+        self._army_xfer_stop.set()
         self._arm_stop.set()
         self._ren_stop.set()
         self._add_pts_stop.set()

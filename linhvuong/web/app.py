@@ -33,6 +33,7 @@ from ..security import SESSION_COOKIE_NAME, VaultError, WebAdminAuth
 from ..tasks.binh_man import MAN_TARGET_OPTIONS
 from ..tasks.building import BUILDING_NAMES, CHEST_MAPPING, chest_needs_city_switch
 from ..tasks.crafting import WEAPONS_DATA
+from ..tasks.logistics import TRANSFER_WEAPONS_DATA
 from ..tasks.research import TECH_NAMES
 from ..tasks.thao_phat import THAOPHAT_MISSIONS
 
@@ -281,6 +282,10 @@ def create_app(
             {"id": wid, "name": wname, "category": wcat}
             for wid, (wname, wcat) in sorted(WEAPONS_DATA.items())
         ]
+        transfer_weapons = [
+            {"id": wid, "name": wname, "category": wcat}
+            for wid, (wname, wcat) in sorted(TRANSFER_WEAPONS_DATA.items())
+        ]
         missions = [
             {"idx": idx, "id": mid, "name": m["name"], "travel_time": m.get("travel_time", 300)}
             for idx, (mid, m) in enumerate(THAOPHAT_MISSIONS.items())
@@ -292,6 +297,7 @@ def create_app(
             "man_targets": [{"id": mid, "label": lbl} for mid, lbl in MAN_TARGET_OPTIONS],
             "chests": chests,
             "weapons": weapons,
+            "transfer_weapons": transfer_weapons,
             "attack_action_options": list(ATTACK_ACTION_COMBO_OPTIONS),
             "formations": [{"id": k, "name": v} for k, v in sorted(FORMATION_NAMES.items())],
             "stratagems": [{"id": k, "name": v} for k, v in sorted(STRATAGEMS.items())],
@@ -583,14 +589,44 @@ def create_app(
         _get_session(account_key).tribute_city(int(body["city_id"]), int(body.get("building_gid", 1)))
         return {"ok": True}
 
+    @app.get("/api/accounts/{account_key}/aux/city-weapons", dependencies=[Depends(require_admin)])
+    def aux_city_weapons(account_key: str, city_id: int) -> dict:
+        try:
+            items = _get_session(account_key).fetch_city_weapons(int(city_id))
+            return {"ok": True, "city_id": int(city_id), "items": items}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/accounts/{account_key}/aux/transfer", dependencies=[Depends(require_admin)])
     def transfer_army(account_key: str, body: dict = Body(...)) -> dict:
-        _get_session(account_key).transfer_army(
-            int(body["from_city_id"]),
-            int(body["to_city_id"]),
-            int(body["army_id"]),
-            int(body["amount"]),
-        )
+        try:
+            _get_session(account_key).transfer_army(
+                int(body["from_city_id"]),
+                int(body["to_city_id"]),
+                int(body["army_id"]),
+                int(body["amount"]),
+            )
+            return {"ok": True}
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/aux/army-transfer/start", dependencies=[Depends(require_admin)])
+    def army_transfer_start(account_key: str, body: dict = Body(...)) -> dict:
+        try:
+            _get_session(account_key).start_army_transfer(
+                from_city_id=int(body["from_city_id"]),
+                to_city_id=int(body["to_city_id"]),
+                weapon_id=int(body["weapon_id"]),
+                general_ids=[int(g) for g in body.get("general_ids", [])],
+                loop=bool(body.get("loop", True)),
+            )
+            return {"ok": True}
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/aux/army-transfer/stop", dependencies=[Depends(require_admin)])
+    def army_transfer_stop(account_key: str) -> dict:
+        _get_session(account_key).stop_army_transfer()
         return {"ok": True}
 
     @app.post("/api/accounts/{account_key}/chests/start", dependencies=[Depends(require_admin)])

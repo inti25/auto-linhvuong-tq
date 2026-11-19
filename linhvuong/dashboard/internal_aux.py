@@ -22,6 +22,13 @@ from ..tasks.building import (
     select_general_visit_city,
     switch_city_verified,
 )
+from ..tasks.logistics import (
+    TRANSFER_WEAPONS_DATA,
+    ArmyTransferOrder,
+    ArmyWeaponTransferTask,
+    LogisticsTask as _DefaultLogisticsTask,
+    get_transfer_weapon_name,
+)
 from .shared import BG, MUTED, resolve_dashboard_symbol
 
 logger = logging.getLogger("linhvuong.dashboard")
@@ -89,7 +96,22 @@ class InternalAuxMixin:
         return "Tài Nguyên"
 
     def _collect_logistics_profile_dict(self) -> dict:
+        army_from_cid = self._resolve_combo_city_id(getattr(self, "army_xfer_from_combo", None), cities_only=True)
+        army_to_cid = self._resolve_combo_city_id(getattr(self, "army_xfer_to_combo", None), cities_only=True)
+        army_wid = self._parse_weapon_id_from_combo(getattr(self, "army_xfer_weapon_combo", None), default=406)
         return {
+            "transfer_mode": (
+                self.log_transfer_mode_var.get()
+                if hasattr(self, "log_transfer_mode_var") and self.log_transfer_mode_var.get() in ("market", "army")
+                else "market"
+            ),
+            "transfer_orders": list(getattr(self, "_market_xfer_orders", [])),
+            "transfer_interval": self.log_interval_var.get() if hasattr(self, "log_interval_var") else "60",
+            "army_transfer_from_city_id": army_from_cid,
+            "army_transfer_to_city_id": army_to_cid,
+            "army_transfer_weapon_id": army_wid,
+            "army_transfer_general_ids": sorted(getattr(self, "_army_xfer_selected_gids", set())),
+            "army_transfer_loop": bool(self.army_xfer_loop_var.get()) if hasattr(self, "army_xfer_loop_var") else True,
             "army_type_idx": self.log_army_combo.current() if hasattr(self, "log_army_combo") else 0,
             "amount": self.log_amount_var.get() if hasattr(self, "log_amount_var") else "1000",
             "auto_daily_reward": bool(self.aux_daily_reward_var.get()) if hasattr(self, "aux_daily_reward_var") else True,
@@ -107,6 +129,38 @@ class InternalAuxMixin:
         }
 
     def _apply_logistics_profile_dict(self, log_data: dict) -> str:
+        if hasattr(self, "log_transfer_mode_var") and "transfer_mode" in log_data:
+            mode = str(log_data.get("transfer_mode", "market"))
+            self.log_transfer_mode_var.set(mode if mode in ("market", "army") else "market")
+            if hasattr(self, "_on_transfer_mode_changed"):
+                self._on_transfer_mode_changed()
+        if "transfer_orders" in log_data and isinstance(log_data["transfer_orders"], list):
+            self._market_xfer_orders = []
+            for o in log_data["transfer_orders"]:
+                try:
+                    self._market_xfer_orders.append({
+                        "from_city_id": int(o["from_city_id"]),
+                        "to_city_id": int(o["to_city_id"]),
+                        "army_id": int(o["army_id"]),
+                        "amount": max(1, int(o["amount"])),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self._render_market_xfer_tree()
+        if hasattr(self, "log_interval_var") and "transfer_interval" in log_data:
+            self.log_interval_var.set(str(log_data["transfer_interval"]))
+        if hasattr(self, "army_xfer_from_combo") and "army_transfer_from_city_id" in log_data:
+            self._select_city_in_combo(self.army_xfer_from_combo, int(log_data["army_transfer_from_city_id"] or 0), cities_only=True)
+        if hasattr(self, "army_xfer_to_combo") and "army_transfer_to_city_id" in log_data:
+            self._select_city_in_combo(self.army_xfer_to_combo, int(log_data["army_transfer_to_city_id"] or 0), cities_only=True)
+        if hasattr(self, "army_xfer_weapon_combo") and "army_transfer_weapon_id" in log_data:
+            self._select_weapon_in_combo(self.army_xfer_weapon_combo, int(log_data["army_transfer_weapon_id"] or 406))
+        if "army_transfer_general_ids" in log_data and isinstance(log_data["army_transfer_general_ids"], list):
+            self._army_xfer_selected_gids = {int(g) for g in log_data["army_transfer_general_ids"] if int(g) > 0}
+            if hasattr(self, "_populate_army_xfer_generals"):
+                self._populate_army_xfer_generals()
+        if hasattr(self, "army_xfer_loop_var") and "army_transfer_loop" in log_data:
+            self.army_xfer_loop_var.set(bool(log_data["army_transfer_loop"]))
         if hasattr(self, "log_army_combo") and "army_type_idx" in log_data:
             try:
                 self.log_army_combo.current(int(log_data["army_type_idx"]))
@@ -1080,25 +1134,385 @@ class InternalAuxMixin:
         except (RuntimeError, tk.TclError):
             pass
 
+    @staticmethod
+    def _parse_weapon_id_from_combo(combo, default: int = 108) -> int:
+        if combo is None:
+            return default
+        raw = str(combo.get() or "").strip()
+        if ":" in raw:
+            head = raw.split(":", 1)[0].strip()
+            if head.isdigit():
+                return int(head)
+        if "." in raw:
+            head = raw.split(".", 1)[0].strip()
+            if head.isdigit():
+                return int(head)
+        return default
+
+    def _resolve_combo_city_id(self, combo, *, cities_only: bool = False) -> int:
+        if combo is None or not getattr(self, "roster", None):
+            return 0
+        pool = self.roster.cities if cities_only else self.roster.bases
+        idx = combo.current()
+        if 0 <= idx < len(pool):
+            return int(pool[idx].id)
+        text = str(combo.get() or "").strip()
+        for b in pool:
+            if b.display_name == text or b.name == text:
+                return int(b.id)
+        return 0
+
+    def _select_city_in_combo(self, combo, city_id: int, *, cities_only: bool = False) -> None:
+        if combo is None or not getattr(self, "roster", None) or not city_id:
+            return
+        pool = self.roster.cities if cities_only else self.roster.bases
+        for idx, b in enumerate(pool):
+            if int(b.id) == int(city_id):
+                if 0 <= idx < len(combo["values"]):
+                    combo.current(idx)
+                break
+
+    @staticmethod
+    def _select_weapon_in_combo(combo, weapon_id: int) -> None:
+        if combo is None:
+            return
+        vals = list(combo["values"] or [])
+        prefix = f"{int(weapon_id)}:"
+        for idx, val in enumerate(vals):
+            if str(val).startswith(prefix):
+                combo.current(idx)
+                return
+
+    def _on_transfer_mode_changed(self):
+        mode = self.log_transfer_mode_var.get() if hasattr(self, "log_transfer_mode_var") else "market"
+        if hasattr(self, "log_market_frame") and hasattr(self, "log_army_frame"):
+            if mode == "army":
+                self.log_market_frame.pack_forget()
+                self.log_army_frame.pack(fill="both", expand=True)
+            else:
+                self.log_army_frame.pack_forget()
+                self.log_market_frame.pack(fill="both", expand=True)
+
+    def _city_display_name(self, city_id: int) -> str:
+        if getattr(self, "roster", None):
+            b = self.roster.base_by_id(city_id)
+            if b:
+                return b.name
+        return str(city_id)
+
+    def _render_market_xfer_tree(self) -> None:
+        if not hasattr(self, "log_transfers_tree"):
+            return
+        self.log_transfers_tree.delete(*self.log_transfers_tree.get_children())
+        for o in getattr(self, "_market_xfer_orders", []):
+            route = f"{self._city_display_name(o['from_city_id'])} ➔ {self._city_display_name(o['to_city_id'])}"
+            wname = f"{o['army_id']}: {get_transfer_weapon_name(o['army_id'])}"
+            self.log_transfers_tree.insert("", "end", values=(route, o["amount"], wname))
+
+    def _refresh_weapon_stock_for(self, city_id: int, combo, *, exclude_siege: bool = False) -> None:
+        if city_id <= 0:
+            messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn Thành hợp lệ để tải kho Quân giới!")
+            return
+        LogisticsTask = resolve_dashboard_symbol("LogisticsTask", _DefaultLogisticsTask)
+
+        def _worker():
+            try:
+                stocks = LogisticsTask(self.gateway, notify=lambda m: self.after(0, self._append_bld_log, m)).get_city_weapon_stocks(city_id)
+            except CaptchaRequired:
+                self.after(0, self._append_bld_log, "⚠️ Tải kho quân giới gặp Captcha (mã 110).")
+                return
+            except Exception as exc:
+                self.after(0, self._append_bld_log, f"❌ Lỗi tải kho quân giới: {exc}")
+                return
+
+            def _apply():
+                if getattr(self, "_destroyed", False):
+                    return
+                self._city_weapons_cache[city_id] = stocks
+                cur_wid = self._parse_weapon_id_from_combo(combo, default=0)
+                seen: set[int] = set()
+                vals: list[str] = []
+                for s in stocks:
+                    wid = int(s["id"])
+                    if exclude_siege and wid >= 500:
+                        continue
+                    seen.add(wid)
+                    vals.append(f"{wid}: {s['name']} [{s['count']:,}]")
+                for wid, (wname, _) in sorted(TRANSFER_WEAPONS_DATA.items()):
+                    if wid in seen or (exclude_siege and wid >= 500):
+                        continue
+                    vals.append(f"{wid}: {wname}")
+                combo["values"] = vals
+                if cur_wid:
+                    self._select_weapon_in_combo(combo, cur_wid)
+                elif vals:
+                    combo.current(0)
+                self._append_bld_log(f"🔄 Đã tải kho Thành {self._city_display_name(city_id)}: {len(stocks)} loại Quân giới.")
+
+            try:
+                self.after(0, _apply)
+            except (RuntimeError, tk.TclError):
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _refresh_market_weapon_stock(self):
+        cid = self._resolve_combo_city_id(getattr(self, "log_from_city_combo", None), cities_only=False)
+        self._refresh_weapon_stock_for(cid, self.log_army_combo, exclude_siege=False)
+
+    def _refresh_army_weapon_stock(self):
+        cid = self._resolve_combo_city_id(getattr(self, "army_xfer_from_combo", None), cities_only=True)
+        self._refresh_weapon_stock_for(cid, self.army_xfer_weapon_combo, exclude_siege=True)
+
     def _add_army_transfer_order(self):
         messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
         f_city = self.log_from_city_combo.get()
         t_city = self.log_to_city_combo.get()
         if not f_city or not t_city or f_city == t_city:
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn thành đi và thành đến khác nhau!")
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 2 Thành đi và đến khác nhau!")
             return
-        army = self.log_army_combo.get()
-        amount = self.log_amount_var.get().strip() or "1"
+        from_cid = self._resolve_combo_city_id(self.log_from_city_combo, cities_only=False)
+        to_cid = self._resolve_combo_city_id(self.log_to_city_combo, cities_only=False)
+        if from_cid < 0 or to_cid < 0:
+            messagebox.showwarning("Cảnh báo", "Chuyển quân giới bằng Chợ chỉ hỗ trợ giữa các Thành (không hỗ trợ Doanh trại)!")
+            return
+        army_label = self.log_army_combo.get()
+        wid = self._parse_weapon_id_from_combo(self.log_army_combo, default=108)
+        try:
+            amt = max(1, int(str(self.log_amount_var.get() or "1").strip()))
+        except ValueError:
+            amt = 1
+        if from_cid > 0 and to_cid > 0:
+            self._market_xfer_orders.append({
+                "from_city_id": from_cid,
+                "to_city_id": to_cid,
+                "army_id": wid,
+                "amount": amt,
+            })
         route = f"{f_city} ➔ {t_city}"
-        self.log_transfers_tree.insert("", "end", values=(route, amount, army))
-        self._append_bld_log(f"➕ Thêm lệnh chuyển quân giới: {route} | SL: {amount} | {army}")
+        self.log_transfers_tree.insert("", "end", values=(route, str(amt), army_label))
+        self._append_bld_log(f"➕ Thêm lệnh chuyển quân giới: {route} | SL: {amt} | {army_label}")
 
     def _delete_army_transfer_order(self):
         messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
         sel = self.log_transfers_tree.selection()
         if not sel:
-            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 lệnh chuyển quân trong bảng để xóa!")
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 lệnh chuyển quân giới trong bảng để xóa!")
             return
+        children = list(self.log_transfers_tree.get_children())
+        indices = sorted((children.index(item) for item in sel if item in children), reverse=True)
+        for idx in indices:
+            if 0 <= idx < len(getattr(self, "_market_xfer_orders", [])):
+                self._market_xfer_orders.pop(idx)
         for item in sel:
             self.log_transfers_tree.delete(item)
         self._append_bld_log("🗑️ Đã xóa lệnh chuyển quân giới đã chọn.")
+
+    def _do_market_transfer_now(self):
+        messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
+        LogisticsTask = resolve_dashboard_symbol("LogisticsTask", _DefaultLogisticsTask)
+        from_cid = self._resolve_combo_city_id(self.log_from_city_combo, cities_only=False)
+        to_cid = self._resolve_combo_city_id(self.log_to_city_combo, cities_only=False)
+        if from_cid <= 0 or to_cid <= 0 or from_cid == to_cid:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 2 Thành đi và đến khác nhau!")
+            return
+        wid = self._parse_weapon_id_from_combo(self.log_army_combo, default=108)
+        try:
+            amt = max(1, int(str(self.log_amount_var.get() or "1").strip()))
+        except ValueError:
+            amt = 1
+        order = ArmyTransferOrder(from_city_id=from_cid, to_city_id=to_cid, army_id=wid, amount=amt)
+        task = LogisticsTask(self.gateway, notify=lambda m: self.after(0, self._append_bld_log, m))
+
+        def _worker():
+            try:
+                task.transfer_army(order)
+            except CaptchaRequired:
+                self.after(0, self._append_bld_log, "⚠️ Chuyển quân giới bằng Chợ gặp Captcha (mã 110)!")
+            except Exception as exc:
+                self.after(0, self._append_bld_log, f"❌ Lỗi chuyển quân giới: {exc}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _toggle_market_transfer_loop(self):
+        messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
+        LogisticsTask = resolve_dashboard_symbol("LogisticsTask", _DefaultLogisticsTask)
+        if self._market_xfer_running:
+            self._market_xfer_running = False
+            self._market_xfer_stop.set()
+            self.log_market_status_var.set("Đã dừng")
+            self.log_market_loop_btn.configure(text="▶️ Chạy lặp", style="Success.TButton")
+            return
+        if not self._market_xfer_orders:
+            messagebox.showwarning("Cảnh báo", "Vui lòng thêm ít nhất 1 lệnh vào bảng hàng đợi!")
+            return
+        try:
+            interval = max(3.0, float(self.log_interval_var.get() or "60"))
+        except ValueError:
+            interval = 60.0
+        self._market_xfer_running = True
+        self._market_xfer_stop.clear()
+        self.log_market_status_var.set(f"Đang chạy lặp mỗi {int(interval)}s")
+        self.log_market_loop_btn.configure(text="⏹️ Dừng lặp", style="Danger.TButton")
+
+        def _loop():
+            task = LogisticsTask(
+                self.gateway,
+                auto_comfort=False,
+                auto_daily_reward=False,
+                notify=lambda m: self.after(0, self._append_bld_log, m),
+            )
+            final_status = "Đã dừng"
+            try:
+                while not self._market_xfer_stop.is_set():
+                    for o in list(self._market_xfer_orders):
+                        if self._market_xfer_stop.is_set():
+                            break
+                        order = ArmyTransferOrder(
+                            from_city_id=int(o["from_city_id"]),
+                            to_city_id=int(o["to_city_id"]),
+                            army_id=int(o["army_id"]),
+                            amount=int(o["amount"]),
+                        )
+                        stock = task.get_garrison_troops(order.from_city_id)
+                        available = stock.get(order.army_id, 0)
+                        if available < order.amount:
+                            wname = get_transfer_weapon_name(order.army_id)
+                            self.after(
+                                0,
+                                self._append_bld_log,
+                                f"⏹️ Thành {order.from_city_id} thiếu {wname} ({available:,}/{order.amount:,}) — dừng lặp.",
+                            )
+                            final_status = "Đã dừng: thiếu quân giới"
+                            return
+                        if not task.transfer_army(order):
+                            final_status = "Đã dừng: chuyển thất bại"
+                            return
+                    if self._market_xfer_stop.wait(interval):
+                        break
+            except CaptchaRequired:
+                self.after(0, self._append_bld_log, "⚠️ Chuyển quân giới tạm dừng do Captcha (mã 110)!")
+                final_status = "Tạm dừng (Captcha)"
+            except Exception as exc:
+                self.after(0, self._append_bld_log, f"❌ Lỗi vòng lặp chuyển quân giới: {exc}")
+                final_status = f"Lỗi: {exc}"
+            finally:
+                def _reset():
+                    self._market_xfer_running = False
+                    if not getattr(self, "_destroyed", False):
+                        self.log_market_status_var.set(final_status)
+                        self.log_market_loop_btn.configure(text="▶️ Chạy lặp", style="Success.TButton")
+                try:
+                    self.after(0, _reset)
+                except (RuntimeError, tk.TclError):
+                    pass
+
+        self._market_xfer_thread = threading.Thread(target=_loop, daemon=True)
+        self._market_xfer_thread.start()
+
+    def _populate_army_xfer_generals(self):
+        if not hasattr(self, "army_xfer_gen_tree") or not getattr(self, "roster", None):
+            return
+        self.army_xfer_gen_tree.delete(*self.army_xfer_gen_tree.get_children())
+        seen_gids: set[int] = set()
+        for b in self.roster.bases:
+            for g in self.roster.generals_of(b.id):
+                if g.role != "vo" or g.id in seen_gids:
+                    continue
+                seen_gids.add(g.id)
+                chk = "☑" if g.id in self._army_xfer_selected_gids else "☐"
+                army = self.roster.army_of(g.id)
+                troops = army.total if army else 0
+                self.army_xfer_gen_tree.insert(
+                    "", "end", iid=str(g.id), text=g.name, values=(chk, b.name, f"{troops:,}")
+                )
+
+    def _on_army_xfer_gen_click(self, event):
+        region = self.army_xfer_gen_tree.identify("region", event.x, event.y)
+        iid = self.army_xfer_gen_tree.identify_row(event.y)
+        if not iid or region == "heading":
+            return
+        try:
+            gid = int(iid)
+        except ValueError:
+            return
+        if gid in self._army_xfer_selected_gids:
+            self._army_xfer_selected_gids.remove(gid)
+        else:
+            self._army_xfer_selected_gids.add(gid)
+        vals = list(self.army_xfer_gen_tree.item(iid, "values"))
+        if vals:
+            vals[0] = "☑" if gid in self._army_xfer_selected_gids else "☐"
+            self.army_xfer_gen_tree.item(iid, values=vals)
+        if hasattr(self, "_schedule_auto_save"):
+            self._schedule_auto_save()
+
+    def _toggle_army_transfer(self):
+        if self._army_xfer_running:
+            self._army_xfer_running = False
+            self._army_xfer_stop.set()
+            self.army_xfer_status_var.set("Đã dừng")
+            self.army_xfer_start_btn.configure(text="▶️ Bắt đầu", style="Success.TButton")
+            return
+        self._start_army_transfer(loop=bool(self.army_xfer_loop_var.get()))
+
+    def _do_army_transfer_once(self):
+        if self._army_xfer_running:
+            return
+        self._start_army_transfer(loop=False)
+
+    def _start_army_transfer(self, *, loop: bool):
+        messagebox = resolve_dashboard_symbol("messagebox", _default_messagebox)
+        from_cid = self._resolve_combo_city_id(self.army_xfer_from_combo, cities_only=True)
+        to_cid = self._resolve_combo_city_id(self.army_xfer_to_combo, cities_only=True)
+        if from_cid <= 0 or to_cid <= 0 or from_cid == to_cid:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 2 Thành chứa và nhận khác nhau!")
+            return
+        wid = self._parse_weapon_id_from_combo(self.army_xfer_weapon_combo, default=406)
+        gids = sorted(self._army_xfer_selected_gids)
+        if not gids:
+            messagebox.showwarning("Cảnh báo", "Vui lòng tích chọn ít nhất 1 Võ tướng!")
+            return
+        self._army_xfer_running = True
+        self._army_xfer_stop.clear()
+        self.army_xfer_status_var.set(f"Đang chạy ({get_transfer_weapon_name(wid)})")
+        self.army_xfer_start_btn.configure(text="⏹️ Dừng", style="Danger.TButton")
+
+        def _worker():
+            task = ArmyWeaponTransferTask(self.gateway, notify=lambda m: self.after(0, self._append_bld_log, m))
+            final_status = "Đã dừng"
+            try:
+                res = task.run(
+                    from_city_id=from_cid,
+                    to_city_id=to_cid,
+                    weapon_id=wid,
+                    general_ids=gids,
+                    roster=self.roster,
+                    loop=loop,
+                    stop_event=self._army_xfer_stop,
+                    status_cb=lambda m: self.after(0, self.army_xfer_status_var.set, m),
+                )
+                if res.startswith("completed"):
+                    final_status = "Hoàn tất"
+                elif res.startswith("stopped_out_of_stock"):
+                    final_status = "Đã dừng: hết quân giới nguồn"
+            except CaptchaRequired:
+                self.after(0, self._append_bld_log, "⚠️ Chuyển bằng Quân đội tạm dừng do Captcha (mã 110)!")
+                final_status = "Tạm dừng (Captcha)"
+            except Exception as exc:
+                self.after(0, self._append_bld_log, f"❌ Lỗi chuyển bằng Quân đội: {exc}")
+                final_status = f"Lỗi: {exc}"
+            finally:
+                def _reset():
+                    self._army_xfer_running = False
+                    if not getattr(self, "_destroyed", False):
+                        self.army_xfer_status_var.set(final_status)
+                        self.army_xfer_start_btn.configure(text="▶️ Bắt đầu", style="Success.TButton")
+                try:
+                    self.after(0, _reset)
+                except (RuntimeError, tk.TclError):
+                    pass
+
+        self._army_xfer_thread = threading.Thread(target=_worker, daemon=True)
+        self._army_xfer_thread.start()

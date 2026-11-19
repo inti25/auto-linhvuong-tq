@@ -330,6 +330,19 @@ class Dashboard(
         self._explore_stop_requested: bool = False
         self.log_amount_var = tk.StringVar(value="1")
         self.log_interval_var = tk.StringVar(value="60")
+        self.log_transfer_mode_var = tk.StringVar(value="market")
+        self._market_xfer_orders: list[dict] = []
+        self._market_xfer_running: bool = False
+        self._market_xfer_stop = threading.Event()
+        self._market_xfer_thread: Optional[threading.Thread] = None
+        self.log_market_status_var = tk.StringVar(value="Sẵn sàng")
+        self._army_xfer_running: bool = False
+        self._army_xfer_stop = threading.Event()
+        self._army_xfer_thread: Optional[threading.Thread] = None
+        self._army_xfer_selected_gids: set[int] = set()
+        self.army_xfer_loop_var = tk.BooleanVar(value=True)
+        self.army_xfer_status_var = tk.StringVar(value="Sẵn sàng")
+        self._city_weapons_cache: dict[int, list[dict]] = {}
         self.dt_dest_x_var = tk.StringVar(value="")
         self.dt_dest_y_var = tk.StringVar(value="")
 
@@ -784,6 +797,17 @@ class Dashboard(
                 if all_base_items and not combo.get():
                     combo.current(0)
 
+            if hasattr(self, "army_xfer_from_combo") and hasattr(self, "army_xfer_to_combo"):
+                self.army_xfer_from_combo["values"] = city_items
+                self.army_xfer_to_combo["values"] = city_items
+                if city_items:
+                    if not self.army_xfer_from_combo.get() or self.army_xfer_from_combo.get() not in city_items:
+                        self.army_xfer_from_combo.current(0)
+                    if not self.army_xfer_to_combo.get() or self.army_xfer_to_combo.get() not in city_items:
+                        self.army_xfer_to_combo.current(1 if len(city_items) > 1 else 0)
+            if hasattr(self, "_populate_army_xfer_generals"):
+                self._populate_army_xfer_generals()
+
             if hasattr(self, "tp_city_combo") and all_base_items:
                 self.tp_city_combo["values"] = all_base_items
                 tp_cid = getattr(self, "_pending_tp_city_id", None)
@@ -933,6 +957,12 @@ class Dashboard(
             if getattr(self, "_chest_stop_event", None):
                 self._chest_stop_event.set()
                 self._chest_running = False
+            if getattr(self, "_market_xfer_stop", None):
+                self._market_xfer_stop.set()
+                self._market_xfer_running = False
+            if getattr(self, "_army_xfer_stop", None):
+                self._army_xfer_stop.set()
+                self._army_xfer_running = False
         except Exception:
             pass
         try:

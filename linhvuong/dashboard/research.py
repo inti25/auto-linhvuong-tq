@@ -9,7 +9,11 @@ from pathlib import Path
 from tkinter import messagebox as _default_messagebox, ttk
 from typing import Optional
 
-from ..tasks.logistics import ArmyTransferOrder, LogisticsTask as _DefaultLogisticsTask
+from ..tasks.logistics import (
+    TRANSFER_WEAPONS_DATA,
+    ArmyTransferOrder,
+    LogisticsTask as _DefaultLogisticsTask,
+)
 from ..tasks.research import ResearchTask as _DefaultResearchTask, TECH_NAMES, TechPlan
 from .runners import ResearchAutoRunner as _DefaultResearchAutoRunner
 from .shared import BG, CARD, FG, resolve_dashboard_symbol
@@ -214,10 +218,11 @@ class ResearchMixin:
         self.log_to_city_combo = ttk.Combobox(logis_form, state="readonly", width=18)
         self.log_to_city_combo.grid(row=0, column=3, sticky="w", padx=4, pady=4)
 
-        tk.Label(logis_form, text="Loại quân:", bg=CARD, fg=FG).grid(row=1, column=0, sticky="w", pady=4)
+        tk.Label(logis_form, text="Quân giới:", bg=CARD, fg=FG).grid(row=1, column=0, sticky="w", pady=4)
         self.log_army_combo = ttk.Combobox(logis_form, state="readonly", width=18)
-        self.log_army_combo["values"] = ["1: Bộ binh", "2: Kỵ binh", "3: Cung binh"]
-        self.log_army_combo.current(0)
+        self.log_army_combo["values"] = [f"{wid}: {wname}" for wid, (wname, _) in sorted(TRANSFER_WEAPONS_DATA.items())]
+        if self.log_army_combo["values"]:
+            self.log_army_combo.current(0)
         self.log_army_combo.grid(row=1, column=1, sticky="w", padx=4, pady=4)
 
         tk.Label(logis_form, text="Số lượng:", bg=CARD, fg=FG).grid(row=1, column=2, sticky="w", pady=4)
@@ -658,7 +663,8 @@ class ResearchMixin:
             return
         from_id = bases[f_idx].id
         to_id = bases[t_idx].id
-        army_id = self.log_army_combo.current() + 1
+        raw_w = str(self.log_army_combo.get() or "")
+        army_id = int(raw_w.split(":", 1)[0].strip()) if ":" in raw_w and raw_w.split(":", 1)[0].strip().isdigit() else 108
         amount = int(self.log_amount_var.get() or "1000")
 
         task = LogisticsTask(self.gateway, notify=lambda m: self.after(0, self._append_logis_log, m))

@@ -124,6 +124,30 @@ def fetch_armament(gateway: GatewayClient, general_id: int, base_id: int) -> Opt
     return parse_armament(resp)
 
 
+def fetch_general_armament_state(
+    gateway: GatewayClient, general_id: int, base_id: int
+) -> tuple[Optional[ArmamentSnapshot], dict[str, int], int, int]:
+    """Đọc Common.ashx?id=12: trả về (snapshot, {branch: troop_count}, owner_city_id, ret)."""
+    resp = gateway.call(
+        "Common.ashx",
+        12,
+        {"lGeneralID": str(int(general_id)), "lCityID": str(int(base_id)), "_": ""},
+    )
+    if not isinstance(resp, dict):
+        return None, {}, 0, -1
+    ret = _to_int(resp.get("ret"), -1)
+    if ret != 0:
+        return None, {}, 0, ret
+    snap = parse_armament(resp)
+    counts = {
+        SCOPE_INFANTRY: _to_int(resp["infantry_equip"][0]) if isinstance(resp.get("infantry_equip"), (list, tuple)) and resp["infantry_equip"] else 0,
+        SCOPE_CAVALRY: _to_int(resp["cavalry_equip"][0]) if isinstance(resp.get("cavalry_equip"), (list, tuple)) and resp["cavalry_equip"] else 0,
+        SCOPE_BOWMAN: _to_int(resp["bowman_equip"][0]) if isinstance(resp.get("bowman_equip"), (list, tuple)) and resp["bowman_equip"] else 0,
+    }
+    owner_city_id = _to_int(resp.get("owner_city_id"), int(base_id))
+    return snap, counts, owner_city_id, 0
+
+
 def normalize_scopes(scopes: Optional[Any]) -> tuple[str, ...]:
     if scopes is None:
         return ALL_SCOPES

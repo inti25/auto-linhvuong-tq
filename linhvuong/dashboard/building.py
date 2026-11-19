@@ -9,6 +9,7 @@ from tkinter import messagebox as _default_messagebox, ttk
 from typing import Optional
 
 from ..tasks.building import BUILDING_NAMES, CHEST_MAPPING, BuildingPlan, BuildingTask as _DefaultBuildingTask
+from ..tasks.logistics import TRANSFER_WEAPONS_DATA
 from .runners import BuildingAutoRunner as _DefaultBuildingAutoRunner
 from .shared import BG, CARD, FG, MUTED, resolve_dashboard_symbol
 
@@ -732,47 +733,94 @@ class BuildingMixin:
         self.chest_progress_bar = ttk.Progressbar(f_chest, orient="horizontal", mode="determinate", maximum=100)
         self.chest_progress_bar.pack(fill="x", padx=4, pady=(0, 4))
 
-        # 3. Chuyển Quân Giới
+        # 3. Chuyển Quân Giới (Radio: Bằng Chợ / Bằng Quân đội)
         f_logis = ttk.LabelFrame(col3, text="Chuyển Quân Giới", style="Card.TLabelframe")
         f_logis.pack(fill="both", expand=True, padx=2, pady=4)
 
-        r_l1 = tk.Frame(f_logis, bg=BG)
+        r_mode = tk.Frame(f_logis, bg=BG)
+        r_mode.pack(fill="x", padx=4, pady=(2, 2))
+        tk.Radiobutton(
+            r_mode,
+            text="🏪 Bằng Chợ",
+            variable=self.log_transfer_mode_var,
+            value="market",
+            command=self._on_transfer_mode_changed,
+            bg=BG,
+            fg=FG,
+            selectcolor="#2a2e45",
+            activebackground=BG,
+            activeforeground=FG,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left", padx=(0, 8))
+        tk.Radiobutton(
+            r_mode,
+            text="🐎 Bằng Quân đội",
+            variable=self.log_transfer_mode_var,
+            value="army",
+            command=self._on_transfer_mode_changed,
+            bg=BG,
+            fg=FG,
+            selectcolor="#2a2e45",
+            activebackground=BG,
+            activeforeground=FG,
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side="left")
+
+        weapon_vals = [f"{wid}: {wname}" for wid, (wname, _) in sorted(TRANSFER_WEAPONS_DATA.items())]
+        army_weapon_vals = [f"{wid}: {wname}" for wid, (wname, _) in sorted(TRANSFER_WEAPONS_DATA.items()) if wid < 500]
+
+        # 3a. Khung Chuyển bằng Chợ
+        self.log_market_frame = tk.Frame(f_logis, bg=BG)
+
+        r_l1 = tk.Frame(self.log_market_frame, bg=BG)
         r_l1.pack(fill="x", padx=4, pady=1)
         tk.Label(r_l1, text="Từ", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
-        self.log_from_city_combo = ttk.Combobox(r_l1, state="readonly", width=11)
+        self.log_from_city_combo = ttk.Combobox(r_l1, state="readonly", width=10)
         self.log_from_city_combo.pack(side="left", padx=2)
         tk.Label(r_l1, text="Đến", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
-        self.log_to_city_combo = ttk.Combobox(r_l1, state="readonly", width=11)
+        self.log_to_city_combo = ttk.Combobox(r_l1, state="readonly", width=10)
         self.log_to_city_combo.pack(side="left", padx=2)
-
-        r_l2 = tk.Frame(f_logis, bg=BG)
-        r_l2.pack(fill="x", padx=4, pady=1)
-        tk.Label(r_l2, text="Vận ch", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
-        self.log_army_combo = ttk.Combobox(
-            r_l2, state="readonly", width=10, values=["1: Bộ binh", "2: Kỵ binh", "3: Cung binh"]
+        ttk.Button(r_l1, text="🔄", style="Action.TButton", width=2, command=self._refresh_market_weapon_stock).pack(
+            side="left", padx=1
         )
-        self.log_army_combo.set("1: Bộ binh")
+
+        r_l2 = tk.Frame(self.log_market_frame, bg=BG)
+        r_l2.pack(fill="x", padx=4, pady=1)
+        tk.Label(r_l2, text="QG", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.log_army_combo = ttk.Combobox(
+            r_l2, state="readonly", width=14, values=weapon_vals
+        )
+        default_mkt_idx = next((i for i, v in enumerate(weapon_vals) if v.startswith("108:")), 0)
+        if weapon_vals:
+            self.log_army_combo.current(default_mkt_idx)
         self.log_army_combo.pack(side="left", padx=2)
         tk.Label(r_l2, text="SL", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
-        ttk.Entry(r_l2, textvariable=self.log_amount_var, width=5).pack(side="left", padx=2)
+        ttk.Entry(r_l2, textvariable=self.log_amount_var, width=6).pack(side="left", padx=2)
 
-        r_l3 = tk.Frame(f_logis, bg=BG)
+        r_l3 = tk.Frame(self.log_market_frame, bg=BG)
         r_l3.pack(fill="x", padx=4, pady=1)
         tk.Label(r_l3, text="Lặp lại", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
         ttk.Entry(r_l3, textvariable=self.log_interval_var, width=4).pack(side="left", padx=2)
         tk.Label(r_l3, text="giây", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=2)
 
-        r_l_btn = tk.Frame(f_logis, bg=BG)
+        r_l_btn = tk.Frame(self.log_market_frame, bg=BG)
         r_l_btn.pack(fill="x", padx=4, pady=2)
         ttk.Button(r_l_btn, text="Add", style="Success.TButton", command=self._add_army_transfer_order).pack(
-            side="left", expand=True, fill="x", padx=2
+            side="left", expand=True, fill="x", padx=1
         )
         ttk.Button(r_l_btn, text="Xóa", style="Danger.TButton", command=self._delete_army_transfer_order).pack(
-            side="left", expand=True, fill="x", padx=2
+            side="left", expand=True, fill="x", padx=1
+        )
+        self.log_market_loop_btn = ttk.Button(
+            r_l_btn, text="▶️ Chạy lặp", style="Success.TButton", command=self._toggle_market_transfer_loop
+        )
+        self.log_market_loop_btn.pack(side="left", expand=True, fill="x", padx=1)
+        ttk.Button(r_l_btn, text="🚚 Ngay", style="Action.TButton", command=self._do_market_transfer_now).pack(
+            side="left", expand=True, fill="x", padx=1
         )
 
         self.log_transfers_tree = ttk.Treeview(
-            f_logis,
+            self.log_market_frame,
             columns=("route", "amount", "army"),
             show="headings",
             selectmode="browse",
@@ -781,10 +829,73 @@ class BuildingMixin:
         self.log_transfers_tree.heading("route", text="Từ – Đến")
         self.log_transfers_tree.heading("amount", text="SL")
         self.log_transfers_tree.heading("army", text="Quân giới")
-        self.log_transfers_tree.column("route", width=120)
-        self.log_transfers_tree.column("amount", width=40, anchor="center")
-        self.log_transfers_tree.column("army", width=70, anchor="center")
+        self.log_transfers_tree.column("route", width=110)
+        self.log_transfers_tree.column("amount", width=45, anchor="center")
+        self.log_transfers_tree.column("army", width=85, anchor="center")
         self.log_transfers_tree.pack(fill="both", expand=True, padx=4, pady=2)
+
+        tk.Label(
+            self.log_market_frame, textvariable=self.log_market_status_var, bg=BG, fg="#7dd3fc", font=("Segoe UI", 8), anchor="w"
+        ).pack(fill="x", padx=4, pady=(0, 2))
+
+        # 3b. Khung Chuyển bằng Quân đội
+        self.log_army_frame = tk.Frame(f_logis, bg=BG)
+
+        r_a1 = tk.Frame(self.log_army_frame, bg=BG)
+        r_a1.pack(fill="x", padx=4, pady=1)
+        tk.Label(r_a1, text="Kho", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.army_xfer_from_combo = ttk.Combobox(r_a1, state="readonly", width=10)
+        self.army_xfer_from_combo.pack(side="left", padx=2)
+        tk.Label(r_a1, text="Nhận", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.army_xfer_to_combo = ttk.Combobox(r_a1, state="readonly", width=10)
+        self.army_xfer_to_combo.pack(side="left", padx=2)
+        ttk.Button(r_a1, text="🔄", style="Action.TButton", width=2, command=self._refresh_army_weapon_stock).pack(
+            side="left", padx=1
+        )
+
+        r_a2 = tk.Frame(self.log_army_frame, bg=BG)
+        r_a2.pack(fill="x", padx=4, pady=1)
+        tk.Label(r_a2, text="QG", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+        self.army_xfer_weapon_combo = ttk.Combobox(r_a2, state="readonly", width=17, values=army_weapon_vals)
+        default_army_idx = next((i for i, v in enumerate(army_weapon_vals) if v.startswith("406:")), 0)
+        if army_weapon_vals:
+            self.army_xfer_weapon_combo.current(default_army_idx)
+        self.army_xfer_weapon_combo.pack(side="left", padx=2)
+        ttk.Checkbutton(r_a2, text="Lặp", variable=self.army_xfer_loop_var).pack(side="left", padx=2)
+
+        self.army_xfer_gen_tree = ttk.Treeview(
+            self.log_army_frame,
+            columns=("chk", "city", "troops"),
+            show="tree headings",
+            selectmode="browse",
+            height=3,
+        )
+        self.army_xfer_gen_tree.heading("#0", text="Võ tướng")
+        self.army_xfer_gen_tree.heading("chk", text="✓")
+        self.army_xfer_gen_tree.heading("city", text="Thành")
+        self.army_xfer_gen_tree.heading("troops", text="Quân")
+        self.army_xfer_gen_tree.column("#0", width=95)
+        self.army_xfer_gen_tree.column("chk", width=28, anchor="center")
+        self.army_xfer_gen_tree.column("city", width=65, anchor="center")
+        self.army_xfer_gen_tree.column("troops", width=55, anchor="e")
+        self.army_xfer_gen_tree.pack(fill="both", expand=True, padx=4, pady=2)
+        self.army_xfer_gen_tree.bind("<ButtonRelease-1>", self._on_army_xfer_gen_click)
+
+        r_a_btn = tk.Frame(self.log_army_frame, bg=BG)
+        r_a_btn.pack(fill="x", padx=4, pady=2)
+        self.army_xfer_start_btn = ttk.Button(
+            r_a_btn, text="▶️ Bắt đầu", style="Success.TButton", command=self._toggle_army_transfer
+        )
+        self.army_xfer_start_btn.pack(side="left", expand=True, fill="x", padx=2)
+        ttk.Button(r_a_btn, text="🐎 1 Chuyến", style="Action.TButton", command=self._do_army_transfer_once).pack(
+            side="left", expand=True, fill="x", padx=2
+        )
+
+        tk.Label(
+            self.log_army_frame, textvariable=self.army_xfer_status_var, bg=BG, fg="#7dd3fc", font=("Segoe UI", 8), anchor="w"
+        ).pack(fill="x", padx=4, pady=(0, 2))
+
+        self._on_transfer_mode_changed()
 
         # 4. Hàng nút chân trang Cột 3
         footer = tk.Frame(col3, bg=BG)
