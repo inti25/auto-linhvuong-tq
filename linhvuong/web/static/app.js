@@ -39,6 +39,7 @@
     pendingSelfProfileExpiresAt: 0,
     auxSyncedAt: 0,
     auxTimer: null,
+    enhanceUi: {},
   };
 
   const $ = (id) => document.getElementById(id);
@@ -601,6 +602,7 @@
       armament: "log-armament",
       rename: "log-rename",
       add_points: "log-add-points",
+      enhance: "log-enhance",
     };
     if (channel === "building" || channel === "logistics") {
       const mb = $("log-modal-box");
@@ -694,6 +696,7 @@
     if (eqLbl) eqLbl.textContent = aux.equip_status || "Sẵn sàng";
     const ntSt = $("nt-status-lbl");
     if (ntSt) ntSt.textContent = ntStatusText();
+    if (typeof updateEnhanceAuxDom === "function") updateEnhanceAuxDom(aux);
   }
 
   function ntStatusText() {
@@ -832,6 +835,7 @@
       overview: renderOverviewTab,
       battle: renderBattleTab,
       nienthu: renderNienThuTab,
+      enhance: renderEnhanceTab,
     };
     renderers[state.activeTab](root);
     root.dataset.renderedKey = state.currentKey || "";
@@ -2424,6 +2428,482 @@
     root.querySelectorAll(".nt-gen-chk").forEach((c) => (c.onchange = syncNt));
     $("btn-tgl-nt").onclick = () => toggleTask("nienthu");
     $("btn-clr-nt").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/logs/clear`, { method: "POST", body: { channel: "nienthu" } });
+  }
+
+  // TAB 8: CƯỜNG HÓA TRANG BỊ & HỦY ĐỒ (ADR-0045)
+  function getEnhanceUi(key = state.currentKey) {
+    if (!key) return null;
+    if (!state.enhanceUi[key]) {
+      state.enhanceUi[key] = {
+        equipType: 1,
+        roleTab: "vo",
+        filterText: "",
+        itemsByRole: { vo: [], van: [] },
+        autoLoaded: false,
+        selectedItem: null,
+        materials: [],
+        targetLevel: 7,
+        protectFrom: "7",
+        materialFrom: "1",
+        mat1: "",
+        mat2: "",
+        mat3: "",
+        loopCount: "1",
+        wasRunning: false,
+      };
+    }
+    return state.enhanceUi[key];
+  }
+
+  async function loadEnhanceResources() {
+    if (!state.currentKey) return;
+    try {
+      const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/enhance/resources`);
+      if (state.snapshot?.aux) {
+        state.snapshot.aux.enhance_resources = res.resources;
+      }
+      updateEnhanceAuxDom(state.snapshot?.aux);
+    } catch (e) {
+      showToast("Lỗi tải tài nguyên", e.message, "error");
+    }
+  }
+
+  async function loadEnhanceItems(equipType) {
+    const ui = getEnhanceUi();
+    if (!ui || !state.currentKey) return;
+    ui.equipType = equipType;
+    try {
+      const data = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/enhance/items?equip_type=${equipType}`);
+      ui.itemsByRole = { vo: data.vo || [], van: data.van || [] };
+      if (ui.selectedItem) {
+        const list = ui.itemsByRole[ui.roleTab] || [];
+        const match = list.find((it) => it.item_id === ui.selectedItem.item_id);
+        ui.selectedItem = match || null;
+        if (match) {
+          if (ui.targetLevel <= match.level) {
+            ui.targetLevel = Math.min(15, match.level + 1);
+          }
+        } else {
+          ui.materials = [];
+        }
+      }
+      if (state.activeTab === "enhance") renderActiveTab();
+    } catch (e) {
+      showToast("Lỗi tải kho trang bị", e.message, "error");
+    }
+  }
+
+  async function loadEnhanceMaterials(itemId) {
+    const ui = getEnhanceUi();
+    if (!ui || !state.currentKey || !itemId) return;
+    try {
+      const data = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/enhance/materials?item_id=${itemId}`);
+      ui.materials = data.groups || [];
+      const keys = new Set(ui.materials.map((g) => g.key));
+      if (!keys.has(ui.mat1)) ui.mat1 = "";
+      if (!keys.has(ui.mat2)) ui.mat2 = "";
+      if (!keys.has(ui.mat3)) ui.mat3 = "";
+      if (state.activeTab === "enhance") renderActiveTab();
+    } catch (e) {
+      showToast("Lỗi tải Phôi Cường Hóa", e.message, "error");
+    }
+  }
+
+  function updateEnhanceAuxDom(aux) {
+    if (!aux) return;
+    const res = aux.enhance_resources || aux.enhance_progress?.resources || {};
+    const prog = aux.enhance_progress || {};
+    const running = !!(aux.enhance_running || prog.running);
+
+    const ironEl = $("enh-res-iron");
+    if (ironEl) ironEl.textContent = Number(res.iron || 0).toLocaleString("vi-VN");
+    const hamEl = $("enh-res-hammer");
+    if (hamEl) hamEl.textContent = Number(res.hammer || 0).toLocaleString("vi-VN");
+    const cryEl = $("enh-res-crystal");
+    if (cryEl) cryEl.textContent = Number(res.crystal || 0).toLocaleString("vi-VN");
+
+    const stEl = $("enh-status-lbl");
+    if (stEl) stEl.textContent = prog.status || "Sẵn sàng";
+    const pctEl = $("enh-progress-pct");
+    if (pctEl) pctEl.textContent = `${Number(prog.pct || 0)}%`;
+    const fillEl = $("enh-progress-fill");
+    if (fillEl) fillEl.style.width = `${Number(prog.pct || 0)}%`;
+
+    const itemEl = $("enh-stat-item");
+    if (itemEl) {
+      itemEl.textContent = prog.mode === "destroy"
+        ? `Hủy: ${prog.destroyed_count || 0}/${prog.destroy_total || 0}`
+        : `Món: ${prog.item_index || 0}/${prog.total_items || 0} (Hoàn tất: ${prog.completed_items || 0})`;
+    }
+    const lvlEl = $("enh-stat-lvl");
+    if (lvlEl) {
+      lvlEl.textContent = prog.target_level
+        ? `Cấp: ${prog.current_level || 0}/${prog.target_level}`
+        : "Cấp: -";
+    }
+    const attEl = $("enh-stat-attempts");
+    if (attEl) {
+      attEl.textContent = `Lượt ép: ${prog.total_attempts || 0} (✅ ${prog.success_attempts || 0} / ❌ ${prog.fail_attempts || 0})`;
+    }
+    const usedEl = $("enh-stat-used");
+    if (usedEl) {
+      usedEl.textContent = `Tiêu hao: Sắt ${prog.iron_used || 0} | Búa ${prog.hammer_used || 0} | Pha Lê ${prog.crystal_used || 0} | Phôi ${prog.material_used || 0}`;
+    }
+
+    const startBtn = $("btn-enh-start");
+    const stopBtn = $("btn-enh-stop");
+    const delBtn = $("btn-enh-destroy");
+    if (startBtn) startBtn.disabled = running;
+    if (delBtn) delBtn.disabled = running;
+    if (stopBtn) stopBtn.disabled = !running;
+    ["enh-target-lvl", "enh-protect-from", "enh-loop-count", "enh-mat-from", "enh-mat-1", "enh-mat-2", "enh-mat-3"].forEach((id) => {
+      const el = $(id);
+      if (el) el.disabled = running;
+    });
+
+    const ui = getEnhanceUi();
+    if (ui) {
+      const finishedJustNow = ui.wasRunning && !running;
+      ui.wasRunning = running;
+      if (finishedJustNow && state.activeTab === "enhance") {
+        loadEnhanceItems(ui.equipType);
+      }
+    }
+  }
+
+  function openEnhanceDestroyModal(ui) {
+    const item = ui.selectedItem;
+    if (!item) {
+      showToast("Chưa chọn trang bị", "Vui lòng chọn một trang bị trong kho để hủy.", "warn");
+      return;
+    }
+    const allSame = (ui.itemsByRole[ui.roleTab] || []).filter(
+      (it) => it.item_type_id === item.item_type_id && it.level === item.level
+    );
+    const totalStock = Math.max(1, allSame.reduce((acc, it) => acc + Number(it.quantity || 1), 0));
+    const isHigh = Number(item.level) >= 7;
+
+    openModal(
+      "🔥 Xác Nhận Hủy Trang Bị",
+      `<div style="line-height:1.6;">
+        <div><strong>Trang bị:</strong> ${esc(item.name)}</div>
+        <div><strong>Cấp độ:</strong> Cấp ${item.level} (ID: ${item.item_id})</div>
+        <div><strong>Tồn kho cùng loại & cấp:</strong> ${totalStock}</div>
+      </div>
+      ${isHigh ? `<div class="danger-box">
+        <strong>⚠️ CẢNH BÁO ĐỒ CẤP CAO (Cấp ${item.level} ≥ 7):</strong><br/>
+        Hành động hủy sẽ xóa vĩnh viễn trang bị này và không thể hoàn tác!
+        <label style="display:flex;align-items:center;gap:6px;margin-top:8px;cursor:pointer;">
+          <input id="enh-del-confirm" type="checkbox" /> Tôi xác nhận muốn hủy vĩnh viễn trang bị cấp ${item.level}
+        </label>
+      </div>` : ""}
+      <div class="field" style="margin-top:10px;">
+        <label>Số lượng cần hủy (tối đa ${totalStock}):</label>
+        <input id="enh-del-qty" type="number" min="1" max="${totalStock}" value="1" />
+      </div>`,
+      `<button id="btn-enh-del-ok" class="btn-danger" ${isHigh ? "disabled" : ""}>🔥 Xác nhận hủy</button>
+       <button id="btn-enh-del-cancel" class="btn-sm">Đóng</button>`
+    );
+
+    if (isHigh) {
+      $("enh-del-confirm").onchange = () => {
+        $("btn-enh-del-ok").disabled = !$("enh-del-confirm").checked;
+      };
+    }
+    $("btn-enh-del-cancel").onclick = closeModal;
+    $("btn-enh-del-ok").onclick = async () => {
+      const qty = Math.max(1, Math.min(totalStock, Number($("enh-del-qty").value || 1)));
+      const confirmed = isHigh ? !!$("enh-del-confirm")?.checked : true;
+      try {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/enhance/destroy`, {
+          method: "POST",
+          body: {
+            equip_type: ui.equipType,
+            role: ui.roleTab,
+            item_id: item.item_id,
+            item_type_id: item.item_type_id,
+            level: item.level,
+            quantity: qty,
+            confirm_high_level: confirmed,
+          },
+        });
+        closeModal();
+        showToast("Đã bắt đầu hủy trang bị", `${item.name} (x${qty})`, "ok");
+      } catch (e) {
+        showToast("Không thể hủy trang bị", e.message, "error");
+      }
+    };
+  }
+
+  function renderEnhanceTab(root) {
+    const snap = state.snapshot;
+    const ui = getEnhanceUi();
+    if (!ui) return;
+
+    if (!ui.autoLoaded && state.currentKey) {
+      ui.autoLoaded = true;
+      loadEnhanceResources();
+      loadEnhanceItems(ui.equipType);
+    }
+
+    const eqTypes = [
+      { id: 1, label: "🪖 Mũ" },
+      { id: 2, label: "⚔️ Vũ khí" },
+      { id: 3, label: "🛡️ Giáp" },
+      { id: 4, label: "🐎 Ngựa" },
+    ];
+    const voList = ui.itemsByRole.vo || [];
+    const vanList = ui.itemsByRole.van || [];
+    const activeList = ui.roleTab === "van" ? vanList : voList;
+    const q = (ui.filterText || "").trim().toLowerCase();
+    const filteredList = q
+      ? activeList.filter(
+          (it) =>
+            String(it.name || "").toLowerCase().includes(q) ||
+            String(it.level).includes(q) ||
+            String(it.item_id).includes(q)
+        )
+      : activeList;
+
+    const sel = ui.selectedItem;
+    const curLvl = sel ? Number(sel.level) : 1;
+    const targetOpts = [];
+    if (sel && curLvl < 15) {
+      for (let lv = curLvl + 1; lv <= 15; lv++) {
+        targetOpts.push(`<option value="${lv}" ${Number(ui.targetLevel) === lv ? "selected" : ""}>Cấp ${lv}</option>`);
+      }
+    } else if (sel) {
+      targetOpts.push(`<option value="">Đã tối đa (Cấp 15)</option>`);
+    } else {
+      targetOpts.push(`<option value="">-- Chọn trang bị --</option>`);
+    }
+
+    const protectOpts = [`<option value="" ${ui.protectFrom === "" ? "selected" : ""}>Không dùng Búa</option>`];
+    for (let lv = 2; lv <= 8; lv++) {
+      protectOpts.push(`<option value="${lv}" ${String(ui.protectFrom) === String(lv) ? "selected" : ""}>Từ cấp ${lv}</option>`);
+    }
+
+    const matFromOpts = [];
+    for (let lv = 1; lv <= 8; lv++) {
+      matFromOpts.push(`<option value="${lv}" ${String(ui.materialFrom) === String(lv) ? "selected" : ""}>Từ cấp ${lv}</option>`);
+    }
+
+    const buildMatOpts = (selectedVal) => {
+      const opts = [`<option value="" ${!selectedVal ? "selected" : ""}>Không dùng phôi</option>`];
+      for (const grp of ui.materials || []) {
+        opts.push(`<option value="${esc(grp.key)}" ${selectedVal === grp.key ? "selected" : ""}>${esc(grp.display_label)}</option>`);
+      }
+      return opts.join("");
+    };
+
+    root.innerHTML = `
+      <div class="grid-2">
+        <div>
+          <div class="card">
+            <div class="card-title">
+              <span>1. Kho Trang Bị (Chưa Mặc)</span>
+              <button id="btn-enh-reload" class="btn-sm">🔄 Tải kho</button>
+            </div>
+            <div class="form-row">
+              ${eqTypes
+                .map(
+                  (t) =>
+                    `<button class="btn-sm enh-type-btn ${ui.equipType === t.id ? "btn-primary" : ""}" data-type="${t.id}">${t.label}</button>`
+                )
+                .join("")}
+              <input id="enh-filter" type="text" value="${esc(ui.filterText)}" placeholder="Lọc tên / cấp / ID..." style="flex:1;min-width:130px;" />
+            </div>
+            <div class="form-row" style="margin-bottom:6px;">
+              <button id="btn-enh-role-vo" class="btn-sm ${ui.roleTab === "vo" ? "btn-primary" : ""}">⚔️ Võ Tướng (${voList.length})</button>
+              <button id="btn-enh-role-van" class="btn-sm ${ui.roleTab === "van" ? "btn-primary" : ""}">📜 Văn Quan (${vanList.length})</button>
+            </div>
+            <div class="table-wrap" style="max-height:250px;">
+              <table>
+                <thead><tr><th>Tên trang bị</th><th>Cấp</th><th>SL</th><th>ID</th></tr></thead>
+                <tbody>
+                  ${
+                    filteredList.length
+                      ? filteredList
+                          .map(
+                            (it) => `<tr class="enh-item-row row-clickable ${sel && sel.item_id === it.item_id ? "selected" : ""}" data-id="${it.item_id}">
+                              <td>${esc(it.name)}</td>
+                              <td>Cấp ${it.level}</td>
+                              <td>${it.quantity}</td>
+                              <td>${it.item_id}</td>
+                            </tr>`
+                          )
+                          .join("")
+                      : `<tr><td colspan="4" style="color:var(--muted);text-align:center;">Không có trang bị chưa mặc</td></tr>`
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">2. Thiết Lập Cường Hóa</div>
+            <div id="enh-selected-lbl" style="font-size:12.5px;color:var(--info);margin-bottom:8px;">
+              ${sel ? `Đang chọn: <strong>${esc(sel.name)}</strong> — Cấp ${sel.level} (ID: ${sel.item_id}, SL: ${sel.quantity})` : "Chưa chọn trang bị trong kho"}
+            </div>
+            <div class="form-row">
+              <label>Cấp mục tiêu
+                <select id="enh-target-lvl">${targetOpts.join("")}</select>
+              </label>
+              <label>Kẹp Búa Bảo Hộ
+                <select id="enh-protect-from" ${sel && curLvl >= 9 ? "disabled" : ""}>${protectOpts.join("")}</select>
+              </label>
+              <label>Số lượng món
+                <input id="enh-loop-count" type="number" min="1" max="99999" value="${esc(ui.loopCount)}" style="width:82px;" />
+              </label>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>3. Phôi Cường Hóa (Chặng cấp 1→8)</span>
+              <button id="btn-enh-refresh-mats" class="btn-sm" ${!sel ? "disabled" : ""}>🔄 Tải Phôi</button>
+            </div>
+            <div class="form-row">
+              <label>Dùng Phôi từ cấp <select id="enh-mat-from">${matFromOpts.join("")}</select></label>
+            </div>
+            <div class="form-grid" style="gap:6px 10px;">
+              <label>Phôi 1:</label><select id="enh-mat-1">${buildMatOpts(ui.mat1)}</select>
+              <label>Phôi 2:</label><select id="enh-mat-2">${buildMatOpts(ui.mat2)}</select>
+              <label>Phôi 3:</label><select id="enh-mat-3">${buildMatOpts(ui.mat3)}</select>
+            </div>
+            <div class="form-row" style="margin-top:12px;margin-bottom:0;">
+              <button id="btn-enh-start" class="btn-success">🔨 Nâng Cấp</button>
+              <button id="btn-enh-stop" class="btn-danger" disabled>⏹️ Dừng</button>
+              <button id="btn-enh-destroy" class="btn-warning">🔥 Hủy Đồ</button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <div class="card-title">
+              <span>Tài Nguyên Hiện Có</span>
+              <button id="btn-enh-refresh-res" class="btn-sm">🔄 Cập nhật tài nguyên</button>
+            </div>
+            <div class="res-grid">
+              <div class="res-pill"><span class="lbl">Huyền Thiết (341)</span><span id="enh-res-iron" class="val">0</span></div>
+              <div class="res-pill"><span class="lbl">Búa Bảo Hộ (342)</span><span id="enh-res-hammer" class="val">0</span></div>
+              <div class="res-pill"><span class="lbl">Pha Lê (354)</span><span id="enh-res-crystal" class="val">0</span></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">
+              <span>Quá Trình & Thống Kê</span>
+              <span id="enh-progress-pct" class="pill">0%</span>
+            </div>
+            <div class="progress-track"><div id="enh-progress-fill" class="progress-fill"></div></div>
+            <div id="enh-status-lbl" style="font-size:12.5px;color:var(--accent);margin-top:6px;font-weight:600;">Sẵn sàng</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;font-size:12.5px;">
+              <div id="enh-stat-item">Món: 0/0</div>
+              <div id="enh-stat-lvl">Cấp: -</div>
+              <div id="enh-stat-attempts">Lượt ép: 0</div>
+              <div id="enh-stat-used">Tiêu hao: Sắt 0 | Búa 0 | Pha Lê 0 | Phôi 0</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title"><span>Nhật Ký Cường Hóa</span><button id="btn-clr-enh" class="btn-sm">🗑️ Xóa</button></div>
+            <div id="log-enhance" class="log-box" style="height:280px;">${esc((snap.logs.enhance || []).join("\n"))}</div>
+          </div>
+        </div>
+      </div>`;
+
+    root.querySelectorAll(".enh-type-btn").forEach((btn) => {
+      btn.onclick = () => loadEnhanceItems(Number(btn.dataset.type));
+    });
+    $("btn-enh-reload").onclick = () => loadEnhanceItems(ui.equipType);
+    $("btn-enh-role-vo").onclick = () => {
+      ui.roleTab = "vo";
+      ui.selectedItem = null;
+      ui.materials = [];
+      renderActiveTab();
+    };
+    $("btn-enh-role-van").onclick = () => {
+      ui.roleTab = "van";
+      ui.selectedItem = null;
+      ui.materials = [];
+      renderActiveTab();
+    };
+    $("enh-filter").oninput = () => {
+      ui.filterText = $("enh-filter").value;
+      renderActiveTab();
+    };
+
+    root.querySelectorAll(".enh-item-row").forEach((row) => {
+      row.onclick = () => {
+        const id = Number(row.dataset.id);
+        const found = activeList.find((it) => it.item_id === id);
+        if (!found) return;
+        ui.selectedItem = found;
+        const lv = Number(found.level);
+        if (lv >= 15) {
+          ui.targetLevel = 15;
+          ui.protectFrom = "";
+        } else {
+          ui.targetLevel = lv < 7 ? 7 : Math.min(15, lv + 1);
+          ui.protectFrom = ui.targetLevel >= 7 && lv < 9 ? "7" : "";
+        }
+        renderActiveTab();
+        if (lv < 9) loadEnhanceMaterials(found.item_id);
+      };
+    });
+
+    $("enh-target-lvl").onchange = () => {
+      const val = Number($("enh-target-lvl").value || 0);
+      ui.targetLevel = val;
+      if (val >= 7 && ui.protectFrom === "" && (!sel || sel.level < 9)) {
+        ui.protectFrom = "7";
+        $("enh-protect-from").value = "7";
+      }
+    };
+    $("enh-protect-from").onchange = () => (ui.protectFrom = $("enh-protect-from").value);
+    $("enh-loop-count").oninput = () => (ui.loopCount = $("enh-loop-count").value);
+    $("enh-mat-from").onchange = () => (ui.materialFrom = $("enh-mat-from").value);
+    $("enh-mat-1").onchange = () => (ui.mat1 = $("enh-mat-1").value);
+    $("enh-mat-2").onchange = () => (ui.mat2 = $("enh-mat-2").value);
+    $("enh-mat-3").onchange = () => (ui.mat3 = $("enh-mat-3").value);
+
+    $("btn-enh-refresh-mats").onclick = () => sel && loadEnhanceMaterials(sel.item_id);
+    $("btn-enh-refresh-res").onclick = loadEnhanceResources;
+    $("btn-clr-enh").onclick = () =>
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/logs/clear`, { method: "POST", body: { channel: "enhance" } });
+    $("btn-enh-stop").onclick = () =>
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/enhance/stop`, { method: "POST" });
+    $("btn-enh-destroy").onclick = () => openEnhanceDestroyModal(ui);
+
+    $("btn-enh-start").onclick = async () => {
+      if (!ui.selectedItem) {
+        showToast("Chưa chọn trang bị", "Vui lòng chọn trang bị cần cường hóa.", "warn");
+        return;
+      }
+      try {
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/enhance/start`, {
+          method: "POST",
+          body: {
+            equip_type: ui.equipType,
+            role: ui.roleTab,
+            item_id: ui.selectedItem.item_id,
+            item_type_id: ui.selectedItem.item_type_id,
+            start_level: ui.selectedItem.level,
+            target_level: Number($("enh-target-lvl").value || ui.targetLevel),
+            protect_from_level: $("enh-protect-from").value ? Number($("enh-protect-from").value) : null,
+            material_from_level: Number($("enh-mat-from").value || 1),
+            material_keys: [ui.mat1, ui.mat2, ui.mat3],
+            loop_count: Number($("enh-loop-count").value || 1),
+          },
+        });
+      } catch (e) {
+        showToast("Không thể bắt đầu cường hóa", e.message, "error");
+      }
+    };
+
+    updateEnhanceAuxDom(snap.aux);
   }
 
   function renderGeneralSelectTable(gens, selectedIds, clsPrefix) {

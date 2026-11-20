@@ -434,22 +434,27 @@ def test_classify_item_role_and_fetch_equipment_inventory():
             return {
                 "ret": 0,
                 "list": [
-                    # [0]=id, [1]=qty, [2]=type_id, ..., [7]=level, [8]=gen_id, [9]=gen_name
-                    [101, 2, 1104, 0, 0, 0, 0, 1, 0, ""],       # 2x Mũ võ Lv.1 trong kho
-                    [102, 1, 1135, 0, 0, 0, 0, 10, 0, ""],      # Mũ võ Lv.10 trong kho
-                    [103, 1, 1120, 0, 0, 0, 0, 10, 0, ""],      # Mũ võ Lv.10 type thấp hơn 1135
-                    [104, 1, 1220, 0, 0, 0, 0, 8, 10, "VanA"],   # Mũ văn Lv.8 đang mặc bởi ID 10
+                    # [0]=id, [1]=qty, [2]=type_id, ..., [7]=level (0-based), [8]=gen_id, [9]=gen_name
+                    [101, 2, 1104, 0, 0, 0, 0, 0, 0, ""],       # 2x Mũ võ Lv.1 trong kho (row[7]=0)
+                    [102, 1, 1135, 0, 0, 0, 0, 9, 0, ""],       # Mũ võ Lv.10 trong kho (row[7]=9)
+                    [103, 1, 1120, 0, 0, 0, 0, 9, 0, ""],       # Mũ võ Lv.10 type thấp hơn 1135
+                    [104, 1, 1220, 0, 0, 0, 0, 7, 10, "VanA"],   # Mũ văn Lv.8 đang mặc bởi ID 10 (row[7]=7)
                 ],
             }
         if lt == "2":  # Vũ khí
             return {
                 "ret": 0,
                 "list": [
-                    [201, 1, 2217, 0, 0, 0, 0, 12, 0, ""],      # Quạt văn Lv.12
-                    [202, 1, 2142, 0, 0, 0, 0, 9, 0, ""],       # Phương thiên kích Lv.9
+                    [201, 1, 2217, 0, 0, 0, 0, 11, 0, ""],      # Quạt văn Lv.12 (row[7]=11)
+                    [202, 1, 2142, 0, 0, 0, 0, 8, 0, ""],       # Phương thiên kích Lv.9 (row[7]=8)
                 ],
             }
         return {"ret": 0, "list": []}
+
+    from linhvuong.generals import parse_equipment_level
+
+    assert parse_equipment_level(0) == 1
+    assert parse_equipment_level(1) == 2
 
     gw = FakeGateway(_handler)
     inv = fetch_equipment_inventory(gw)
@@ -457,6 +462,8 @@ def test_classify_item_role_and_fetch_equipment_inventory():
     vo_helms = inv.free_items[("vo", 1)]
     assert [it.item_id for it in vo_helms] == [102, 103, 101, 101]
     assert [it.item_type_id for it in vo_helms] == [1135, 1120, 1104, 1104]
+    assert vo_helms[0].level == 10
+    assert vo_helms[-1].level == 1
     assert inv.count_free("vo", 2) == 1
     assert inv.count_free("van", 2) == 1
     assert inv.equipped_by_general[10][1].item_id == 104
@@ -481,18 +488,18 @@ def test_configure_equipment_priority_role_separation_and_upgrade():
                 return {
                     "ret": 0,
                     "list": [
-                        [1001, 1, 1104, 0, 0, 0, 0, 1, 1, "VoHigh"],
-                        [1002, 1, 1135, 0, 0, 0, 0, 10, 0, ""],
-                        [1003, 1, 1220, 0, 0, 0, 0, 7, 0, ""],
-                        [1004, 1, 1205, 0, 0, 0, 0, 2, 0, ""],
+                        [1001, 1, 1104, 0, 0, 0, 0, 0, 1, "VoHigh"],
+                        [1002, 1, 1135, 0, 0, 0, 0, 9, 0, ""],
+                        [1003, 1, 1220, 0, 0, 0, 0, 6, 0, ""],
+                        [1004, 1, 1205, 0, 0, 0, 0, 1, 0, ""],
                     ],
                 }
             if lt == "2":  # Vũ khí: 1 stack x2 món 2109 Lv.1 + 1 kích 2142 Lv.5
                 return {
                     "ret": 0,
                     "list": [
-                        [2001, 2, 2109, 0, 0, 0, 0, 1, 0, ""],
-                        [2002, 1, 2142, 0, 0, 0, 0, 5, 0, ""],
+                        [2001, 2, 2109, 0, 0, 0, 0, 0, 0, ""],
+                        [2002, 1, 2142, 0, 0, 0, 0, 4, 0, ""],
                     ],
                 }
             return {"ret": 0, "list": []}
@@ -540,9 +547,9 @@ def test_configure_equipment_reassign_existing_and_unequip_mode():
                 return {
                     "ret": 0,
                     "list": [
-                        [301, 1, 2109, 0, 0, 0, 0, 1, 1, "VoHigh"],   # Tướng cao đang mặc cùi
-                        [302, 1, 2142, 0, 0, 0, 0, 12, 2, "VoLow"],   # Tướng thấp đang mặc xịn
-                        [303, 1, 2217, 0, 0, 0, 0, 9, 3, "VanBusy"],  # Tướng bận không được đụng
+                        [301, 1, 2109, 0, 0, 0, 0, 0, 1, "VoHigh"],   # Tướng cao đang mặc cùi (Lv.1, row[7]=0)
+                        [302, 1, 2142, 0, 0, 0, 0, 11, 2, "VoLow"],   # Tướng thấp đang mặc xịn (Lv.12, row[7]=11)
+                        [303, 1, 2217, 0, 0, 0, 0, 8, 3, "VanBusy"],  # Tướng bận không được đụng (Lv.9, row[7]=8)
                     ],
                 }
             return {"ret": 0, "list": []}

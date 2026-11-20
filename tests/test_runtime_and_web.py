@@ -1308,3 +1308,144 @@ def test_aux_loop_daily_reward_isolation_retry_timezone_and_captcha(tmp_path, mo
             assert sess._last_daily_claim_date == "2026-11-20"
     finally:
         wm.graceful_shutdown()
+
+
+def test_web_enhance_endpoints_high_level_destroy_guard_and_captcha(tmp_path, monkeypatch):
+    import time
+
+    _mock_offline(monkeypatch)
+    assert "enhance" not in runtime_mod.RESUMABLE_TASKS
+    assert all(tid != "enhance" for tid, _ in runtime_mod.AUTO_START_TASK_LABELS)
+
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="pw")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    monkeypatch.setattr("linhvuong.enhance.DEFAULT_DELAY_RANGE", (0.0, 0.0))
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "pw"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 58, "username": "enhuser", "password": "pw"},
+        ).status_code == 200
+
+        sess = wm.get_session("enhuser @ S58")
+        state = {"lvl": 0, "captcha_on_enhance": False}
+
+        def fake_opt(action, payload=None, **_kw):
+            if action == "equipment":
+                return {
+                    "ret": 0,
+                    "list": [[5001, 1, 1135, 0, 0, 0, 0, state["lvl"], 0, ""]],
+                    "page": 0,
+                    "pageSize": 50,
+                    "total": 1,
+                    "revision": [1, 1],
+                }
+            return {"ret": 0}
+
+        def fake_call(ep, oid, payload=None, **_kw):
+            if ep == "Common.ashx" and oid == 2:
+                return {"ret": 0, "Table": [{"gem_id": 341, "counts": 15}, {"gem_id": 342, "counts": 8}, {"gem_id": 354, "counts": 40}]}
+            if ep == "Common.ashx" and oid == 117:
+                return {"ret": 0, "list": [[5002, 2, 1104, 0, 0, 0, 0, 0]]}
+            if ep == "OPT.ashx" and oid == 154:
+                if state["captcha_on_enhance"]:
+                    return {"ret": 110}
+                state["lvl"] += 1
+                return {"ret": 0}
+            if ep == "OPT.ashx" and oid == 17:
+                return {"ret": 0}
+            return {"ret": 0}
+
+        sess.gateway.optimization = fake_opt
+        sess.gateway.call = fake_call
+
+        r_res = client.get("/api/accounts/enhuser%20%40%20S58/enhance/resources")
+        assert r_res.status_code == 200
+        assert r_res.json()["resources"] == {"iron": 15, "hammer": 8, "crystal": 40}
+
+        r_items = client.get("/api/accounts/enhuser%20%40%20S58/enhance/items?equip_type=1")
+        assert r_items.status_code == 200
+        assert r_items.json()["vo"][0]["item_id"] == 5001
+        assert r_items.json()["vo"][0]["level"] == 1
+
+        r_mats = client.get("/api/accounts/enhuser%20%40%20S58/enhance/materials?item_id=5001")
+        assert r_mats.status_code == 200
+        assert r_mats.json()["groups"][0]["key"] == "1104:1"
+
+        r_del_block = client.post(
+            "/api/accounts/enhuser%20%40%20S58/enhance/destroy",
+            json={
+                "equip_type": 1,
+                "role": "vo",
+                "item_id": 5001,
+                "item_type_id": 1135,
+                "level": 7,
+                "quantity": 1,
+                "confirm_high_level": False,
+            },
+        )
+        assert r_del_block.status_code == 400
+
+        r_del_ok = client.post(
+            "/api/accounts/enhuser%20%40%20S58/enhance/destroy",
+            json={
+                "equip_type": 1,
+                "role": "vo",
+                "item_id": 5001,
+                "item_type_id": 1135,
+                "level": 7,
+                "quantity": 1,
+                "confirm_high_level": True,
+            },
+        )
+        assert r_del_ok.status_code == 200
+        deadline = time.monotonic() + 2.0
+        while sess._enhance_running and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        r_start = client.post(
+            "/api/accounts/enhuser%20%40%20S58/enhance/start",
+            json={
+                "equip_type": 1,
+                "role": "vo",
+                "item_id": 5001,
+                "item_type_id": 1135,
+                "start_level": 1,
+                "target_level": 3,
+                "protect_from_level": None,
+                "material_from_level": 1,
+                "material_keys": ["1104:1", "", ""],
+                "loop_count": 1,
+            },
+        )
+        assert r_start.status_code == 200
+        deadline = time.monotonic() + 2.0
+        while sess._enhance_running and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert state["lvl"] == 2
+        assert sess._enhance_progress["completed_items"] == 1
+
+        state["captcha_on_enhance"] = True
+        r_cap = client.post(
+            "/api/accounts/enhuser%20%40%20S58/enhance/start",
+            json={
+                "equip_type": 1,
+                "role": "vo",
+                "item_id": 5001,
+                "item_type_id": 1135,
+                "start_level": 1,
+                "target_level": 3,
+                "loop_count": 1,
+            },
+        )
+        assert r_cap.status_code == 200
+        deadline = time.monotonic() + 2.0
+        while sess._enhance_running and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert sess.captcha_required is True
+        assert client.post("/api/accounts/enhuser%20%40%20S58/enhance/stop").status_code == 200
+
+    wm.graceful_shutdown()

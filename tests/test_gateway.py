@@ -166,3 +166,16 @@ def test_gateway_parses_http_400_json_and_resolves_uid_and_rest():
     err = gw.optimization("bulk-start", {"boxId": "1"})
     assert err == {"ret": 8105, "errMsg": "请求参数不一致或无效"}
     assert "Optimization.ashx?action=bulk-start" in sess.post_calls[0][0]
+
+
+def test_gateway_parses_relaxed_json_table_payload():
+    """Phản hồi relaxed-JSON dạng {ret:0,Table:[...]} giữ nguyên Table thay vì bị fallback cắt cụt."""
+    session = MockSession([
+        MockRawResponse("{ret:0,Table:[{gem_id:341,counts:12},{gem_id:342,counts:3},{gem_id:354,counts:40}]}")
+    ])
+    client = GatewayClient(58, session, sleep=lambda s: None)
+    res = client.call("Common.ashx", 2, {"nid": "1", "_": ""})
+    assert isinstance(res, dict)
+    assert res["ret"] == 0
+    assert len(res["Table"]) == 3
+    assert res["Table"][0] == {"gem_id": 341, "counts": 12}

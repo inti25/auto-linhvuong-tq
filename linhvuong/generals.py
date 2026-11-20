@@ -852,11 +852,19 @@ class EquipSummary:
     stopped: bool = False
 
 
+def parse_equipment_level(raw_level: Any) -> int:
+    """Chuyển chỉ số cấp 0-based (row[7] từ Optimization.ashx/Common.ashx) sang cấp hiển thị 1-based."""
+    try:
+        return max(1, int(raw_level or 0) + 1)
+    except (ValueError, TypeError):
+        return 1
+
+
 def _parse_inventory_rows_for_type(
     equip_type: int,
     rows: list[Any],
 ) -> tuple[dict[str, list[EquipmentItem]], dict[int, EquipmentItem], dict[int, int]]:
-    """Phân tích danh sách hàng kho/trang bị từ Common.ashx?id=24 theo một lType."""
+    """Phân tích danh sách hàng kho/trang bị theo một lType."""
     free_by_role: dict[str, list[EquipmentItem]] = {"vo": [], "van": []}
     equipped_map: dict[int, EquipmentItem] = {}
     free_quantities: dict[int, int] = {}
@@ -868,7 +876,7 @@ def _parse_inventory_rows_for_type(
         quantity = max(1, int(row[1] or 1))
         item_type_id = int(row[2] or 0)
         politics = max(0, int(row[6] or 0))
-        level = max(1, int(row[7] or 1))
+        level = parse_equipment_level(row[7])
         general_id = int(row[8] or 0)
         general_name = str(row[9] or "") if len(row) > 9 else ""
         if item_id <= 0 or item_type_id <= 0:
@@ -910,7 +918,9 @@ def _parse_inventory_rows_for_type(
 
 
 def _fetch_all_equipment_rows(
-    gateway: GatewayClient, equip_type: int
+    gateway: GatewayClient,
+    equip_type: int,
+    raise_on_captcha: bool = False,
 ) -> Optional[list[Any]]:
     """Tải toàn bộ các trang trang bị của một lType qua Optimization.ashx?action=equipment (Server 58+)."""
     all_rows: list[Any] = []
@@ -934,6 +944,10 @@ def _fetch_all_equipment_rows(
         if not isinstance(data, dict):
             return None
         ret = int(data.get("ret", -1))
+        if ret == 110 and raise_on_captcha:
+            from .tasks.base import CaptchaRequired
+
+            raise CaptchaRequired("Tải kho trang bị gặp Captcha (mã 110).")
         if ret == 8102 and not restarted_on_rev:
             restarted_on_rev = True
             all_rows.clear()

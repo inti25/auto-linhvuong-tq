@@ -49,7 +49,7 @@ def test_dashboard_initializes_six_tabs():
     dash = safe_dashboard()
     try:
         tabs = dash.notebook.tabs()
-        assert len(tabs) == 7
+        assert len(tabs) == 8
         tab_texts = [dash.notebook.tab(t, "text") for t in tabs]
         assert "🏛️ Nội Chính & Nghiên Cứu" in tab_texts[0]
         assert "⚔️ Thảo Phạt" in tab_texts[1]
@@ -58,6 +58,7 @@ def test_dashboard_initializes_six_tabs():
         assert "🏰 Tổng quan" in tab_texts[4]
         assert "⚔️ Chiến Trường" in tab_texts[5]
         assert "🧧 Niên Thú" in tab_texts[6]
+        assert "🔨 Cường Hóa" in tab_texts[7]
     finally:
         dash.destroy()
 
@@ -3392,9 +3393,9 @@ def test_equip_dialog_execution_assign_and_unequip():
                     return {
                         "ret": 0,
                         "list": [
-                            [501, 1, 1135, 0, 0, 0, 0, 12, 2, "VoLow"],
-                            [502, 1, 1104, 0, 0, 0, 0, 1, 0, ""],
-                            [503, 1, 1220, 0, 0, 0, 0, 6, 0, ""],
+                            [501, 1, 1135, 0, 0, 0, 0, 11, 2, "VoLow"],  # Mũ xịn Lv.12 (row[7]=11)
+                            [502, 1, 1104, 0, 0, 0, 0, 0, 0, ""],        # Mũ cùi Lv.1 (row[7]=0)
+                            [503, 1, 1220, 0, 0, 0, 0, 5, 0, ""],        # Mũ văn Lv.6 (row[7]=5)
                         ],
                         "page": 0, "pageSize": 50, "total": 3, "revision": [1, 1],
                     }
@@ -3453,9 +3454,9 @@ def test_equip_dialog_execution_assign_and_unequip():
                         return {
                             "ret": 0,
                             "list": [
-                                [501, 1, 1135, 0, 0, 0, 0, 12, 1, "VoHigh"],
-                                [502, 1, 1104, 0, 0, 0, 0, 1, 2, "VoLow"],
-                                [503, 1, 1220, 0, 0, 0, 0, 6, 3, "VanHigh"],
+                                [501, 1, 1135, 0, 0, 0, 0, 11, 1, "VoHigh"],
+                                [502, 1, 1104, 0, 0, 0, 0, 0, 2, "VoLow"],
+                                [503, 1, 1220, 0, 0, 0, 0, 5, 3, "VanHigh"],
                             ],
                             "page": 0, "pageSize": 50, "total": 3, "revision": [1, 1],
                         }
@@ -4007,5 +4008,106 @@ def test_dashboard_transfer_mode_radio_switches_ui_and_syncs_profile():
         assert dash.log_transfer_mode_var.get() == "market"
         assert dash.log_market_frame.winfo_manager() == "pack"
         assert len(dash.log_transfers_tree.get_children()) == 1
+    finally:
+        dash.destroy()
+
+
+def test_dashboard_enhance_tab_load_filter_enhance_and_destroy_guard(monkeypatch):
+    """Kiểm tra Tab 8 Cường Hóa (S58 Optimization API): tải kho/tài nguyên/phôi, lọc bảng, tự gợi ý Búa, chạy ép và xác nhận hủy cấp cao."""
+    import time
+
+    monkeypatch.setattr("linhvuong.enhance.DEFAULT_DELAY_RANGE", (0.0, 0.0))
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        enh_calls = []
+
+        def fake_opt(action, payload=None, **_kw):
+            if action == "equipment":
+                return {
+                    "ret": 0,
+                    "list": [
+                        [6101, 1, 1135, 0, 0, 0, 0, 5, 0, ""],  # Mũ võ Lv.6 (row[7]=5)
+                        [6102, 2, 1104, 0, 0, 0, 0, 0, 0, ""],  # Mũ võ Lv.1 (row[7]=0)
+                        [6201, 1, 1220, 0, 0, 0, 0, 6, 0, ""],  # Mũ văn Lv.7 (row[7]=6)
+                    ],
+                    "page": 0,
+                    "pageSize": 50,
+                    "total": 3,
+                    "revision": [1, 1],
+                }
+            return {"ret": 0}
+
+        def fake_gw(ep, oid, payload=None, **_kw):
+            p = dict(payload or {})
+            if ep == "Common.ashx" and oid == 2:
+                return {"ret": 0, "Table": [{"gem_id": 341, "counts": 10}, {"gem_id": 342, "counts": 5}, {"gem_id": 354, "counts": 30}]}
+            if ep == "Common.ashx" and oid == 117:
+                return {"ret": 0, "list": [[6102, 2, 1104, 0, 0, 0, 0, 0]]}
+            if ep == "OPT.ashx" and oid == 154:
+                enh_calls.append(p)
+                return {"ret": 0}
+            return {"ret": 0}
+
+        dash.gateway.optimization = fake_opt
+        dash.gateway.call = fake_gw
+        dash._load_enhance_resources()
+        dash._load_enhance_warehouse(1)
+
+        deadline = time.time() + 2.0
+        while (dash.enh_iron_var.get() == "0" or not dash.enh_vo_tree.get_children()) and time.time() < deadline:
+            dash.update()
+            time.sleep(0.02)
+
+        assert dash.enh_iron_var.get() == "10"
+        assert dash.enh_hammer_var.get() == "5"
+        assert dash.enh_crystal_var.get() == "30"
+        assert set(dash.enh_vo_tree.get_children()) == {"6101", "6102"}
+        assert list(dash.enh_van_tree.get_children()) == ["6201"]
+
+        dash.enh_filter_var.set("6101")
+        dash._refresh_enhance_trees()
+        assert list(dash.enh_vo_tree.get_children()) == ["6101"]
+        dash.enh_filter_var.set("")
+        dash._refresh_enhance_trees()
+
+        dash.enh_vo_tree.selection_set("6101")
+        dash._on_enhance_item_selected()
+        deadline = time.time() + 2.0
+        while len(dash.enh_mat_combos[0]["values"]) <= 1 and time.time() < deadline:
+            dash.update()
+            time.sleep(0.02)
+
+        assert dash.enh_target_combo.get() == "Cấp 7"
+        assert dash.enh_protect_combo.get() == "Từ cấp 7"
+
+        dash.enh_protect_combo.set("Không dùng Búa")
+        dash.enh_target_combo.set("Cấp 8")
+        dash._on_enhance_target_changed()
+        assert dash.enh_protect_combo.get() == "Từ cấp 7"
+
+        dash.enh_loop_var.set("1")
+        dash._start_enhancing()
+        deadline = time.time() + 2.0
+        while dash._enhance_running and time.time() < deadline:
+            dash.update()
+            time.sleep(0.02)
+        assert len(enh_calls) == 2
+
+        dash.enh_role_nb.select(1)
+        dash._on_enhance_role_tab_changed()
+        dash.enh_van_tree.selection_set("6201")
+        dash._on_enhance_item_selected()
+        dash._open_destroy_dialog()
+        dlg = dash._enhance_destroy_dialog
+        try:
+            assert str(dlg._confirm_btn.cget("state")) == "disabled"
+            dlg._confirm_var.set(True)
+            dash.update()
+            assert str(dlg._confirm_btn.cget("state")) == "normal"
+        finally:
+            dlg.destroy()
     finally:
         dash.destroy()

@@ -117,18 +117,19 @@ class GatewayClient:
             return resp.json()
         except ValueError as e:
             raw_sample = getattr(resp, "text", "") or ""
-            m = re.search(r"ret:\s*(\d+)", raw_sample)
-            if m:
-                return {"ret": int(m.group(1))}
             try:
                 fixed_json = re.sub(r'([{,])\s*([a-zA-Z_]\w*)\s*:', r'\1"\2":', raw_sample)
                 return json.loads(fixed_json)
             except Exception:
-                sample = raw_sample[:200]
-                logger.warning(
-                    f"Không thể parse JSON từ phản hồi {log_label}: {sample} (lỗi: {e})"
-                )
-                return None
+                pass
+            m = re.search(r"ret:\s*(-?\d+)", raw_sample)
+            if m:
+                return {"ret": int(m.group(1))}
+            sample = raw_sample[:200]
+            logger.warning(
+                f"Không thể parse JSON từ phản hồi {log_label}: {sample} (lỗi: {e})"
+            )
+            return None
 
     @staticmethod
     def _unwrap_rest_data(resp: Optional[dict]) -> Optional[dict]:

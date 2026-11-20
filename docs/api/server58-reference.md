@@ -439,6 +439,11 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `OPT.ashx?id=63` | `{}` | `{"ret":86}` *(đã nhận chuyên cần trong ngày)* |
 | `OPT.ashx?id=67` (Cộng điểm tướng) | `lCityID=10129, lGeneralID=25702, lAttribType=1\|2\|3, lAdd=1` | `{"ret":0}` (cộng được cả khi tướng đang bận `status!=0`); `ret=1` tham số sai (`lAdd<=0` hoặc `lAttribType` ngoài `1..3`), `ret=20` sai căn cứ/ID, `ret=38` (`没有可分配技能点`) hết điểm hoặc `lAdd > skill_point`, `ret=77` (`人物属性点分配过于悬殊`) vượt tổng 2 thuộc tính gốc còn lại |
 | `OPT.ashx?id=69` (`type=1,2,3,33`) | `type=1`/`2`/`3` (`param1=slot, param2=city_id, paytype=1\|2`) | `type=1`: giảm 50% thời gian xây dựng (`10` Coin/Ngân Bảo); `type=2`: giảm 1 giờ (`10` Coin/Ngân Bảo); `{"ret":0,"errMsg":"成功"}`; Quan Phủ/Thành Tường (`gid=1,2,54,55`) hoặc công trình NPC (`22..53`) trả `{"ret":1,"errMsg":"操作失败，请稍后再试"}`; `type=33` khi hết: `{"ret":90,"errMsg":"道具已经用完"}` |
+| `Common.ashx?id=2` (Tài nguyên cường hóa) | `nid=1` | `{ret:0,Table:[{gem_id:341|342|354,counts:...}]}` (`341`=Huyền Thiết, `342`=Búa Bảo Hộ, `354`=Pha Lê; phản hồi relaxed-JSON không ngoặc kép) |
+| `Common.ashx?id=117` (Phôi cường hóa) | `eid=<item_id>` | `{"ret":0,"list":[[id, qty, type_id, ..., row[7]=0based_level],...]}` |
+| `OPT.ashx?id=154` (Cường hóa 1→9) | `lDstEquipID, lSrcEquipID1..3, lPropProtect (342\|0), lPropUpgrade=341` | `{"ret":0}` thành công (+1 cấp); `{"ret":299,"errMsg":"装备锻造没有成功"}` thất bại |
+| `OPT.ashx?id=188` (Cường hóa 9→15) | `EquipID` | Tiêu tốn Pha Lê (`5/10/20/30/40/50`); `{"ret":0}` thành công; `ret=325` thất bại giữ cấp; `{"ret":27,"errMsg":"联盟编号不存在"}` nếu chưa vào Liên Minh |
+| `OPT.ashx?id=17` (Hủy trang bị) | `lEquipID` | `{"ret":0}` xóa vĩnh viễn trang bị khỏi kho |
 
 ---
 
@@ -450,12 +455,15 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `1` | Tham số sai hoặc endpoint cũ đã bị vô hiệu hóa | Các `/GateWay/*` bị chuyển sang `/api/*` |
 | `20` | Võ tướng không tồn tại / sai ID | `Common.ashx?id=12,13,14`, `OPT.ashx?id=67` |
 | `21` | `"装备ID不存在"` | `Optimization.ashx?action=equipment` (`kind=2`) |
+| `27` | `"联盟编号不存在"` (Tài khoản chưa gia nhập Liên Minh) | `OPT.ashx?id=188` (Cường hóa Pha Lê 9→15) |
 | `38` | `"没有可分配技能点"` (Không đủ Điểm Tiềm Năng) | `OPT.ashx?id=67` |
 | `42` | Tướng chưa đủ vũ khí/điều kiện biên chế hoặc cooldown | `OPT.ashx?id=6`, `Common.ashx?id=55` |
 | `77` | `"人物属性点分配过于悬殊"` (Thuộc tính gốc vượt tổng 2 thuộc tính gốc còn lại) | `OPT.ashx?id=67` |
 | `86` | Đã nhận thưởng chuyên cần hôm nay | `OPT.ashx?id=63` |
 | `90` | `"道具已经用完"` (Hết đạo cụ) | `OPT.ashx?id=69` (`type=33`) |
+| `299` | `"装备锻造没有成功"` (Cường hóa thất bại ở chặng 1→9) | `OPT.ashx?id=154` |
 | `301` | `"该装备仅限女性名(蛮)将使用"` (Trang bị chỉ dành cho nữ danh tướng hoặc tướng Man) | `OPT.ashx?id=58` (mặc trang bị) |
+| `325` | Cường hóa Pha Lê thất bại ở chặng 9→15 (giữ nguyên cấp) | `OPT.ashx?id=188` |
 | `8102` | Revision phân trang thay đổi, cần tải lại từ `page=0` | `Optimization.ashx?action=equipment` / `production` |
 | `8104` / `8105` / `8107` | Trạng thái tiếp nhận bulk open chưa chắc chắn / sai tham số | `Optimization.ashx?action=bulk-start` |
 | `8108` | `"没有可用宝箱或配套钥匙。"` (Hết rương hoặc thiếu chìa) | `Optimization.ashx?action=bulk-start` |
