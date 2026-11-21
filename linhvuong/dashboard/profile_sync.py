@@ -115,6 +115,7 @@ class ProfileSyncMixin:
             "aux_boost_var",
             "aux_tribute_var",
             "aux_general_visit_var",
+            "aux_training_var",
             "aux_explore_var",
             "aux_explore_whip_var",
             "aux_explore_coin_var",
@@ -245,6 +246,7 @@ class ProfileSyncMixin:
             "notifications": self.notification_config.to_dict() if hasattr(self, "notification_config") else {},
             "nien_thu": self._collect_nien_thu_profile_dict(),
             "crafting": self._collect_crafting_profile_dict(),
+            "training": self._collect_training_profile_dict(),
         }
 
     def _apply_unified_profile(self, data: dict) -> list[str]:
@@ -310,6 +312,11 @@ class ProfileSyncMixin:
             if "nien_thu" in data and isinstance(data["nien_thu"], dict):
                 self._apply_nien_thu_profile_dict(data["nien_thu"])
                 loaded_sections.append("Niên Thú")
+
+            # 12. Đào Tạo Tướng (Điểm Tướng Đài & Tụ Hiền Lâu)
+            if "training" in data and isinstance(data["training"], dict):
+                self._apply_training_profile_dict(data["training"])
+                loaded_sections.append("Đào Tạo Tướng")
 
         return loaded_sections
 

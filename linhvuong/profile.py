@@ -810,6 +810,39 @@ class NienThuProfile:
         )
 
 
+def _parse_ordered_positive_ids(raw: Any) -> list[int]:
+    if not isinstance(raw, list):
+        return []
+    out: list[int] = []
+    seen: set[int] = set()
+    for item in raw:
+        try:
+            gid = int(item)
+        except (TypeError, ValueError):
+            continue
+        if gid > 0 and gid not in seen:
+            seen.add(gid)
+            out.append(gid)
+    return out
+
+
+@dataclass
+class TrainingProfile:
+    enabled: bool = False
+    vo_general_ids: list[int] = field(default_factory=list)
+    van_general_ids: list[int] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TrainingProfile":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            enabled=bool(data.get("enabled", False)),
+            vo_general_ids=_parse_ordered_positive_ids(data.get("vo_general_ids")),
+            van_general_ids=_parse_ordered_positive_ids(data.get("van_general_ids")),
+        )
+
+
 @dataclass
 class BaseSyncResult:
     """Kết quả Đồng Bộ Danh Sách Căn Cứ vào Hồ Sơ Cấu Hình."""
@@ -891,6 +924,7 @@ class Profile:
     crafting: CraftProfile = field(default_factory=CraftProfile)
     notifications: NotificationProfile = field(default_factory=NotificationProfile)
     nien_thu: NienThuProfile = field(default_factory=NienThuProfile)
+    training: TrainingProfile = field(default_factory=TrainingProfile)
 
     def sync_with_bases(
         self,
@@ -1098,6 +1132,7 @@ class Profile:
             crafting=CraftProfile.from_dict(craft_raw),
             notifications=NotificationProfile.from_dict(data.get("notifications", {})),
             nien_thu=NienThuProfile.from_dict(data.get("nien_thu", {})),
+            training=TrainingProfile.from_dict(data.get("training", {})),
         )
 
 

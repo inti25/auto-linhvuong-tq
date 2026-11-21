@@ -629,6 +629,23 @@ class BuildingMixin:
         )
         self.aux_visit_lbl.pack(side="left", padx=(6, 0))
 
+        r_aux_train = tk.Frame(f_aux, bg=BG)
+        r_aux_train.pack(fill="x", padx=4, pady=2)
+        tk.Checkbutton(
+            r_aux_train,
+            text="Đào tạo tướng",
+            variable=self.aux_training_var,
+            command=self._on_aux_training_toggled,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=2)
+        self.aux_training_time_lbl = tk.Label(r_aux_train, text="(Tắt)", bg=BG, fg="#94a3b8", font=("Segoe UI", 8, "bold"))
+        self.aux_training_time_lbl.pack(side="left", padx=2)
+        ttk.Button(r_aux_train, text="Chọn tướng", command=self._open_training_dialog).pack(side="right", padx=2)
+
         r_aux4 = tk.Frame(f_aux, bg=BG)
         r_aux4.pack(fill="x", padx=4, pady=2)
         tk.Checkbutton(

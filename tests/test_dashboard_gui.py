@@ -4229,3 +4229,65 @@ def test_dashboard_auto_swap_tactician_controls_profile_and_manual_provision():
         assert any(call.args[:2] == ("OPT.ashx", 5) for call in dash.gateway.call.call_args_list)
     finally:
         dash.destroy()
+
+
+def test_dashboard_training_dialog_profile_sync_and_selection(tmp_path):
+    dash = safe_dashboard()
+    try:
+        assert len(dash.notebook.tabs()) == 8
+        assert hasattr(dash, "aux_training_var")
+        assert hasattr(dash, "aux_training_time_lbl")
+        assert dash.aux_training_var.get() is False
+        assert hasattr(dash, "training_btn")
+
+        r = dummy_roster()
+        dash._loaded(r)
+
+        dash.aux_training_var.set(True)
+        dash._training_vo_ids = [417506, 417520]
+        dash._training_van_ids = [417513]
+        prof = dash._collect_unified_profile()
+        assert prof["training"] == {
+            "enabled": True,
+            "vo_general_ids": [417506, 417520],
+            "van_general_ids": [417513],
+        }
+
+        pfile = tmp_path / "training_profile.json"
+        dash._save_unified_profile(pfile)
+        dash.aux_training_var.set(False)
+        dash._training_vo_ids = []
+        dash._training_van_ids = []
+
+        ok, _ = dash._load_unified_profile(pfile)
+        assert ok is True
+        assert dash.aux_training_var.get() is True
+        assert dash._training_vo_ids == [417506, 417520]
+        assert dash._training_van_ids == [417513]
+
+        # Mở hộp thoại Đào Tạo Tướng (mock gateway để không gọi mạng thật)
+        dash.gateway = MagicMock()
+        dash.gateway.call.return_value = {"ret": 0, "slots": 2, "list": [], "hero": []}
+        dash._open_training_dialog()
+        dlg = dash._trn_dialog
+        try:
+            dash.update()
+            vo_items = list(dash.trn_tree.get_children())
+            assert set(vo_items) == {"417506", "417520"}
+            assert dash.trn_tree.item("417506", "values")[0] == "☑"
+
+            # Chuyển sang Tụ Hiền Lâu (Văn quan)
+            dash.trn_hall_var.set("van")
+            dash._refresh_training_dialog_all()
+            van_items = list(dash.trn_tree.get_children())
+            assert van_items == ["417513"]
+            assert dash.trn_tree.item("417513", "values")[0] == "☑"
+
+            # Toggle bỏ chọn 417513
+            dash._toggle_trn_item("417513")
+            assert dash._training_van_ids == []
+            assert dash.trn_tree.item("417513", "values")[0] == "☐"
+        finally:
+            dlg.destroy()
+    finally:
+        dash.destroy()

@@ -1125,6 +1125,8 @@ class InternalAuxMixin:
                 self._check_and_update_boost_status(async_check=True)
                 self._check_and_run_explore(async_check=True)
                 self._check_and_notify_general_visit(async_check=True)
+                if hasattr(self, "_check_and_run_training"):
+                    self._check_and_run_training(async_check=True)
                 today_str = time.strftime("%Y-%m-%d")
                 if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():
                     if getattr(self, "_last_daily_claim_date", None) != today_str:

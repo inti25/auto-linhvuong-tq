@@ -424,6 +424,7 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `Common.ashx?id=40` | `tid=10129` | `{"ret":0,"come":[],"goto":[],"battle":[]}` |
 | `Common.ashx?id=126` | `lStatID=1` | `{"ret":0,"list":[[2949,357,0,"宋宪"]]}` |
 | `Common.ashx?id=140` | `lAction=0/1/2, lParam=0/2` | `action=1`: `{"ret":0,"left":86400,"bonus":"遇名士司马徽...</br>获得：破匣剪×1"}` / `action=2`: `{"ret":0,"left":0,"bonus":""}` |
+| `Common.ashx?id=141` (Trạng thái Đào Tạo Tướng) | `lType=1\|2, tid=10129` (`1`: Tụ Hiền Lâu/Văn quan, `2`: Điểm Tướng Đài/Võ tướng; dùng `tid` chọn Thành cho `hero`) | `{"ret":0,"slots":2,"hero":[[6330,2050,"I_01"],...],"list":[[1,86398,6351,2050,"I_10"]]}` (`slots`/`list` dùng chung toàn tài khoản) |
 | `Common.ashx?id=142` | `{}` | `{"ret":0,"curr":[0,0,0,0],"list":[]}` |
 | `OPT.ashx?id=4` | `lType=1, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=6` | `lGeneralID=4880, lSoldierType=1, lAmount=10, tid=10129` | `{"ret":42}` *(thiếu trang bị mặc định của tướng)* |
@@ -444,6 +445,8 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `OPT.ashx?id=154` (Cường hóa 1→9) | `lDstEquipID, lSrcEquipID1..3, lPropProtect (342\|0), lPropUpgrade=341` | `{"ret":0}` thành công (+1 cấp); `{"ret":299,"errMsg":"装备锻造没有成功"}` thất bại |
 | `OPT.ashx?id=188` (Cường hóa 9→15) | `EquipID` | Tiêu tốn Pha Lê (`5/10/20/30/40/50`); `{"ret":0}` thành công; `ret=325` thất bại giữ cấp; `{"ret":27,"errMsg":"联盟编号不存在"}` nếu chưa vào Liên Minh |
 | `OPT.ashx?id=17` (Hủy trang bị) | `lEquipID` | `{"ret":0}` xóa vĩnh viễn trang bị khỏi kho |
+| `OPT.ashx?id=177` (Mở ô đào tạo tướng) | `lType=1\|2` | **TRÁNH GỌI TỰ ĐỘNG**: tiêu tốn `slots * 50` Nguyên bảo để mở khóa ô tiếp theo |
+| `OPT.ashx?id=178` (Đào tạo tướng) | `lType=1\|2, lPos=1..5, lHeroID=..., tid=10129` | `{"ret":0,"exp":1930}` (xuyên thành, cả khi tướng bận `status!=0`, hồi 24h); ô đang bận/chưa mở: `{"ret":1,"errMsg":"操作失败，请稍后再试"}`; sai ID: `{"ret":20,"errMsg":"人物ID不存在"}` |
 
 ---
 
@@ -452,8 +455,8 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | Mã `ret` | `errMsg` / Ý nghĩa | Bối cảnh |
 | :--- | :--- | :--- |
 | `0` | Thành công | Chung |
-| `1` | Tham số sai hoặc endpoint cũ đã bị vô hiệu hóa | Các `/GateWay/*` bị chuyển sang `/api/*` |
-| `20` | Võ tướng không tồn tại / sai ID | `Common.ashx?id=12,13,14`, `OPT.ashx?id=67` |
+| `1` | Tham số sai, ô bận/chưa mở hoặc endpoint cũ đã bị vô hiệu hóa | Các `/GateWay/*` bị chuyển sang `/api/*`, `OPT.ashx?id=178` |
+| `20` | Võ tướng không tồn tại / sai ID (`"人物ID不存在"`) | `Common.ashx?id=12,13,14`, `OPT.ashx?id=67`, `OPT.ashx?id=178` |
 | `21` | `"装备ID不存在"` | `Optimization.ashx?action=equipment` (`kind=2`) |
 | `27` | `"联盟编号不存在"` (Tài khoản chưa gia nhập Liên Minh) | `OPT.ashx?id=188` (Cường hóa Pha Lê 9→15) |
 | `38` | `"没有可分配技能点"` (Không đủ Điểm Tiềm Năng) | `OPT.ashx?id=67` |
@@ -463,6 +466,8 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `90` | `"道具已经用完"` (Hết đạo cụ) | `OPT.ashx?id=69` (`type=33`) |
 | `299` | `"装备锻造没有成功"` (Cường hóa thất bại ở chặng 1→9) | `OPT.ashx?id=154` |
 | `301` | `"该装备仅限女性名(蛮)将使用"` (Trang bị chỉ dành cho nữ danh tướng hoặc tướng Man) | `OPT.ashx?id=58` (mặc trang bị) |
+| `315` | Tướng đã đạt cấp độ tối đa | `OPT.ashx?id=178` |
+| `316` | Tướng không thể đào tạo (trọng thương/dưỡng thương/đấu giá/phụ thể) | `OPT.ashx?id=178` |
 | `325` | Cường hóa Pha Lê thất bại ở chặng 9→15 (giữ nguyên cấp) | `OPT.ashx?id=188` |
 | `8102` | Revision phân trang thay đổi, cần tải lại từ `page=0` | `Optimization.ashx?action=equipment` / `production` |
 | `8104` / `8105` / `8107` | Trạng thái tiếp nhận bulk open chưa chắc chắn / sai tham số | `Optimization.ashx?action=bulk-start` |
