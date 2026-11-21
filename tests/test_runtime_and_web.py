@@ -1221,6 +1221,504 @@ def test_web_equip_run_forwards_selected_general_ids(tmp_path, monkeypatch):
     wm.graceful_shutdown()
 
 
+def test_web_equip_modal_selection_excludes_hidden_generals():
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+
+    app_js_path = Path(__file__).resolve().parents[1] / "linhvuong" / "web" / "static" / "app.js"
+    js_test = r"""
+const fs = require("node:fs");
+const vm = require("node:vm");
+const assert = require("node:assert/strict");
+
+const appCode = fs.readFileSync(process.env.APP_JS_PATH, "utf8");
+
+const byId = new Map();
+function registerById(el) {
+  if (el && el.id) byId.set(el.id, el);
+}
+
+function parseAttrs(attrStr) {
+  const attrs = {};
+  const re = /([a-zA-Z0-9_-]+)(?:="([^"]*)")?/g;
+  let m;
+  while ((m = re.exec(attrStr))) {
+    attrs[m[1]] = m[2] !== undefined ? m[2] : "";
+  }
+  return attrs;
+}
+
+function matchesSel(el, sel) {
+  return sel
+    .split(",")
+    .map((s) => s.trim())
+    .some((part) => {
+      if (part.startsWith(".")) return el.classList.contains(part.slice(1).split(/[\s\[:]/)[0]);
+      if (part.startsWith("#")) return el.id === part.slice(1);
+      return el.tagName.toLowerCase() === part.split(/[\s\[:.]/)[0].toLowerCase();
+    });
+}
+
+function makeEl(tag, id = "", className = "") {
+  const el = {
+    tagName: tag.toUpperCase(),
+    id,
+    className,
+    dataset: {},
+    style: {},
+    children: [],
+    listeners: {},
+    _innerHTML: "",
+    _textContent: "",
+    value: "",
+    checked: false,
+    disabled: false,
+    classList: {
+      _set: new Set(className ? className.split(/\s+/).filter(Boolean) : []),
+      add(...xs) {
+        xs.forEach((x) => this._set.add(x));
+      },
+      remove(...xs) {
+        xs.forEach((x) => this._set.delete(x));
+      },
+      toggle(x, force) {
+        if (force === undefined) {
+          if (this._set.has(x)) this._set.delete(x);
+          else this._set.add(x);
+        } else if (force) this._set.add(x);
+        else this._set.delete(x);
+      },
+      contains(x) {
+        return this._set.has(x);
+      },
+    },
+    addEventListener(ev, fn) {
+      (this.listeners[ev] ||= []).push(fn);
+    },
+    dispatchEvent(ev) {
+      (this.listeners[ev.type] || []).forEach((fn) => fn(ev));
+    },
+    appendChild(ch) {
+      this.children.push(ch);
+      return ch;
+    },
+    remove() {},
+    contains(other) {
+      return other === this || this.children.some((c) => c.contains && c.contains(other));
+    },
+    querySelectorAll(sel) {
+      const out = [];
+      const walk = (n) => {
+        for (const c of n.children || []) {
+          if (matchesSel(c, sel)) out.push(c);
+          walk(c);
+        }
+      };
+      walk(this);
+      return out;
+    },
+    querySelector(sel) {
+      return this.querySelectorAll(sel)[0] || null;
+    },
+  };
+  Object.defineProperty(el, "textContent", {
+    get() {
+      return this._textContent;
+    },
+    set(v) {
+      this._textContent = String(v ?? "");
+    },
+  });
+  Object.defineProperty(el, "innerHTML", {
+    get() {
+      return this._innerHTML;
+    },
+    set(v) {
+      this._innerHTML = String(v ?? "");
+      this.children = [];
+      const selectRe = /<select\b([^>]*)>([\s\S]*?)<\/select>/gi;
+      let sm;
+      while ((sm = selectRe.exec(this._innerHTML))) {
+        const attrs = parseAttrs(sm[1]);
+        const selEl = makeEl("select", attrs.id || "", attrs.class || "");
+        const optRe = /<option\b([^>]*)>/gi;
+        let om;
+        let firstVal = "";
+        let selectedVal = null;
+        while ((om = optRe.exec(sm[2]))) {
+          const oa = parseAttrs(om[1]);
+          const ov = oa.value ?? "";
+          if (firstVal === "") firstVal = ov;
+          if ("selected" in oa) selectedVal = ov;
+        }
+        selEl.value = selectedVal !== null ? selectedVal : firstVal;
+        this.children.push(selEl);
+        registerById(selEl);
+      }
+      const tagRe = /<(button|input|tbody|div|span)\b([^>]*)>/gi;
+      let tm;
+      while ((tm = tagRe.exec(this._innerHTML))) {
+        const attrs = parseAttrs(tm[2]);
+        if (!attrs.id && !attrs.class) continue;
+        const child = makeEl(tm[1].toLowerCase(), attrs.id || "", attrs.class || "");
+        if ("checked" in attrs) child.checked = true;
+        if (attrs.value !== undefined) child.value = attrs.value;
+        for (const [k, val] of Object.entries(attrs)) {
+          if (k.startsWith("data-")) {
+            const dk = k.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase());
+            child.dataset[dk] = val;
+          }
+        }
+        this.children.push(child);
+        registerById(child);
+      }
+    },
+  });
+  return el;
+}
+
+const staticIds = [
+  "admin-login-view","app-shell","game-login-view","dashboard-view","account-list","tab-content",
+  "ws-title","ws-status-pill","ws-proxy-pill","ws-realtime-pill","btn-reload-roster",
+  "btn-rotate-proxy","btn-notify-settings","btn-account-logout","profile-header-bar",
+  "hdr-profile-name","hdr-profile-export","hdr-save-vault","hdr-auto-resume","hdr-autostart-count",
+  "captcha-banner","captcha-reason-text","toast-stack","sidebar","admin-login-form","admin-user","admin-pass",
+  "admin-login-error","btn-admin-logout","btn-mobile-menu","btn-add-account","btn-start-all","btn-stop-all",
+  "btn-open-syslogs","btn-admin-settings","btn-coffee","modal-close","btn-sound-toggle","btn-resume-captcha",
+  "hdr-profile-import","btn-autostart-cfg","btn-free-proxy","btn-test-proxy","game-login-form","btn-game-login",
+  "btn-save-acc-only","btn-delete-acc","modal-backdrop","modal-title","modal-body","modal-footer",
+  "btn-relogin","hdr-profile-save","gl-server","gl-proxy","gl-server-hint"
+];
+for (const id of staticIds) registerById(makeEl("div", id, ""));
+
+const tabBtnOverview = makeEl("button", "", "tab-btn");
+tabBtnOverview.dataset.tab = "overview";
+
+const document = {
+  activeElement: makeEl("body"),
+  addEventListener: () => {},
+  getElementById: (id) => byId.get(id) || null,
+  querySelectorAll: (sel) => (sel === ".tab-btn" ? [tabBtnOverview] : []),
+  createElement: (tag) => makeEl(tag),
+};
+
+const generals = [];
+for (let i = 1; i <= 10; i++) {
+  generals.push({
+    id: i,
+    name: `Vo_C1_${i}`,
+    role: "vo",
+    city_id: 1001,
+    level: 50 - i,
+    status: 0,
+    status_text: "Rảnh",
+    army: { total: 100 },
+  });
+}
+for (let i = 1; i <= 5; i++) {
+  generals.push({
+    id: 100 + i,
+    name: `Van_C1_${i}`,
+    role: "van",
+    city_id: 1001,
+    level: 40 - i,
+    status: 0,
+    status_text: "Rảnh",
+    is_mayor: i === 1,
+  });
+}
+for (let i = 11; i <= 15; i++) {
+  generals.push({
+    id: i,
+    name: `Vo_C2_${i}`,
+    role: "vo",
+    city_id: 1002,
+    level: 45 - i,
+    status: 0,
+    status_text: "Rảnh",
+    army: { total: 100 },
+  });
+}
+for (let i = 6; i <= 10; i++) {
+  generals.push({
+    id: 100 + i,
+    name: `Van_C2_${i}`,
+    role: "van",
+    city_id: 1002,
+    level: 40 - i,
+    status: 0,
+    status_text: "Rảnh",
+    is_mayor: i === 6,
+  });
+}
+
+const sampleSnap = {
+  summary: { account_key: "tester @ S58", status: "connected", status_text: "OK", tasks: {} },
+  profile: {
+    building: { cities: {} },
+    research: { techs: [] },
+    resource: { resource_cities: [] },
+    logistics: {},
+    ditrai: {},
+    thao_phat: { generals: [] },
+    binh_man: { bases: {} },
+    goi_dan: { generals: [] },
+    crafting: { cities: {} },
+    combat: {},
+    nien_thu: { generals: [] },
+    notifications: {},
+  },
+  roster: {
+    bases: [
+      { id: 1001, name: "Thành 1", display_name: "Thành 1", type: "Thành", pos_x: 1, pos_y: 2 },
+      { id: 1002, name: "Thành 2", display_name: "Thành 2", type: "Thành", pos_x: 3, pos_y: 4 },
+    ],
+    cities: [
+      { id: 1001, name: "Thành 1", display_name: "Thành 1" },
+      { id: 1002, name: "Thành 2", display_name: "Thành 2" },
+    ],
+    camps: [],
+    generals,
+  },
+  tech_levels: {},
+  logs: { equip: [] },
+  aux: {},
+};
+
+let confirmResult = true;
+const confirmCalls = [];
+const equipRunBodies = [];
+
+const windowObj = {
+  location: { protocol: "http:", host: "127.0.0.1:8000" },
+  listeners: {},
+  addEventListener(ev, fn) {
+    (this.listeners[ev] ||= []).push(fn);
+  },
+  setTimeout(fn, delay, ...args) {
+    const t = setTimeout(fn, delay, ...args);
+    if (t && typeof t.unref === "function") t.unref();
+    return t;
+  },
+  clearTimeout,
+  setInterval: () => 1,
+  WebSocket: class {
+    close() {}
+  },
+  Notification: { permission: "denied" },
+  confirm: (msg) => {
+    confirmCalls.push(String(msg));
+    return confirmResult;
+  },
+  fetch: async (url, opts) => {
+    if (url === "/api/auth/status") {
+      return {
+        status: 200,
+        ok: true,
+        text: async () => JSON.stringify({ auth_enabled: false, authenticated: true, username: "admin", vault_unlocked: true }),
+      };
+    }
+    if (url === "/api/meta") {
+      return {
+        status: 200,
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            missions: [],
+            techs: [],
+            tech_names: [],
+            man_targets: [],
+            attack_action_options: [],
+            formations: [],
+            stratagems: [],
+            chests: [],
+            weapons: [],
+            resumable_tasks: [],
+          }),
+      };
+    }
+    if (url === "/api/accounts") {
+      return {
+        status: 200,
+        ok: true,
+        text: async () => JSON.stringify({ accounts: [{ account_key: "tester @ S58", status: "connected", config: {} }] }),
+      };
+    }
+    if (url.endsWith("/snapshot")) {
+      return { status: 200, ok: true, text: async () => JSON.stringify(sampleSnap) };
+    }
+    if (url.endsWith("/equip/inventory")) {
+      return {
+        status: 200,
+        ok: true,
+        text: async () => JSON.stringify({ ok: true, inventory: { free_vo: [10, 10, 10, 10], free_van: [10, 10, 10, 10], equipped_by_general: {} } }),
+      };
+    }
+    if (url.endsWith("/equip/run")) {
+      equipRunBodies.push(JSON.parse(opts.body));
+      return { status: 200, ok: true, text: async () => JSON.stringify({ ok: true }) };
+    }
+    return { status: 200, ok: true, text: async () => "{}" };
+  },
+};
+windowObj.window = windowObj;
+windowObj.document = document;
+windowObj.navigator = {};
+Object.assign(windowObj, { Object, Array, Number, String, Boolean, Set, Map, Math, Date, JSON, Error, RegExp, Promise, encodeURIComponent, structuredClone });
+
+const sortedIds = (xs) => [...xs].sort((a, b) => a - b);
+
+(async () => {
+  const ctx = vm.createContext(windowObj);
+  vm.runInContext(appCode, ctx);
+  for (const fn of windowObj.listeners["DOMContentLoaded"] || []) await fn();
+  await new Promise((r) => setTimeout(r, 30));
+
+  tabBtnOverview.onclick();
+
+  // 1. Starts empty (Desktop parity) and blocks empty submit
+  await byId.get("btn-open-equip").onclick();
+  assert.equal(byId.get("eq-city").value, "1001");
+  assert.match(byId.get("eq-summary").textContent, /Đang chọn: 0 \(Tổng chọn: 0\)/);
+  assert.equal(byId.get("eq-all").checked, false);
+  for (const chk of byId.get("eq-tbody").querySelectorAll(".eq-chk")) {
+    assert.equal(chk.checked, false, "checkboxes must start unchecked");
+  }
+  const toastsBefore = byId.get("toast-stack").children.length;
+  byId.get("btn-eq-assign").onclick();
+  byId.get("btn-eq-remove").onclick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(equipRunBodies.length, 0, "empty selection must not POST /equip/run");
+  assert.equal(byId.get("toast-stack").children.length, toastsBefore + 2, "empty submit should show warning toasts");
+  assert.ok(byId.get("toast-stack").children.slice(-2).every((t) => t.className.includes("warn")));
+
+  // 2. Select 10 Võ in filtered city (btn-eq-vo) -> sends ONLY [1..10], zero confirm()
+  byId.get("btn-eq-vo").onclick();
+  byId.get("btn-eq-assign").onclick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(confirmCalls.length, 0, "no confirm expected when all selected generals are visible");
+  assert.equal(equipRunBodies.length, 1);
+  assert.equal(equipRunBodies[0].mode, "assign");
+  assert.deepEqual(sortedIds(equipRunBodies[0].general_ids), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  // 3. Filter city=all + role=vo, check 10 Võ -> sends ONLY [1..10]
+  await byId.get("btn-open-equip").onclick();
+  byId.get("eq-city").value = "all";
+  byId.get("eq-city").onchange();
+  byId.get("eq-role").value = "vo";
+  byId.get("eq-role").onchange();
+  for (const chk of byId.get("eq-tbody").querySelectorAll(".eq-chk")) {
+    if (Number(chk.dataset.gid) <= 10) {
+      chk.checked = true;
+      chk.onchange();
+    }
+  }
+  byId.get("btn-eq-assign").onclick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(confirmCalls.length, 0);
+  assert.equal(equipRunBodies.length, 2);
+  assert.deepEqual(sortedIds(equipRunBodies[1].general_ids), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  // 4. btn-eq-none clears hidden selections too
+  await byId.get("btn-open-equip").onclick();
+  byId.get("eq-city").value = "all";
+  byId.get("eq-city").onchange();
+  byId.get("eq-role").value = "all";
+  byId.get("eq-role").onchange();
+  byId.get("btn-eq-all").onclick();
+  byId.get("eq-role").value = "vo";
+  byId.get("eq-role").onchange();
+  byId.get("btn-eq-none").onclick();
+  for (const chk of byId.get("eq-tbody").querySelectorAll(".eq-chk")) {
+    if (Number(chk.dataset.gid) <= 10) {
+      chk.checked = true;
+      chk.onchange();
+    }
+  }
+  byId.get("btn-eq-assign").onclick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(confirmCalls.length, 0);
+  assert.equal(equipRunBodies.length, 3);
+  assert.deepEqual(sortedIds(equipRunBodies[2].general_ids), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  // 5. Hidden-selection warning & cancel guard
+  byId.get("btn-eq-none").onclick();
+  byId.get("eq-city").value = "all";
+  byId.get("eq-city").onchange();
+  byId.get("eq-role").value = "all";
+  byId.get("eq-role").onchange();
+  byId.get("btn-eq-all").onclick();
+  byId.get("eq-role").value = "vo";
+  byId.get("eq-role").onchange();
+  assert.ok(byId.get("eq-summary").textContent.includes("gồm 10 tướng đang ẩn bởi bộ lọc"));
+  confirmResult = false;
+  byId.get("btn-eq-assign").onclick();
+  byId.get("btn-eq-remove").onclick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(confirmCalls.length, 2, "both assign and remove must ask confirmation when hidden generals are selected");
+  assert.equal(equipRunBodies.length, 3, "declining confirm must abort /equip/run");
+
+  // 6. Intentional cross-city selection still works when confirmed
+  byId.get("btn-eq-none").onclick();
+  byId.get("eq-city").value = "1001";
+  byId.get("eq-city").onchange();
+  for (const chk of byId.get("eq-tbody").querySelectorAll(".eq-chk")) {
+    if (Number(chk.dataset.gid) <= 5) {
+      chk.checked = true;
+      chk.onchange();
+    }
+  }
+  byId.get("eq-city").value = "1002";
+  byId.get("eq-city").onchange();
+  for (const chk of byId.get("eq-tbody").querySelectorAll(".eq-chk")) {
+    const gid = Number(chk.dataset.gid);
+    if (gid >= 11 && gid <= 15) {
+      chk.checked = true;
+      chk.onchange();
+    }
+  }
+  confirmResult = true;
+  byId.get("btn-eq-assign").onclick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(confirmCalls.length, 3, "cross-city hidden selection should trigger confirm");
+  assert.equal(equipRunBodies.length, 4);
+  assert.deepEqual(sortedIds(equipRunBodies[3].general_ids), [1, 2, 3, 4, 5, 11, 12, 13, 14, 15]);
+
+  // 7. Unequip (btn-eq-remove) also respects selection
+  byId.get("btn-eq-none").onclick();
+  byId.get("eq-city").value = "1001";
+  byId.get("eq-city").onchange();
+  byId.get("eq-role").value = "all";
+  byId.get("eq-role").onchange();
+  byId.get("btn-eq-vo").onclick();
+  byId.get("btn-eq-remove").onclick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(confirmCalls.length, 3, "no extra confirm expected for visible unequip");
+  assert.equal(equipRunBodies.length, 5);
+  assert.deepEqual(
+    { ...equipRunBodies[4], general_ids: sortedIds(equipRunBodies[4].general_ids) },
+    { mode: "unequip", general_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], reassign: false }
+  );
+})();
+"""
+
+    proc = subprocess.run(
+        [node, "-e", js_test],
+        env={**os.environ, "APP_JS_PATH": str(app_js_path)},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+    )
+    assert proc.returncode == 0, f"Web equip selection test failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+
+
 def test_aux_loop_daily_reward_isolation_retry_timezone_and_captcha(tmp_path, monkeypatch):
     from datetime import datetime, timezone
     from unittest.mock import patch
