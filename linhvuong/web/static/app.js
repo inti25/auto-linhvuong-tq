@@ -3111,8 +3111,7 @@
 
   async function openEquipModal() {
     const bases = state.snapshot.roster.bases || [];
-    const allGens = state.snapshot.roster.generals || [];
-    const selectedIds = new Set(allGens.map((g) => g.id));
+    const selectedIds = new Set();
     let inv = null;
     try { inv = (await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/inventory`)).inventory; } catch {}
     const initCity = state.selectedOverviewCityId && bases.some((b) => b.id === state.selectedOverviewCityId) ? String(state.selectedOverviewCityId) : "all";
@@ -3147,20 +3146,36 @@
     const visibleGens = () => {
       const c = $("eq-city")?.value || "all";
       const r = $("eq-role")?.value || "all";
+      const seen = new Set();
       const cur = (state.snapshot.roster.generals || []).filter(
-        (g) => (c === "all" || String(g.city_id) === c) && (r === "all" || g.role === r)
+        (g) => !seen.has(g.id) && seen.add(g.id) && (g.role === "vo" || g.role === "van") && (c === "all" || String(g.city_id) === c) && (r === "all" || g.role === r)
       );
       const tier = (g) => (g.role === "van" ? (g.is_mayor ? 0 : g.is_tactician ? 1 : 2) : 2);
       return [...cur].sort((a, b) => tier(a) - tier(b) || b.level - a.level || a.id - b.id);
     };
+    const pruneSelectedIds = () => {
+      const validIds = new Set(
+        (state.snapshot.roster.generals || [])
+          .filter((g) => g.role === "vo" || g.role === "van")
+          .map((g) => g.id)
+      );
+      for (const gid of [...selectedIds]) {
+        if (!validIds.has(gid)) selectedIds.delete(gid);
+      }
+    };
     const updateEqSummary = (shown) => {
+      pruneSelectedIds();
       const vis = visibleGens();
       const selVis = vis.filter((g) => selectedIds.has(g.id)).length;
+      const hiddenSel = Math.max(0, selectedIds.size - selVis);
+      const totalPart = hiddenSel > 0
+        ? ` (Tổng chọn: ${selectedIds.size}, gồm ${hiddenSel} tướng đang ẩn bởi bộ lọc)`
+        : ` (Tổng chọn: ${selectedIds.size})`;
       const invPart = inv
         ? ` • Kho Võ (Mũ/VK/Giáp/Ngựa): ${(inv.free_vo || []).join("/")} • Kho Văn (Mũ/VK/Giáp/Ngựa): ${(inv.free_van || []).join("/")}`
         : " • (Chưa tải kho trang bị)";
       const el = $("eq-summary");
-      if (el) el.textContent = `Tướng hiển thị: ${shown ?? vis.length} • Đang chọn: ${selVis} (Tổng chọn: ${selectedIds.size})${invPart}`;
+      if (el) el.textContent = `Tướng hiển thị: ${shown ?? vis.length} • Đang chọn: ${selVis}${totalPart}${invPart}`;
       const chkAll = $("eq-all");
       if (chkAll) chkAll.checked = vis.length > 0 && selVis === vis.length;
     };
@@ -3188,7 +3203,7 @@
     $("eq-role").onchange = renderEquipModalBody;
     $("eq-all").onchange = () => { const ch = $("eq-all").checked; visibleGens().forEach((g) => (ch ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderEquipModalBody(); };
     $("btn-eq-all").onclick = () => { visibleGens().forEach((g) => selectedIds.add(g.id)); renderEquipModalBody(); };
-    $("btn-eq-none").onclick = () => { visibleGens().forEach((g) => selectedIds.delete(g.id)); renderEquipModalBody(); };
+    $("btn-eq-none").onclick = () => { selectedIds.clear(); renderEquipModalBody(); };
     $("btn-eq-vo").onclick = () => { visibleGens().forEach((g) => (g.role === "vo" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderEquipModalBody(); };
     $("btn-eq-van").onclick = () => { visibleGens().forEach((g) => (g.role === "van" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderEquipModalBody(); };
     $("btn-eq-miss").onclick = () => {
@@ -3207,14 +3222,30 @@
         showToast("Làm mới", "Đã tải lại kho & trang bị.");
       } catch (e) { showToast("Lỗi", e.message, "error"); }
     };
-    $("btn-eq-assign").onclick = () => {
-      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/run`, { method: "POST", body: { mode: "assign", general_ids: [...selectedIds], reassign: $("eq-reassign").checked } })
-        .then(() => showToast("Trang bị", "Đang xử lý trong nền...")).catch((e) => showToast("Lỗi", e.message, "error"));
+    const submitEquip = (mode, toastMsg) => {
+      pruneSelectedIds();
+      const ids = [...selectedIds];
+      if (!ids.length) {
+        showToast("Trang bị", "Vui lòng chọn ít nhất 1 Quan văn hoặc Võ tướng.", "warn");
+        return;
+      }
+      const visIds = new Set(visibleGens().map((g) => g.id));
+      const hiddenCount = ids.filter((id) => !visIds.has(id)).length;
+      if (hiddenCount > 0) {
+        const actionLabel = mode === "unequip" ? "tháo trang bị" : "tự động trang bị";
+        if (!confirm(`Đang chọn tổng cộng ${ids.length} tướng (trong đó có ${hiddenCount} tướng đang ẩn bởi bộ lọc Thành/Phân hệ).\nTiếp tục ${actionLabel} cho tất cả ${ids.length} tướng?`)) {
+          return;
+        }
+      }
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/run`, {
+        method: "POST",
+        body: { mode, general_ids: ids, reassign: mode === "assign" ? $("eq-reassign").checked : false },
+      })
+        .then(() => showToast("Trang bị", toastMsg))
+        .catch((e) => showToast("Lỗi", e.message, "error"));
     };
-    $("btn-eq-remove").onclick = () => {
-      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/run`, { method: "POST", body: { mode: "unequip", general_ids: [...selectedIds], reassign: false } })
-        .then(() => showToast("Trang bị", "Đang tháo trang bị...")).catch((e) => showToast("Lỗi", e.message, "error"));
-    };
+    $("btn-eq-assign").onclick = () => submitEquip("assign", "Đang xử lý trong nền...");
+    $("btn-eq-remove").onclick = () => submitEquip("unequip", "Đang tháo trang bị...");
     $("btn-eq-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/equip/stop`, { method: "POST" });
     renderEquipModalBody();
   }
