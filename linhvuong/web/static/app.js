@@ -1789,7 +1789,8 @@
       enabled: false, mode: curBase?.is_camp === false ? 2 : 1, radius: "5", threshold: "30",
       camp_id: String(bid || ""), parent_city_id: String(cities[0]?.id || ""),
       target_types: [7, 8, 9, 10], generals: [], target_infantry: "0", target_cavalry: "0", target_archers: "0",
-      auto_recruit: true, auto_morale: true, min_morale: "95", action_combo_idx: 0,
+      auto_recruit: true, auto_morale: true, min_morale: "95",
+      auto_swap_tactician: false, min_tactician_stamina: "30", action_combo_idx: 0,
     };
     bm.bases[String(bid)] = bcfg;
     const allGens = snap.roster.generals || [];
@@ -1865,6 +1866,10 @@
               <label><input id="bm-mor" type="checkbox" ${bcfg.auto_morale ? "checked" : ""}/> Tự động nâng sĩ khí ≥</label>
               <input id="bm-minm" type="number" value="${esc(bcfg.min_morale)}" style="width:55px;"/>
             </div>
+            <div class="form-row">
+              <label><input id="bm-swap-tac" type="checkbox" ${bcfg.auto_swap_tactician ? "checked" : ""}/> Tự động đổi mưu sĩ (thể lực ≥</label>
+              <input id="bm-min-tac-stam" type="number" min="0" max="100" value="${esc(bcfg.min_tactician_stamina ?? "30")}" style="width:55px;"/>%)
+            </div>
             <div class="form-row" style="margin-bottom:0;">
               <span style="color:var(--muted);">Loại Man mục tiêu:</span>
               ${manOpts.map((m) => `<label style="font-size:12px;"><input type="checkbox" class="bm-mtype" value="${m.id}" ${(bcfg.target_types || []).includes(m.id) ? "checked" : ""}/> ${esc(m.label)}</label>`).join("")}
@@ -1901,6 +1906,8 @@
       bcfg.auto_recruit = $("bm-rec").checked;
       bcfg.auto_morale = $("bm-mor").checked;
       bcfg.min_morale = $("bm-minm").value;
+      bcfg.auto_swap_tactician = $("bm-swap-tac").checked;
+      bcfg.min_tactician_stamina = $("bm-min-tac-stam").value;
       bcfg.target_types = [...root.querySelectorAll(".bm-mtype:checked")].map((x) => Number(x.value));
       bcfg.mantypes = bcfg.target_types.join(",");
       bcfg.generals = [...root.querySelectorAll(".bm-gen-chk:checked")].map((x) => Number(x.dataset.gid));
@@ -1929,7 +1936,7 @@
     $("btn-bm-gen-none").onclick = () => { root.querySelectorAll(".bm-gen-chk").forEach((c) => (c.checked = false)); syncBm(); renderActiveTab(); };
     root.querySelectorAll('input[name="bm-mode"]').forEach((el) => (el.onchange = () => { syncBm(); renderActiveTab(); }));
     root.querySelectorAll(".bm-mtype, .bm-gen-chk").forEach((el) => (el.onchange = syncBm));
-    ["bm-int", "bm-parent", "bm-camp-id", "bm-rad", "bm-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-mor", "bm-minm"].forEach((id) => ($(id).onchange = syncBm));
+    ["bm-int", "bm-parent", "bm-camp-id", "bm-rad", "bm-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-mor", "bm-minm", "bm-swap-tac", "bm-min-tac-stam"].forEach((id) => ($(id).onchange = syncBm));
     $("btn-tgl-bm").onclick = () => toggleTask("binhman");
     $("btn-bm-once").onclick = async () => {
       await saveProfileImmediate(state.snapshot.profile);
@@ -1975,6 +1982,10 @@
           <label><input id="gd-mor" type="checkbox" ${gd.auto_morale ? "checked" : ""}/> Sĩ khí ≥</label>
           <input id="gd-minm" type="number" value="${esc(gd.min_morale)}" style="width:55px;"/>
         </div>
+        <div class="form-row">
+          <label><input id="gd-swap-tac" type="checkbox" ${gd.auto_swap_tactician ? "checked" : ""}/> Tự động đổi mưu sĩ (thể lực ≥</label>
+          <input id="gd-min-tac-stam" type="number" min="0" max="100" value="${esc(gd.min_tactician_stamina ?? "30")}" style="width:55px;"/>%)
+        </div>
         <div class="form-row" style="margin-bottom:0;">
           <span style="color:var(--muted);">Mục tiêu:</span>
           ${manOpts.map((m) => `<label style="font-size:12px;"><input type="checkbox" class="gd-mtype" value="${m.id}" ${(gd.target_types || [301]).includes(m.id) ? "checked" : ""}/> ${esc(m.label)}</label>`).join("")}
@@ -2014,6 +2025,8 @@
           auto_recover: $("gd-rec").checked,
           auto_morale: $("gd-mor").checked,
           min_morale: $("gd-minm").value,
+          auto_swap_tactician: $("gd-swap-tac").checked,
+          min_tactician_stamina: $("gd-min-tac-stam").value,
           target_types: types.length ? types : [301],
           target_type: types[0] || 301,
           generals: [...root.querySelectorAll(".gd-gen-chk:checked")].map((x) => Number(x.dataset.gid)),
@@ -2021,7 +2034,7 @@
       });
     };
     $("gd-city").onchange = () => { syncGd(); renderActiveTab(); };
-    ["gd-rad", "gd-int", "gd-act", "gd-inf", "gd-cav", "gd-arc", "gd-rec", "gd-mor", "gd-minm"].forEach((id) => ($(id).onchange = syncGd));
+    ["gd-rad", "gd-int", "gd-act", "gd-inf", "gd-cav", "gd-arc", "gd-rec", "gd-mor", "gd-minm", "gd-swap-tac", "gd-min-tac-stam"].forEach((id) => ($(id).onchange = syncGd));
     $("btn-gd-gen-all").onclick = () => { root.querySelectorAll(".gd-gen-chk").forEach((c) => (c.checked = true)); syncGd(); };
     $("btn-gd-gen-none").onclick = () => { root.querySelectorAll(".gd-gen-chk").forEach((c) => (c.checked = false)); syncGd(); };
     root.querySelectorAll(".gd-mtype, .gd-gen-chk").forEach((c) => (c.onchange = syncGd));

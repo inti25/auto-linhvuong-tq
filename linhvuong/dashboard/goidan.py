@@ -7,10 +7,11 @@ from tkinter import messagebox as _default_messagebox, ttk
 from typing import Optional
 
 from ..battle import ATTACK_ACTION_COMBO_OPTIONS
+from ..generals import auto_swap_low_stamina_tacticians, parse_stamina_threshold
 from ..locks import TargetLocks
 from ..roster import fetch_roster as _default_fetch_roster
 from ..scan import Scanner
-from ..tasks.base import TaskContext
+from ..tasks.base import CaptchaRequired, TaskContext
 from ..tasks.binh_man import MAN_TARGET_OPTIONS
 from ..tasks.goi_dan import GoiDan
 from ..tasks.morale import MoraleTrainer as _DefaultMoraleTrainer
@@ -66,6 +67,8 @@ class GoiDanMixin:
             "auto_recruit": bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True,
             "auto_morale": bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True,
             "min_morale": self.gd_min_morale_var.get() if hasattr(self, "gd_min_morale_var") else "95",
+            "auto_swap_tactician": bool(self.gd_auto_swap_tactician_var.get()) if hasattr(self, "gd_auto_swap_tactician_var") else False,
+            "min_tactician_stamina": self.gd_min_tactician_stamina_var.get() if hasattr(self, "gd_min_tactician_stamina_var") else "30",
             "attack_action_mode": self.gd_action_mode_var.get() if hasattr(self, "gd_action_mode_var") else "adaptive",
             "action_combo_idx": self.gd_action_mode_combo.current() if hasattr(self, "gd_action_mode_combo") else 0,
         }
@@ -111,6 +114,10 @@ class GoiDanMixin:
             self.gd_auto_morale_var.set(bool(gd_data["auto_morale"]))
         if hasattr(self, "gd_min_morale_var") and "min_morale" in gd_data:
             self.gd_min_morale_var.set(str(gd_data["min_morale"]))
+        if hasattr(self, "gd_auto_swap_tactician_var") and "auto_swap_tactician" in gd_data:
+            self.gd_auto_swap_tactician_var.set(bool(gd_data["auto_swap_tactician"]))
+        if hasattr(self, "gd_min_tactician_stamina_var") and "min_tactician_stamina" in gd_data:
+            self.gd_min_tactician_stamina_var.set(str(gd_data["min_tactician_stamina"]))
         apply_action_mode_widgets(
             getattr(self, "gd_action_mode_var", None),
             getattr(self, "gd_action_mode_combo", None),
@@ -212,18 +219,33 @@ class GoiDanMixin:
         self.gd_min_morale_var = tk.StringVar(value="95")
         ttk.Entry(mor_f, textvariable=self.gd_min_morale_var, width=5).pack(side="left")
 
-        # Row 4: Chiêu tấn công
-        tk.Label(top, text="Chiêu tấn công:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=4, column=0, sticky="w", padx=4, pady=4)
+        # Row 4: Tự động đổi mưu sĩ & Thể lực tối thiểu
+        self.gd_auto_swap_tactician_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            top,
+            text="Tự động đổi mưu sĩ",
+            variable=self.gd_auto_swap_tactician_var,
+            style="TCheckbutton",
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+
+        tac_f = tk.Frame(top, bg=BG)
+        tac_f.grid(row=4, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        tk.Label(tac_f, text="Thể lực tối thiểu (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.gd_min_tactician_stamina_var = tk.StringVar(value="30")
+        ttk.Entry(tac_f, textvariable=self.gd_min_tactician_stamina_var, width=5).pack(side="left")
+
+        # Row 5: Chiêu tấn công
+        tk.Label(top, text="Chiêu tấn công:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=5, column=0, sticky="w", padx=4, pady=4)
         self.gd_action_mode_var = tk.StringVar(value="adaptive")
         self.gd_action_mode_combo = ttk.Combobox(top, state="readonly", width=24)
         self.gd_action_mode_combo["values"] = list(ATTACK_ACTION_COMBO_OPTIONS)
         self.gd_action_mode_combo.current(0)
-        self.gd_action_mode_combo.grid(row=4, column=1, columnspan=3, sticky="w", padx=4, pady=4)
+        self.gd_action_mode_combo.grid(row=5, column=1, columnspan=3, sticky="w", padx=4, pady=4)
         self.gd_action_mode_combo.bind("<<ComboboxSelected>>", self._on_gd_action_mode_changed)
 
         # Điều khiển
         ctrl_frame = tk.Frame(top, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=5, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=6, padx=16)
         self.gd_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Gọi Man", style="Success.TButton", command=self._toggle_goidan)
         self.gd_start_btn.pack(side="top", pady=2)
         self.gd_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_goidan_once)
@@ -439,6 +461,16 @@ class GoiDanMixin:
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
         auto_recruit = bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True
         auto_morale = bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True
+        auto_swap_tactician = (
+            bool(self.gd_auto_swap_tactician_var.get())
+            if hasattr(self, "gd_auto_swap_tactician_var")
+            else False
+        )
+        min_tactician_stamina = parse_stamina_threshold(
+            self.gd_min_tactician_stamina_var.get()
+            if hasattr(self, "gd_min_tactician_stamina_var")
+            else "30"
+        )
         gd_combo_val = self.gd_action_mode_combo.get() if hasattr(self, "gd_action_mode_combo") else None
 
         return GoiDan(
@@ -464,6 +496,8 @@ class GoiDanMixin:
             auto_recruit=auto_recruit,
             auto_morale=auto_morale,
             min_morale=min_morale,
+            auto_swap_tactician=auto_swap_tactician,
+            min_tactician_stamina=min_tactician_stamina,
         )
 
     def _manual_adjust_gd_troops(self):
@@ -501,6 +535,12 @@ class GoiDanMixin:
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
         auto_recruit = bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True
         auto_morale = bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True
+        auto_swap_tac = bool(self.gd_auto_swap_tactician_var.get()) if hasattr(self, "gd_auto_swap_tactician_var") else False
+        min_tac_stam = parse_stamina_threshold(
+            self.gd_min_tactician_stamina_var.get()
+            if hasattr(self, "gd_min_tactician_stamina_var")
+            else "30"
+        )
 
         def _worker():
             try:
@@ -514,7 +554,14 @@ class GoiDanMixin:
                 # 2. Bổ sung lính
                 if target_army.total > 0 and auto_recruit:
                     total_needed = 0
-                    fresh_roster = fetch_roster_fn(self.gateway, only_base_ids=[city_id])
+                    if auto_swap_tac:
+                        fresh_roster = fetch_roster_fn(
+                            self.gateway,
+                            only_base_ids=[city_id],
+                            include_civil=True,
+                        )
+                    else:
+                        fresh_roster = fetch_roster_fn(self.gateway, only_base_ids=[city_id])
                     for gid in sel_gens:
                         army = fresh_roster.army_of(gid)
                         cur_inf = army.infantry if army else 0
@@ -536,7 +583,7 @@ class GoiDanMixin:
                                 err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
                                 self.after(0, self._append_gd_log, f"   [Chiêu mộ] ⚠️ Chiêu mộ thất bại ({err_desc})")
 
-                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
                     troops_added = False
                     for gid in sel_gens:
                         g = city_gens.get(gid)
@@ -567,6 +614,25 @@ class GoiDanMixin:
                     city_gens = {}
                     troops_added = False
 
+                # 2.5 Tự động đổi mưu sĩ nếu bật
+                if auto_swap_tac:
+                    if fresh_roster is None:
+                        fresh_roster = fetch_roster_fn(
+                            self.gateway,
+                            only_base_ids=[city_id],
+                            include_civil=True,
+                            include_cities=False,
+                        )
+                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
+                    auto_swap_low_stamina_tacticians(
+                        self.gateway,
+                        roster=fresh_roster,
+                        base_id=city_id,
+                        general_ids=sel_gens,
+                        min_stamina_pct=min_tac_stam,
+                        on_log=lambda m: self.after(0, self._append_gd_log, f"   {m}"),
+                    )
+
                 # 3. Luyện sĩ khí đồng loạt bằng MoraleTrainer (ADR-0032)
                 if auto_morale:
                     if fresh_roster is None:
@@ -576,7 +642,7 @@ class GoiDanMixin:
                             include_civil=False,
                             include_cities=False,
                         )
-                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
                     trainer = trainer_cls(self.gateway)
 
                     def _on_notify_gd(msg):
@@ -595,6 +661,8 @@ class GoiDanMixin:
                 new_roster = fetch_roster_fn(self.gateway)
                 self.roster = new_roster
                 self.after(0, self._on_gd_city_selected)
+            except CaptchaRequired:
+                self.after(0, self._append_gd_log, "⛔ Đổi Mưu sĩ Gọi Man gặp Captcha (mã 110).")
             except Exception as e:
                 self.after(0, self._append_gd_log, f"❌ Lỗi ngoại lệ khi biên chế: {e}")
 

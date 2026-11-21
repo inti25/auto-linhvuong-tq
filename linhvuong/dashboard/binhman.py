@@ -7,10 +7,11 @@ from tkinter import messagebox as _default_messagebox, ttk
 from typing import Optional
 
 from ..battle import ATTACK_ACTION_COMBO_OPTIONS, parse_attack_action_combo
+from ..generals import auto_swap_low_stamina_tacticians, parse_stamina_threshold
 from ..profile import BaseBinhManConfig
 from ..roster import fetch_roster as _default_fetch_roster
 from ..scan import BasePeer, Scanner
-from ..tasks.base import TaskContext
+from ..tasks.base import CaptchaRequired, TaskContext
 from ..tasks.binh_man import MAN_TARGET_OPTIONS, BinhMan
 from ..tasks.morale import MoraleTrainer as _DefaultMoraleTrainer
 from ..tasks.thao_phat import TargetArmy
@@ -69,6 +70,8 @@ class BinhManMixin:
             "auto_recruit": bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True,
             "auto_morale": bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True,
             "min_morale": self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95",
+            "auto_swap_tactician": bool(self.bm_auto_swap_tactician_var.get()) if hasattr(self, "bm_auto_swap_tactician_var") else False,
+            "min_tactician_stamina": self.bm_min_tactician_stamina_var.get() if hasattr(self, "bm_min_tactician_stamina_var") else "30",
             "attack_action_mode": self.bm_action_mode_var.get() if hasattr(self, "bm_action_mode_var") else "adaptive",
             "action_combo_idx": self.bm_action_mode_combo.current() if hasattr(self, "bm_action_mode_combo") else 0,
             "current_base_id": self._current_bm_base_id,
@@ -120,6 +123,10 @@ class BinhManMixin:
             self.bm_auto_morale_var.set(bool(bm_data["auto_morale"]))
         if hasattr(self, "bm_min_morale_var") and "min_morale" in bm_data:
             self.bm_min_morale_var.set(str(bm_data["min_morale"]))
+        if hasattr(self, "bm_auto_swap_tactician_var") and "auto_swap_tactician" in bm_data:
+            self.bm_auto_swap_tactician_var.set(bool(bm_data["auto_swap_tactician"]))
+        if hasattr(self, "bm_min_tactician_stamina_var") and "min_tactician_stamina" in bm_data:
+            self.bm_min_tactician_stamina_var.set(str(bm_data["min_tactician_stamina"]))
         apply_action_mode_widgets(
             getattr(self, "bm_action_mode_var", None),
             getattr(self, "bm_action_mode_combo", None),
@@ -165,6 +172,8 @@ class BinhManMixin:
                 auto_recruit=bool(bm_data.get("auto_recruit", True)),
                 auto_morale=bool(bm_data.get("auto_morale", True)),
                 min_morale=str(bm_data.get("min_morale", "95")),
+                auto_swap_tactician=bool(bm_data.get("auto_swap_tactician", False)),
+                min_tactician_stamina=str(bm_data.get("min_tactician_stamina", "30")),
                 attack_action_mode=str(bm_data.get("attack_action_mode", "adaptive")),
                 action_combo_idx=int(bm_data.get("action_combo_idx", 0)),
             )
@@ -372,13 +381,28 @@ class BinhManMixin:
         self.bm_min_morale_var = tk.StringVar(value="95")
         ttk.Entry(bm_mor_f, textvariable=self.bm_min_morale_var, width=5).pack(side="left")
 
-        # Row 6: Chiêu tấn công
-        tk.Label(f_bm, text="Chiêu tấn công:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w", padx=4, pady=4)
+        # Row 6: Tự động đổi mưu sĩ
+        self.bm_auto_swap_tactician_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            f_bm,
+            text="Tự động đổi mưu sĩ",
+            variable=self.bm_auto_swap_tactician_var,
+            style="TCheckbutton",
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+
+        bm_tac_f = tk.Frame(f_bm, bg=BG)
+        bm_tac_f.grid(row=6, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        tk.Label(bm_tac_f, text="Thể lực tối thiểu (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.bm_min_tactician_stamina_var = tk.StringVar(value="30")
+        ttk.Entry(bm_tac_f, textvariable=self.bm_min_tactician_stamina_var, width=5).pack(side="left")
+
+        # Row 7: Chiêu tấn công
+        tk.Label(f_bm, text="Chiêu tấn công:", bg=BG, fg=FG, font=("Segoe UI", 9, "bold")).grid(row=7, column=0, sticky="w", padx=4, pady=4)
         self.bm_action_mode_var = tk.StringVar(value="adaptive")
         self.bm_action_mode_combo = ttk.Combobox(f_bm, state="readonly", width=24)
         self.bm_action_mode_combo["values"] = list(ATTACK_ACTION_COMBO_OPTIONS)
         self.bm_action_mode_combo.current(0)
-        self.bm_action_mode_combo.grid(row=6, column=1, columnspan=3, sticky="w", padx=4, pady=4)
+        self.bm_action_mode_combo.grid(row=7, column=1, columnspan=3, sticky="w", padx=4, pady=4)
         self.bm_action_mode_combo.bind("<<ComboboxSelected>>", self._on_bm_action_mode_changed)
 
         # 2. Bảng danh sách võ tướng
@@ -573,6 +597,8 @@ class BinhManMixin:
             t_min_mor = self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95"
             t_auto_rec = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
             t_auto_mor = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
+            t_auto_swap_tac = bool(self.bm_auto_swap_tactician_var.get()) if hasattr(self, "bm_auto_swap_tactician_var") else False
+            t_min_tac_stam = self.bm_min_tactician_stamina_var.get() if hasattr(self, "bm_min_tactician_stamina_var") else "30"
 
             # ADR-0029 Section 5: Bộ quy tắc an toàn mặc định cho căn cứ mới
             # - enabled = False (chưa chọn chạy)
@@ -591,6 +617,8 @@ class BinhManMixin:
                 auto_recruit=t_auto_rec,
                 auto_morale=t_auto_mor,
                 min_morale=str(t_min_mor),
+                auto_swap_tactician=t_auto_swap_tac,
+                min_tactician_stamina=str(t_min_tac_stam or "30"),
                 attack_action_mode="adaptive",
                 action_combo_idx=0,
             )
@@ -746,6 +774,10 @@ class BinhManMixin:
             cfg.auto_morale = bool(self.bm_auto_morale_var.get())
         if hasattr(self, "bm_min_morale_var"):
             cfg.min_morale = str(self.bm_min_morale_var.get() or "95")
+        if hasattr(self, "bm_auto_swap_tactician_var"):
+            cfg.auto_swap_tactician = bool(self.bm_auto_swap_tactician_var.get())
+        if hasattr(self, "bm_min_tactician_stamina_var"):
+            cfg.min_tactician_stamina = str(self.bm_min_tactician_stamina_var.get() or "30")
         if hasattr(self, "bm_action_mode_combo"):
             idx = self.bm_action_mode_combo.current()
             cfg.action_combo_idx = idx if idx >= 0 else 0
@@ -802,6 +834,10 @@ class BinhManMixin:
                 self.bm_auto_morale_var.set(cfg.auto_morale)
             if hasattr(self, "bm_min_morale_var"):
                 self.bm_min_morale_var.set(str(cfg.min_morale))
+            if hasattr(self, "bm_auto_swap_tactician_var"):
+                self.bm_auto_swap_tactician_var.set(bool(cfg.auto_swap_tactician))
+            if hasattr(self, "bm_min_tactician_stamina_var"):
+                self.bm_min_tactician_stamina_var.set(str(cfg.min_tactician_stamina or "30"))
             apply_action_mode_widgets(
                 getattr(self, "bm_action_mode_var", None),
                 getattr(self, "bm_action_mode_combo", None),
@@ -947,6 +983,8 @@ class BinhManMixin:
                 auto_recruit=cfg.auto_recruit,
                 auto_morale=cfg.auto_morale,
                 min_morale=mor_int,
+                auto_swap_tactician=bool(getattr(cfg, "auto_swap_tactician", False)),
+                min_tactician_stamina=parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30")),
                 peers=peers,
                 non_blocking_relocate=True,
                 base_name=b.name,
@@ -1075,6 +1113,16 @@ class BinhManMixin:
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
         auto_recruit = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
         auto_morale = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
+        auto_swap_tactician = (
+            bool(self.bm_auto_swap_tactician_var.get())
+            if hasattr(self, "bm_auto_swap_tactician_var")
+            else False
+        )
+        min_tactician_stamina = parse_stamina_threshold(
+            self.bm_min_tactician_stamina_var.get()
+            if hasattr(self, "bm_min_tactician_stamina_var")
+            else "30"
+        )
         bm_combo_val = self.bm_action_mode_combo.get() if hasattr(self, "bm_action_mode_combo") else None
 
         return BinhMan(
@@ -1100,6 +1148,8 @@ class BinhManMixin:
             auto_recruit=auto_recruit,
             auto_morale=auto_morale,
             min_morale=min_morale,
+            auto_swap_tactician=auto_swap_tactician,
+            min_tactician_stamina=min_tactician_stamina,
             base_name=base.name,
         )
 
@@ -1123,6 +1173,8 @@ class BinhManMixin:
         auto_recruit = cfg.auto_recruit
         auto_morale = cfg.auto_morale
         min_morale = int(cfg.min_morale) if str(cfg.min_morale).isdigit() else 95
+        auto_swap_tac = bool(getattr(cfg, "auto_swap_tactician", False))
+        min_tac_stam = parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30"))
         mode = cfg.mode
         parent_id = int(cfg.parent_city_id) if (cfg.parent_city_id and str(cfg.parent_city_id).isdigit()) else None
 
@@ -1140,7 +1192,7 @@ class BinhManMixin:
                 fresh_roster = fetch_roster_fn(
                     self.gateway,
                     only_base_ids=[city_id],
-                    include_civil=False,
+                    include_civil=auto_swap_tac,
                     include_cities=False,
                 )
                 for gid in sel_gens:
@@ -1156,6 +1208,27 @@ class BinhManMixin:
                     if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
                         troops_added = True
 
+            if auto_swap_tac:
+                if fresh_roster is None:
+                    fresh_roster = fetch_roster_fn(
+                        self.gateway,
+                        only_base_ids=[city_id],
+                        include_civil=True,
+                        include_cities=False,
+                    )
+                try:
+                    auto_swap_low_stamina_tacticians(
+                        self.gateway,
+                        roster=fresh_roster,
+                        base_id=city_id,
+                        general_ids=sel_gens,
+                        min_stamina_pct=min_tac_stam,
+                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                    )
+                except CaptchaRequired:
+                    self.after(0, self._append_bm_log, f"⛔ {prefix}Đổi Mưu sĩ gặp Captcha (mã 110).")
+                    return
+
             if auto_morale:
                 if fresh_roster is None:
                     fresh_roster = fetch_roster_fn(
@@ -1164,7 +1237,7 @@ class BinhManMixin:
                         include_civil=False,
                         include_cities=False,
                     )
-                city_gens = {g.id: g for g in fresh_roster.generals_of(city_id)}
+                city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
                 trainer = trainer_cls(self.gateway)
 
                 def _on_notify_bm_city(msg):
@@ -1191,7 +1264,7 @@ class BinhManMixin:
                 fresh_roster = fetch_roster_fn(
                     self.gateway,
                     only_base_ids=[camp_id],
-                    include_civil=False,
+                    include_civil=auto_swap_tac,
                     include_cities=False,
                 )
                 for gid in sel_gens:
@@ -1211,7 +1284,7 @@ class BinhManMixin:
                     fetch_roster_fn(
                         self.gateway,
                         only_base_ids=[camp_id],
-                        include_civil=False,
+                        include_civil=auto_swap_tac,
                         include_cities=False,
                     )
                     if troops_added
@@ -1241,17 +1314,37 @@ class BinhManMixin:
                     else:
                         self.after(0, self._append_bm_log, f"⚠️ {prefix}Quân đồn trú tại trại không đủ và chưa chọn Thành mẹ! Vui lòng chọn Thành mẹ.")
 
+            camp_roster = rechecked if (rechecked is not None and not moved_to_parent) else None
+            if auto_swap_tac:
+                if camp_roster is None:
+                    camp_roster = fetch_roster_fn(
+                        self.gateway,
+                        only_base_ids=[camp_id],
+                        include_civil=True,
+                        include_cities=False,
+                    )
+                try:
+                    auto_swap_low_stamina_tacticians(
+                        self.gateway,
+                        roster=camp_roster,
+                        base_id=camp_id,
+                        general_ids=sel_gens,
+                        min_stamina_pct=min_tac_stam,
+                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                    )
+                except CaptchaRequired:
+                    self.after(0, self._append_bm_log, f"⛔ {prefix}Đổi Mưu sĩ gặp Captcha (mã 110).")
+                    return
+
             if auto_morale:
-                if rechecked is not None and not moved_to_parent:
-                    camp_roster = rechecked
-                else:
+                if camp_roster is None:
                     camp_roster = fetch_roster_fn(
                         self.gateway,
                         only_base_ids=[camp_id],
                         include_civil=False,
                         include_cities=False,
                     )
-                camp_gens = {g.id: g for g in camp_roster.generals_of(camp_id)}
+                camp_gens = {g.id: g for g in camp_roster.generals_of(camp_id) if g.role == "vo"}
                 trainer = trainer_cls(self.gateway)
 
                 def _on_notify_bm_camp(msg):

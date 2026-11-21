@@ -1,6 +1,7 @@
 """Dịch vụ quản lý Văn quan & Võ tướng: Ban thưởng, Thiết lập Mưu sĩ và Tự động Trang bị."""
 
 from dataclasses import dataclass, field, replace
+import math
 import threading
 from typing import Any, Callable, Optional
 
@@ -769,6 +770,202 @@ def configure_tacticians(
         f"bỏ qua (đã có {summary.skipped_has_tactician}, bận {summary.skipped_busy}), "
         f"thiếu Văn quan {summary.no_available_civilian}, lỗi {summary.failed}.",
     )
+    return summary
+
+
+def parse_stamina_threshold(raw: Any, default: float = 30.0) -> float:
+    """Chuyển đổi và giới hạn ngưỡng thể lực Mưu sĩ (%) trong khoảng [0, 100]."""
+    try:
+        text = str(raw).strip() if raw is not None else ""
+        val = float(text) if text != "" else float(default)
+    except (ValueError, TypeError):
+        val = float(default)
+    if not math.isfinite(val):
+        val = float(default)
+    return max(0.0, min(100.0, val))
+
+
+def general_stamina_percent(gen: General) -> float:
+    """Tính tỷ lệ % thể lực hiện tại của tướng (stamina_max <= 0 coi như 100%)."""
+    if gen.stamina_max <= 0:
+        return 100.0
+    return (gen.stamina * 100.0) / gen.stamina_max
+
+
+@dataclass
+class AutoSwapTacticianSummary:
+    checked: int = 0
+    swapped: int = 0
+    assigned: int = 0
+    kept_healthy: int = 0
+    no_replacement: int = 0
+    skipped_busy: int = 0
+    failed: int = 0
+    rolled_back: int = 0
+
+
+_NON_REUSABLE_TACTICIAN_ERRORS = frozenset({10020, 10022, 10023, 10033, 10037})
+
+
+def _raise_if_tactician_captcha(ret: int) -> None:
+    if ret in (110, 73):
+        from .tasks.base import CaptchaRequired
+
+        raise CaptchaRequired()
+
+
+def auto_swap_low_stamina_tacticians(
+    gateway: GatewayClient,
+    roster: Roster,
+    base_id: int,
+    general_ids: list[int],
+    min_stamina_pct: float = 30.0,
+    on_log: Optional[Callable[[str], None]] = None,
+    stop_event: Optional[threading.Event] = None,
+) -> AutoSwapTacticianSummary:
+    """Kiểm tra thể lực Mưu sĩ và tự động gán/đổi bằng Văn quan cùng căn cứ đạt ngưỡng (Cao -> Thấp)."""
+    threshold = parse_stamina_threshold(min_stamina_pct)
+    summary = AutoSwapTacticianSummary()
+
+    gens_in_base = roster.generals_of(base_id)
+    mil_by_id = {g.id: g for g in gens_in_base if g.role == "vo"}
+    civ_by_id = {g.id: g for g in gens_in_base if g.role == "van"}
+    active_tac_ids = roster.active_tactician_ids()
+    all_civ_by_id = {
+        g.id: g
+        for b in roster.bases
+        for g in roster.generals_of(b.id)
+        if g.role == "van"
+    }
+
+    need_action: list[tuple[General, Optional[General], Optional[float]]] = []
+    for gid in dict.fromkeys(int(x) for x in general_ids):
+        mil = mil_by_id.get(gid)
+        if mil is None:
+            continue
+        summary.checked += 1
+        if mil.status != 0:
+            summary.skipped_busy += 1
+            continue
+        if mil.tactician_id <= 0:
+            need_action.append((mil, None, None))
+            continue
+
+        cur_tac = civ_by_id.get(mil.tactician_id) or all_civ_by_id.get(mil.tactician_id)
+        if cur_tac is None:
+            _emit(
+                on_log,
+                f"⚠️ [Mưu sĩ] {mil.name}: không đọc được thể lực Mưu sĩ (ID {mil.tactician_id}); giữ nguyên và tiếp tục xuất quân.",
+            )
+            summary.kept_healthy += 1
+            continue
+
+        pct = general_stamina_percent(cur_tac)
+        if pct >= threshold:
+            summary.kept_healthy += 1
+            continue
+        need_action.append((mil, cur_tac, pct))
+
+    if not need_action:
+        return summary
+
+    available_civs = [
+        c
+        for c in civ_by_id.values()
+        if c.status == 0
+        and c.special_status == 0
+        and c.id not in active_tac_ids
+        and general_stamina_percent(c) >= threshold
+    ]
+    need_action.sort(key=lambda item: (-item[0].level, item[0].id))
+    available_civs.sort(key=lambda c: (-c.level, -general_stamina_percent(c), c.id))
+
+    used_civ_ids: set[int] = set()
+    for mil, cur_tac, cur_pct in need_action:
+        if stop_event and stop_event.is_set():
+            break
+
+        cand = next((c for c in available_civs if c.id not in used_civ_ids), None)
+        if cand is None:
+            summary.no_replacement += 1
+            if cur_tac is not None and cur_pct is not None:
+                _emit(
+                    on_log,
+                    f"⚠️ [Mưu sĩ] {mil.name}: Mưu sĩ {cur_tac.name} thể lực thấp "
+                    f"({cur_tac.stamina}/{cur_tac.stamina_max} = {cur_pct:.0f}% < {threshold:.0f}%), "
+                    f"không có Văn quan đủ thể lực trong căn cứ — giữ nguyên và tiếp tục xuất quân.",
+                )
+            else:
+                _emit(
+                    on_log,
+                    f"⚠️ [Mưu sĩ] {mil.name}: chưa có Mưu sĩ và không có Văn quan đủ thể lực "
+                    f"(>= {threshold:.0f}%) trong căn cứ — tiếp tục xuất quân.",
+                )
+            continue
+
+        if mil.tactician_id <= 0:
+            ok_as, ret_as, msg_as = set_tactician(
+                gateway, base_id, cand.id, military_id=mil.id, remove=False
+            )
+            _raise_if_tactician_captcha(ret_as)
+            if ok_as:
+                used_civ_ids.add(cand.id)
+                summary.assigned += 1
+                _emit(
+                    on_log,
+                    f"🧠 [Mưu sĩ] {mil.name} (Lv.{mil.level}): tự động gán Văn quan "
+                    f"{cand.name} (Lv.{cand.level}, TL {general_stamina_percent(cand):.0f}%).",
+                )
+            else:
+                summary.failed += 1
+                if ret_as in _NON_REUSABLE_TACTICIAN_ERRORS:
+                    used_civ_ids.add(cand.id)
+                _emit(on_log, f"❌ [Mưu sĩ] Gán {cand.name} cho {mil.name} thất bại: {msg_as}")
+            continue
+
+        old_tid = mil.tactician_id
+        old_name = (cur_tac.name if cur_tac is not None else mil.tactician_name) or str(old_tid)
+        ok_rm, ret_rm, msg_rm = set_tactician(gateway, base_id, old_tid, remove=True)
+        _raise_if_tactician_captcha(ret_rm)
+        if not ok_rm:
+            summary.failed += 1
+            _emit(on_log, f"❌ [Mưu sĩ] Tháo Mưu sĩ {old_name} khỏi {mil.name} thất bại: {msg_rm}")
+            continue
+
+        ok_as, ret_as, msg_as = set_tactician(
+            gateway, base_id, cand.id, military_id=mil.id, remove=False
+        )
+        _raise_if_tactician_captcha(ret_as)
+        if ok_as:
+            used_civ_ids.add(cand.id)
+            summary.swapped += 1
+            cand_pct = general_stamina_percent(cand)
+            old_pct_str = f"{cur_pct:.0f}%" if cur_pct is not None else "?"
+            _emit(
+                on_log,
+                f"🔄 [Mưu sĩ] {mil.name} (Lv.{mil.level}): đổi {old_name} (TL {old_pct_str} < {threshold:.0f}%) "
+                f"-> {cand.name} (Lv.{cand.level}, TL {cand_pct:.0f}%).",
+            )
+            continue
+
+        summary.failed += 1
+        if ret_as in _NON_REUSABLE_TACTICIAN_ERRORS:
+            used_civ_ids.add(cand.id)
+        _emit(
+            on_log,
+            f"❌ [Mưu sĩ] Gán Văn quan mới {cand.name} cho {mil.name} thất bại ({msg_as}); "
+            f"đang hoàn tác Mưu sĩ cũ {old_name}...",
+        )
+        ok_rb, ret_rb, msg_rb = set_tactician(
+            gateway, base_id, old_tid, military_id=mil.id, remove=False
+        )
+        _raise_if_tactician_captcha(ret_rb)
+        if ok_rb:
+            summary.rolled_back += 1
+            _emit(on_log, f"↩️ [Mưu sĩ] Đã hoàn tác gán lại {old_name} cho {mil.name}.")
+        else:
+            _emit(on_log, f"❌ [Mưu sĩ] Hoàn tác gán lại {old_name} cho {mil.name} thất bại: {msg_rb}")
+
     return summary
 
 

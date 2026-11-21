@@ -488,6 +488,42 @@ def test_sync_with_bases_initializes_first_enabled_when_empty():
     assert prof.building.cities["10254"].enabled is False
 
 
+def test_auto_swap_tactician_profile_defaults_and_roundtrip(tmp_path):
+    from linhvuong.profile import BaseBinhManConfig
+
+    prof = Profile()
+    assert prof.goi_dan.auto_swap_tactician is False
+    assert prof.goi_dan.min_tactician_stamina == "30"
+    assert BaseBinhManConfig().auto_swap_tactician is False
+    assert BaseBinhManConfig().min_tactician_stamina == "30"
+    assert prof.binh_man.auto_swap_tactician is False
+    assert prof.binh_man.min_tactician_stamina == "30"
+
+    prof.goi_dan.auto_swap_tactician = True
+    prof.goi_dan.min_tactician_stamina = "45"
+    prof.binh_man.auto_swap_tactician = True
+    prof.binh_man.min_tactician_stamina = "50"
+    prof.binh_man.bases["1001"] = BaseBinhManConfig(
+        name="ThienCo",
+        enabled=True,
+        mode=2,
+        generals=[15],
+        auto_swap_tactician=True,
+        min_tactician_stamina="35",
+    )
+
+    store = ProfileStore(tmp_path / "profiles.json")
+    store.save("acc @ S58", prof)
+    reloaded = Profile.from_dict(store.get("acc @ S58").to_dict())
+
+    assert reloaded.goi_dan.auto_swap_tactician is True
+    assert reloaded.goi_dan.min_tactician_stamina == "45"
+    assert reloaded.binh_man.auto_swap_tactician is True
+    assert reloaded.binh_man.min_tactician_stamina == "50"
+    assert reloaded.binh_man.bases["1001"].auto_swap_tactician is True
+    assert reloaded.binh_man.bases["1001"].min_tactician_stamina == "35"
+
+
 
 
 

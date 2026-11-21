@@ -487,6 +487,10 @@ _Avoid_: Game session, token đăng nhập game
 Kho lưu trữ tùy chọn bảo vệ mật khẩu tài khoản game ở trạng thái mã hóa trên ổ đĩa, cho phép dịch vụ nền tự động khôi phục kết nối sau khi khởi động lại máy chủ khi được mở khóa.
 _Avoid_: Lưu mật khẩu thô, auto-login cache, file password
 
+**Tự Động Đổi Mưu Sĩ** (`Auto-Swap Tactician`):
+Tùy chọn theo từng tác vụ **Bình Man** / từng căn cứ và tác vụ **Gọi Man** tự động kiểm tra **Mưu Sĩ** đang biên chế cho các **Võ Tướng** rảnh tại thành/trại trước khi xuất quân (và khi bấm `Biên chế ngay`). Nếu tướng chưa có mưu sĩ hoặc thể lực (%) của mưu sĩ đang biên chế thấp hơn **Ngưỡng Thể Lực Mưu Sĩ** (`min_tactician_stamina`, mặc định `30%`), hệ thống ghép cặp tướng cấp cao nhất với văn quan rảnh cùng `origin_id` có thể lực đạt ngưỡng từ cấp cao xuống thấp; nếu không có văn quan thay thế đạt ngưỡng thì giữ nguyên mưu sĩ hiện tại để tránh mất chỉ số.
+_Avoid_: Đổi chéo thành/trại, tháo mưu sĩ khi không có người thay
+
 
 ## Danh Mục Công Trình (Nhà)
 

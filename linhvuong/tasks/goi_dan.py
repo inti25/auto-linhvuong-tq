@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional
 
 from ..battle import BattleEngine, BattleReport, BattleState, CombatConfig
 from ..coords import coords_from_mid, mid_from_coords
+from ..generals import auto_swap_low_stamina_tacticians
 from ..locks import LockReason
 from ..roster import Army, fetch_roster
 from ..scan import Target
@@ -69,6 +70,8 @@ class GoiDan:
         auto_morale: bool = True,
         min_morale: int = 95,
         provisioner: Optional[ArmyProvisioner] = None,
+        auto_swap_tactician: bool = False,
+        min_tactician_stamina: float = 30.0,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -96,6 +99,8 @@ class GoiDan:
         self.auto_morale = auto_morale
         self.min_morale = min_morale
         self.provisioner = provisioner or ArmyProvisioner(ctx.gateway, sleep_fn=sleep_fn)
+        self.auto_swap_tactician = bool(auto_swap_tactician)
+        self.min_tactician_stamina = max(0.0, min(100.0, float(min_tactician_stamina)))
 
         # Tự động suy ra mode từ target_type nếu mode chưa được chỉ định
         if mode:
@@ -435,51 +440,71 @@ class GoiDan:
                     self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
                 return "generals_busy"
 
-        # 1. Chuẩn bị quân lực & Luyện sĩ khí trước khi gọi/xuất quân
-        if self.city_id and self.target_army is not None and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale):
+        # 1. Tự động đổi Mưu sĩ & Chuẩn bị quân lực / Luyện sĩ khí trước khi gọi/xuất quân
+        needs_army_prep = bool(
+            self.target_army is not None
+            and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
+        )
+        if self.city_id and (needs_army_prep or self.auto_swap_tactician):
             try:
                 roster = fetch_roster(
                     self.ctx.gateway,
                     only_base_ids=[self.city_id],
-                    include_civil=False,
+                    include_civil=bool(self.auto_swap_tactician),
                     include_cities=False,
                 )
-                city_gens = {g.id: g for g in roster.generals_of(self.city_id)}
             except Exception:
                 roster = None
-                city_gens = {}
 
-            # Trị thương & Bổ sung lính
-            troops_added = False
-            for gid in self.generals:
-                self.provisioner.heal_general(self.city_id, gid)
-                if self.auto_recruit and self.target_army and self.target_army.total > 0 and roster:
-                    cur_army = roster.army_of(gid)
-                    adj_res = self.provisioner.adjust_troops(
-                        base_id=self.city_id,
-                        general_id=gid,
-                        current_army=cur_army,
-                        target_army=self.target_army,
-                        auto_recruit=True,
-                        on_log=self.ctx.notify,
-                    )
-                    if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
-                        troops_added = True
-
-            # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
-            if self.auto_morale and city_gens:
-                trainer = MoraleTrainer(self.ctx.gateway)
-                ready, wait_reasons = trainer.adjust_squad_morale(
+            if self.auto_swap_tactician and roster is not None:
+                auto_swap_low_stamina_tacticians(
+                    gateway=self.ctx.gateway,
+                    roster=roster,
                     base_id=self.city_id,
                     general_ids=self.generals,
-                    target_morale=self.min_morale,
-                    base_gens=city_gens,
-                    on_notify=self.ctx.notify,
-                    stop_event=getattr(self.ctx, "stop_event", None),
-                    refresh_from_server=troops_added,
+                    min_stamina_pct=self.min_tactician_stamina,
+                    on_log=self.ctx.notify,
+                    stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
                 )
-                if not ready:
-                    return "waiting_morale"
+
+            if needs_army_prep:
+                city_gens = (
+                    {g.id: g for g in roster.generals_of(self.city_id) if g.role == "vo"}
+                    if roster
+                    else {}
+                )
+
+                # Trị thương & Bổ sung lính
+                troops_added = False
+                for gid in self.generals:
+                    self.provisioner.heal_general(self.city_id, gid)
+                    if self.auto_recruit and self.target_army and self.target_army.total > 0 and roster:
+                        cur_army = roster.army_of(gid)
+                        adj_res = self.provisioner.adjust_troops(
+                            base_id=self.city_id,
+                            general_id=gid,
+                            current_army=cur_army,
+                            target_army=self.target_army,
+                            auto_recruit=True,
+                            on_log=self.ctx.notify,
+                        )
+                        if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                            troops_added = True
+
+                # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
+                if self.auto_morale and city_gens:
+                    trainer = MoraleTrainer(self.ctx.gateway)
+                    ready, wait_reasons = trainer.adjust_squad_morale(
+                        base_id=self.city_id,
+                        general_ids=self.generals,
+                        target_morale=self.min_morale,
+                        base_gens=city_gens,
+                        on_notify=self.ctx.notify,
+                        stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
+                        refresh_from_server=troops_added,
+                    )
+                    if not ready:
+                        return "waiting_morale"
 
         # 2. Chỉ đánh trực tiếp nếu đã có mục tiêu nằm sát thành; nếu ở xa phải gọi/kéo về trước
         target = self._find_existing_near_target()

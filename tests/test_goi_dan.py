@@ -1051,6 +1051,83 @@ def test_goi_man_vong_linh_209_not_found_falls_back_to_next_type():
     assert calls_69[1]["param1"] == "3301"
 
 
+def test_goi_man_auto_swap_tactician_and_fallback_when_no_replacement():
+    """GoiDan tự động đổi mưu sĩ thể lực thấp khi đủ điều kiện và giữ nguyên khi không có người thay thế."""
+    origin_mid = mid_from_coords(180, 67)
+    empty_mid = mid_from_coords(181, 67)
+
+    def _pageofficial():
+        hero_type = str(server.calls[-1][1].get("heroType", "2"))
+        if hero_type == "1":
+            gens = [
+                [701, "VanThap", 100, 100, 2, 0, 20, 100, 15, 100],
+                [702, "VanKhoe", 100, 100, 0, 0, 50, 100, 90, 100],
+            ]
+        else:
+            gens = [[6330, "VoChinh", 100, 100, 0, 0, 60, 100, 95, 100]]
+        return {"ret": 0, "data": {"ret": 0, "list": [[10254, "TT", 180, 67, gens]]}}
+
+    def handle_call_69():
+        server.map_views[origin_mid] = {"npc_tent": [man(181, 67, 2299, 1)], "infos": [[empty_mid, 1, 0, 0, 0, 0]]}
+        return {"ret": 0}
+
+    server = FakeServer(
+        map_views={origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]}},
+        handlers={
+            "/api/city/list": {
+                "ret": 0,
+                "data": {"items": [{"m_ltype": 1, "m_lid": 10254, "m_szname": "TT", "m_lx_pos": 180, "m_ly_pos": 67, "m_llevel": 1}]},
+            },
+            "/api/city/pageofficial": _pageofficial,
+            "/api/city/pagemytroopslist": {
+                "ret": 0,
+                "data": {"ret": 0, "list": [[10254, "TT", [[6330, "VoChinh", 701, "VanThap", 0, 100, 0, 0, 0, 100, 0]]]]},
+            },
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=5": {"ret": 0},
+            "OPT.ashx?id=69": handle_call_69,
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(
+        ctx,
+        generals=[6330],
+        origin=(180, 67),
+        radius=5,
+        mode="dan",
+        target_type=1,
+        city_id=10254,
+        auto_swap_tactician=True,
+        min_tactician_stamina=30.0,
+    )
+    out = task.run_once()
+    assert out == "called_and_attacked"
+    post_seq = [k for k, _ in server.calls if k in ("OPT.ashx?id=5", "OPT.ashx?id=69", "OPT.ashx?id=53")]
+    assert post_seq == ["OPT.ashx?id=5", "OPT.ashx?id=5", "OPT.ashx?id=69", "OPT.ashx?id=53"]
+
+    # Ngưỡng 95%: VanKhoe 90% không đạt -> không gọi id=5 (giữ VanThap) và vẫn gọi đánh
+    server.calls.clear()
+    server.map_views[origin_mid] = {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]}
+    alerts2 = []
+    task_high = GoiDan(
+        ctx_for(server)[0],
+        generals=[6330],
+        origin=(180, 67),
+        radius=5,
+        mode="dan",
+        target_type=1,
+        city_id=10254,
+        auto_swap_tactician=True,
+        min_tactician_stamina=95.0,
+    )
+    task_high.ctx.notify = alerts2.append
+    out2 = task_high.run_once()
+    assert out2 == "called_and_attacked"
+    assert not any(k == "OPT.ashx?id=5" for k, _ in server.calls)
+    assert any("giữ nguyên" in a.lower() for a in alerts2)
+
+
 
 
 

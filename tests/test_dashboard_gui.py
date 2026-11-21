@@ -4111,3 +4111,121 @@ def test_dashboard_enhance_tab_load_filter_enhance_and_destroy_guard(monkeypatch
             dlg.destroy()
     finally:
         dash.destroy()
+
+
+def test_dashboard_auto_swap_tactician_controls_profile_and_manual_provision():
+    from linhvuong.profile import BaseBinhManConfig
+    from linhvuong.troops import ArmyProvisioner
+
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        dash._loaded(r)
+
+        assert dash.bm_auto_swap_tactician_var.get() is False
+        assert dash.bm_min_tactician_stamina_var.get() == "30"
+        assert dash.gd_auto_swap_tactician_var.get() is False
+        assert dash.gd_min_tactician_stamina_var.get() == "30"
+
+        # Bình Man per-base config & roundtrip
+        dash.bm_base_configs[15230] = BaseBinhManConfig(
+            name="ThanhChinh",
+            enabled=True,
+            mode=2,
+            generals=[417506],
+            auto_recruit=False,
+            auto_morale=False,
+            auto_swap_tactician=True,
+            min_tactician_stamina="45",
+        )
+        dash.bm_base_configs[-1085] = BaseBinhManConfig(
+            name="TienDon",
+            enabled=False,
+            mode=1,
+            generals=[417520],
+            auto_recruit=False,
+            auto_morale=False,
+            auto_swap_tactician=False,
+            min_tactician_stamina="35",
+        )
+        dash._load_bm_base_config(15230)
+        assert dash.bm_auto_swap_tactician_var.get() is True
+        assert dash.bm_min_tactician_stamina_var.get() == "45"
+        dash._load_bm_base_config(-1085)
+        assert dash.bm_auto_swap_tactician_var.get() is False
+        assert dash.bm_min_tactician_stamina_var.get() == "35"
+
+        bm_prof = dash._collect_binh_man_profile_dict()
+        dash._apply_binh_man_profile_dict(bm_prof)
+        assert dash.bm_base_configs[15230].auto_swap_tactician is True
+        assert dash.bm_base_configs[15230].min_tactician_stamina == "45"
+
+        # Gọi Man profile roundtrip & task forwarding
+        dash.gd_auto_swap_tactician_var.set(True)
+        dash.gd_min_tactician_stamina_var.set("55")
+        gd_prof = dash._collect_goi_dan_profile_dict()
+        dash.gd_auto_swap_tactician_var.set(False)
+        dash.gd_min_tactician_stamina_var.set("30")
+        dash._apply_goi_dan_profile_dict(gd_prof)
+        assert dash.gd_auto_swap_tactician_var.get() is True
+        assert dash.gd_min_tactician_stamina_var.get() == "55"
+
+        tasks = dash._create_binhman_tasks()
+        assert len(tasks) == 1
+        assert tasks[0].auto_swap_tactician is True
+        assert tasks[0].min_tactician_stamina == 45.0
+
+        dash._load_bm_base_config(15230)
+        single_bm = dash._create_binhman_task()
+        assert single_bm is not None
+        assert single_bm.auto_swap_tactician is True
+        assert single_bm.min_tactician_stamina == 45.0
+
+        dash.gd_city_combo.current(0)
+        gd_task = dash._create_goidan_task()
+        assert gd_task is not None
+        assert gd_task.auto_swap_tactician is True
+        assert gd_task.min_tactician_stamina == 55.0
+
+        # Kiểm tra manual provision ("Biên chế ngay") chạy auto-swap ngay cả khi target_army=0 & auto_morale=False
+        swap_roster = Roster(
+            cities=[City(id=15230, name="ThanhChinh", type="Thành", pos_x=100, pos_y=200)],
+            _generals={
+                15230: [
+                    General(id=417506, name="TrieuVan", role="vo", level=50, morale=100, stamina=95, stamina_max=100, tactician_id=0),
+                    General(id=417513, name="GiaCatLuong", role="van", level=60, morale=100, stamina=80, stamina_max=100, special_status=0, status=0),
+                ]
+            },
+        )
+        fetch_calls = []
+
+        def fake_fetch_roster(_gw, **kwargs):
+            fetch_calls.append(kwargs)
+            return swap_roster
+
+        dash.gateway = MagicMock()
+        dash.gateway.call.return_value = {"ret": 0}
+        with patch("linhvuong.dashboard.binhman._default_fetch_roster", side_effect=fake_fetch_roster), patch.object(
+            ArmyProvisioner, "heal_general", return_value=(True, 0, "")
+        ):
+            dash._provision_base_troops(15230, "ThanhChinh", dash.bm_base_configs[15230], ArmyProvisioner(dash.gateway))
+        assert any(c.get("include_civil") is True for c in fetch_calls)
+        assert any(call.args[:2] == ("OPT.ashx", 5) for call in dash.gateway.call.call_args_list)
+
+        dash.gateway.call.reset_mock()
+        dash.gd_auto_recruit_var.set(False)
+        dash.gd_auto_morale_var.set(False)
+        dash.gd_target_inf_var.set("0")
+        dash.gd_target_cav_var.set("0")
+        dash.gd_target_arc_var.set("0")
+        dash.gd_gen_tree.item("417506", values=("☑", 417506, "TrieuVan", "Bộ:100 Kỵ:200 Cung:300", 10, 100, 95))
+        with patch("linhvuong.dashboard.goidan._default_fetch_roster", side_effect=fake_fetch_roster), patch.object(
+            ArmyProvisioner, "heal_general", return_value=(True, 0, "")
+        ), patch("linhvuong.dashboard.goidan.threading.Thread") as mock_gd_thread:
+            dash._manual_adjust_gd_troops()
+            assert mock_gd_thread.called
+            mock_gd_thread.call_args.kwargs["target"]()
+            dash.update()
+        assert any(call.args[:2] == ("OPT.ashx", 5) for call in dash.gateway.call.call_args_list)
+    finally:
+        dash.destroy()

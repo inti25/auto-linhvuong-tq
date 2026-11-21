@@ -1449,3 +1449,94 @@ def test_web_enhance_endpoints_high_level_destroy_guard_and_captcha(tmp_path, mo
         assert client.post("/api/accounts/enhuser%20%40%20S58/enhance/stop").status_code == 200
 
     wm.graceful_shutdown()
+
+
+def test_runtime_and_web_auto_swap_tactician_forwarding_and_ui(tmp_path, monkeypatch):
+    import time
+
+    _mock_offline(monkeypatch)
+    reset_notified_bosses()
+
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="webpassword")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "webpassword"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 58, "username": "swapuser", "password": "secret"},
+        ).status_code == 200
+
+        js = client.get("/static/app.js").text
+        for dom_id in ("bm-swap-tac", "bm-min-tac-stam", "gd-swap-tac", "gd-min-tac-stam"):
+            assert dom_id in js
+
+        assert client.put(
+            "/api/accounts/swapuser%20%40%20S58/profile",
+            json={
+                "binh_man": {
+                    "bases": {
+                        "1001": {
+                            "enabled": True,
+                            "mode": 2,
+                            "generals": [1],
+                            "auto_recruit": False,
+                            "auto_morale": False,
+                            "auto_swap_tactician": True,
+                            "min_tactician_stamina": "45",
+                        }
+                    }
+                },
+                "goi_dan": {
+                    "city_id": 1001,
+                    "generals": [1],
+                    "auto_recruit": False,
+                    "auto_morale": False,
+                    "auto_swap_tactician": True,
+                    "min_tactician_stamina": "55",
+                },
+            },
+        ).status_code == 200
+
+        sess = wm.get_session("swapuser @ S58")
+        assert sess is not None
+        started = {}
+        monkeypatch.setattr(sess.engine, "start", lambda name, runnable, **_kw: started.__setitem__(name, runnable))
+
+        assert client.post("/api/accounts/swapuser%20%40%20S58/tasks/binhman/start").status_code == 200
+        assert started["binhman"].tasks[0].auto_swap_tactician is True
+        assert started["binhman"].tasks[0].min_tactician_stamina == 45.0
+
+        assert client.post("/api/accounts/swapuser%20%40%20S58/tasks/goidan/start").status_code == 200
+        assert started["goidan"].auto_swap_tactician is True
+        assert started["goidan"].min_tactician_stamina == 55.0
+
+        # Kiểm tra endpoints provision ("Biên chế") chuyển tiếp include_civil=True & ngưỡng thể lực
+        swap_calls = []
+        fetch_calls = []
+
+        def fake_fetch(_gw, **kwargs):
+            fetch_calls.append(kwargs)
+            return _fake_roster()
+
+        monkeypatch.setattr(runtime_mod, "fetch_roster", fake_fetch)
+        monkeypatch.setattr(
+            runtime_mod,
+            "auto_swap_low_stamina_tacticians",
+            lambda _gw, **kwargs: swap_calls.append(kwargs),
+        )
+        monkeypatch.setattr(runtime_mod.ArmyProvisioner, "heal_general", lambda self, *_a, **_kw: (True, 0, ""))
+
+        assert client.post("/api/accounts/swapuser%20%40%20S58/tasks/binhman/provision", json={"base_id": 1001}).status_code == 200
+        assert client.post("/api/accounts/swapuser%20%40%20S58/tasks/goidan/provision").status_code == 200
+        deadline = time.monotonic() + 2.0
+        while len(swap_calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        assert len(swap_calls) == 2
+        assert any(c["min_stamina_pct"] == 45.0 and c["base_id"] == 1001 for c in swap_calls)
+        assert any(c["min_stamina_pct"] == 55.0 and c["base_id"] == 1001 for c in swap_calls)
+        assert all(fc.get("include_civil") is True for fc in fetch_calls)
+
+    wm.graceful_shutdown()

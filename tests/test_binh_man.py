@@ -1107,3 +1107,130 @@ def test_binh_man_recover_in_city_refills_only_missing_troops():
     troop_add_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
     assert len(troop_add_calls) == 1
     assert troop_add_calls[0]["lAmount"] == "5000"
+
+
+def test_binh_man_auto_swap_tactician_before_attack_without_target_army():
+    """Ngay cả khi target_army=None & auto_morale=False, BinhMan vẫn kiểm tra & đổi mưu sĩ trước khi đánh."""
+    def _pageofficial():
+        hero_type = str(server.calls[-1][1].get("heroType", "2"))
+        if hero_type == "1":
+            gens = [
+                [201, "VanThap", 100, 100, 2, 0, 20, 100, 20, 100],
+                [202, "VanKhoe", 100, 100, 0, 0, 45, 100, 85, 100],
+            ]
+        else:
+            gens = [[15, "TC1_01", 100, 100, 0, 0, 50, 100, 95, 100]]
+        return {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, gens]]}}
+
+    server = FakeServer(
+        map_views={mid_from_coords(10, 10): {"npc_tent": [man(10, 10, 7701, 7)]}},
+        handlers={
+            "/api/city/list": {
+                "ret": 0,
+                "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]},
+            },
+            "/api/city/pageofficial": _pageofficial,
+            "/api/city/pagemytroopslist": {
+                "ret": 0,
+                "data": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 201, "VanThap", 0, 100, 0, 0, 0, 100, 0]]]]},
+            },
+            "OPT.ashx?id=5": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=None,
+        auto_recruit=False,
+        auto_morale=False,
+        auto_swap_tactician=True,
+        min_tactician_stamina=30.0,
+    )
+    out = task.run_once()
+    assert out == "attacked"
+
+    hero_types = [str(p.get("heroType")) for ep, p in server.calls if ep == "/api/city/pageofficial"]
+    assert "1" in hero_types and "2" in hero_types
+
+    post_keys = [k for k, _ in server.calls if k in ("OPT.ashx?id=5", "OPT.ashx?id=53")]
+    assert post_keys == ["OPT.ashx?id=5", "OPT.ashx?id=5", "OPT.ashx?id=53"]
+    opt5_calls = [d for k, d in server.calls if k == "OPT.ashx?id=5"]
+    assert opt5_calls[0]["lType"] == "0" and opt5_calls[0]["lGeneralID"] == "201"
+    assert opt5_calls[1]["lType"] == "3" and opt5_calls[1]["lGeneralID"] == "202" and opt5_calls[1]["lFollowGeneralID"] == "15"
+    assert any("VanKhoe" in a for a in alerts)
+
+
+def test_binh_man_mode1_camp_swaps_only_within_camp_and_continues_when_no_replacement():
+    """Chế độ 1 tại Doanh trại chỉ xét Văn quan cùng trại, không điều từ Thành mẹ & giữ nguyên mưu sĩ cũ nếu thiếu người."""
+    def _pageofficial():
+        hero_type = str(server.calls[-1][1].get("heroType", "2"))
+        if hero_type == "1":
+            return {
+                "ret": 0,
+                "data": {
+                    "ret": 0,
+                    "list": [
+                        [1001, "ThanhMe", 10, 10, [[299, "VanThanhMe", 100, 100, 0, 0, 99, 100, 100, 100]]],
+                        [-2001, "Trai1", 12, 12, [[201, "VanTraiYeu", 100, 100, 2, 0, 30, 100, 10, 100]]],
+                    ],
+                },
+            }
+        return {
+            "ret": 0,
+            "data": {
+                "ret": 0,
+                "list": [
+                    [-2001, "Trai1", 12, 12, [[15, "VoTrai", 100, 100, 0, 0, 50, 100, 95, 100]]],
+                ],
+            },
+        }
+
+    server = FakeServer(
+        map_views={mid_from_coords(12, 12): {"npc_tent": [man(12, 12, 7702, 7)]}},
+        handlers={
+            "/api/city/list": {
+                "ret": 0,
+                "data": {
+                    "items": [
+                        {"m_ltype": 1, "m_lid": 1001, "m_szname": "ThanhMe", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1},
+                        {"m_ltype": 5, "m_lid": -2001, "m_szname": "Trai1", "m_lx_pos": 12, "m_ly_pos": 12, "m_llevel": 1},
+                    ]
+                },
+            },
+            "/api/city/pageofficial": _pageofficial,
+            "/api/city/pagemytroopslist": {
+                "ret": 0,
+                "data": {"ret": 0, "list": [[-2001, "Trai1", [[15, "VoTrai", 201, "VanTraiYeu", 0, 100, 0, 0, 0, 100, 0]]]]},
+            },
+            "OPT.ashx?id=5": {"ret": 0},
+            "OPT.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(12, 12),
+        radius=5,
+        man_types=[7],
+        camp_id=-2001,
+        parent_city_id=1001,
+        mode=1,
+        target_army=None,
+        auto_recruit=False,
+        auto_morale=False,
+        auto_swap_tactician=True,
+        min_tactician_stamina=30.0,
+    )
+    out = task.run_once()
+    assert out == "attacked"
+    assert not any(k in ("OPT.ashx?id=5", "OPT.ashx?id=50") for k, _ in server.calls)
+    assert any("giữ nguyên" in a.lower() for a in alerts)

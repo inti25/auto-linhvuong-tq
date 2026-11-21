@@ -42,6 +42,8 @@ def _make_gen(
     special_status: int = 0,
     tactician_id: int = 0,
     tactician_name: str = "",
+    stamina: int = 100,
+    stamina_max: int = 100,
 ) -> General:
     _ = city_id
     return General(
@@ -50,8 +52,8 @@ def _make_gen(
         role=role,
         level=level,
         morale=100,
-        stamina=100,
-        stamina_max=100,
+        stamina=stamina,
+        stamina_max=stamina_max,
         loyalty=loyalty,
         status=status,
         special_status=special_status,
@@ -1165,3 +1167,139 @@ def test_add_points_generals_allows_busy_skips_zero_points_and_supports_stop():
     assert s.generals_succeeded == 2
     assert calls == [1, 1, 3]
     assert s.stopped is True
+
+
+def test_auto_swap_low_stamina_tacticians_priority_filters_and_unassigned():
+    from linhvuong.generals import (
+        auto_swap_low_stamina_tacticians,
+        general_stamina_percent,
+        parse_stamina_threshold,
+    )
+
+    assert parse_stamina_threshold("29.5") == 29.5
+    assert parse_stamina_threshold("-5") == 0.0
+    assert parse_stamina_threshold("150") == 100.0
+    assert parse_stamina_threshold("bad", default=30.0) == 30.0
+    assert parse_stamina_threshold(float("nan"), default=30.0) == 30.0
+
+    # Tránh sai số dấu phẩy động kiểu 29 / 100 * 100.0 == 28.999999999999996
+    c_29 = _make_gen(11, "Van29", "van", stamina=29, stamina_max=100)
+    assert general_stamina_percent(c_29) == 29.0
+    c_0max = _make_gen(12, "VanMax0", "van", stamina=0, stamina_max=0)
+    assert general_stamina_percent(c_0max) == 100.0
+
+    c_low = _make_gen(201, "VanLow", "van", city_id=100, level=45, special_status=2, stamina=29, stamina_max=100)
+    c_ok = _make_gen(202, "VanExact30", "van", city_id=100, level=20, special_status=2, stamina=30, stamina_max=100)
+    c_mayor = _make_gen(203, "ThaiThu", "van", city_id=100, level=90, special_status=1, stamina=100, stamina_max=100)
+    c_busy = _make_gen(204, "VanBan", "van", city_id=100, level=85, special_status=0, status=1, stamina=100, stamina_max=100)
+    c_low_free = _make_gen(205, "VanYeu", "van", city_id=100, level=80, special_status=0, status=0, stamina=25, stamina_max=100)
+    c_best = _make_gen(206, "VanVip", "van", city_id=100, level=60, special_status=0, status=0, stamina=80, stamina_max=100)
+    c_second = _make_gen(207, "VanNhi", "van", city_id=100, level=35, special_status=0, status=0, stamina=50, stamina_max=100)
+    c_other_city = _make_gen(299, "VanThanhKhac", "van", city_id=200, level=99, special_status=0, status=0, stamina=100, stamina_max=100)
+
+    v_high = _make_gen(101, "VoCao", "vo", city_id=100, level=50, status=0, tactician_id=201, tactician_name="VanLow")
+    v_unassigned = _make_gen(102, "VoChuaCo", "vo", city_id=100, level=40, status=0, tactician_id=0)
+    v_healthy = _make_gen(103, "VoDu30", "vo", city_id=100, level=60, status=0, tactician_id=202, tactician_name="VanExact30")
+    v_busy = _make_gen(104, "VoBan", "vo", city_id=100, level=70, status=1, tactician_id=0)
+
+    roster = Roster(
+        cities=[_make_city(100, "ThanhA"), _make_city(200, "ThanhB")],
+        _generals={
+            100: [v_unassigned, v_high, v_healthy, v_busy, c_low, c_ok, c_mayor, c_busy, c_low_free, c_best, c_second],
+            200: [c_other_city],
+        },
+    )
+    gw = FakeGateway()
+    logs: list[str] = []
+    summary = auto_swap_low_stamina_tacticians(
+        gw,
+        roster=roster,
+        base_id=100,
+        general_ids=[101, 102, 103, 104],
+        min_stamina_pct=30.0,
+        on_log=logs.append,
+    )
+
+    assert summary.checked == 3
+    assert summary.swapped == 1
+    assert summary.assigned == 1
+    assert summary.kept_healthy == 1
+    assert summary.skipped_busy == 1
+    assert summary.no_replacement == 0
+    assert summary.failed == 0
+    assert summary.rolled_back == 0
+
+    opt5_calls = [(op, body) for ep, op, body in gw.calls if ep == "OPT.ashx" and op == 5]
+    assert len(opt5_calls) == 3
+    # Tháo VanLow -> gán VanVip (Lv.60) cho VoCao (Lv.50), rồi gán VanNhi (Lv.35) cho VoChuaCo (Lv.40)
+    assert opt5_calls[0][1]["lType"] == "0" and opt5_calls[0][1]["lGeneralID"] == "201"
+    assert opt5_calls[1][1]["lType"] == "3" and opt5_calls[1][1]["lGeneralID"] == "206" and opt5_calls[1][1]["lFollowGeneralID"] == "101"
+    assert opt5_calls[2][1]["lType"] == "3" and opt5_calls[2][1]["lGeneralID"] == "207" and opt5_calls[2][1]["lFollowGeneralID"] == "102"
+    # Không lấy văn quan từ thành khác (299)
+    assert all(body["lGeneralID"] != "299" for _, body in opt5_calls)
+
+
+def test_auto_swap_low_stamina_tacticians_no_replacement_keeps_existing():
+    from linhvuong.generals import auto_swap_low_stamina_tacticians
+
+    c_low = _make_gen(201, "VanLow", "van", city_id=100, level=40, special_status=2, stamina=10, stamina_max=100)
+    c_weak_free = _make_gen(202, "VanYeu", "van", city_id=100, level=50, special_status=0, stamina=25, stamina_max=100)
+    v_mil = _make_gen(101, "Vo1", "vo", city_id=100, level=50, tactician_id=201, tactician_name="VanLow")
+    roster = Roster(cities=[_make_city(100, "ThanhA")], _generals={100: [v_mil, c_low, c_weak_free]})
+
+    gw = FakeGateway()
+    logs: list[str] = []
+    summary = auto_swap_low_stamina_tacticians(
+        gw,
+        roster=roster,
+        base_id=100,
+        general_ids=[101],
+        min_stamina_pct=30.0,
+        on_log=logs.append,
+    )
+
+    assert gw.calls == []
+    assert summary.no_replacement == 1
+    assert summary.swapped == 0
+    assert any("giữ nguyên" in line.lower() for line in logs)
+
+
+def test_auto_swap_low_stamina_tacticians_rollback_and_captcha():
+    from linhvuong.generals import auto_swap_low_stamina_tacticians
+    from linhvuong.tasks.base import CaptchaRequired
+
+    c_old = _make_gen(201, "VanCu", "van", city_id=100, level=30, special_status=2, stamina=10, stamina_max=100)
+    c_new = _make_gen(202, "VanMoi", "van", city_id=100, level=40, special_status=0, stamina=90, stamina_max=100)
+    v_mil = _make_gen(101, "Vo1", "vo", city_id=100, level=50, tactician_id=201, tactician_name="VanCu")
+
+    roster = Roster(cities=[_make_city(100, "ThanhA")], _generals={100: [v_mil, c_old, c_new]})
+
+    def _fail_assign_handler(_ep, _op, body):
+        if body.get("lType") == "3" and body.get("lGeneralID") == "202":
+            return {"ret": 99}
+        return {"ret": 0}
+
+    gw = FakeGateway(_fail_assign_handler)
+    summary = auto_swap_low_stamina_tacticians(gw, roster=roster, base_id=100, general_ids=[101], min_stamina_pct=30.0)
+    assert summary.failed == 1
+    assert summary.rolled_back == 1
+    opt5_calls = [body for _, op, body in gw.calls if op == 5]
+    assert [(b["lType"], b["lGeneralID"], b["lFollowGeneralID"]) for b in opt5_calls] == [
+        ("0", "201", "0"),
+        ("3", "202", "101"),
+        ("3", "201", "101"),
+    ]
+
+    # Captcha ret=110 phải ném CaptchaRequired
+    roster2 = Roster(
+        cities=[_make_city(100, "ThanhA")],
+        _generals={
+            100: [
+                _make_gen(101, "Vo1", "vo", city_id=100, level=50, tactician_id=0),
+                _make_gen(202, "VanMoi", "van", city_id=100, level=40, special_status=0, stamina=90, stamina_max=100),
+            ]
+        },
+    )
+    gw_cap = FakeGateway(lambda _ep, _op, _b: {"ret": 110})
+    with pytest.raises(CaptchaRequired):
+        auto_swap_low_stamina_tacticians(gw_cap, roster=roster2, base_id=100, general_ids=[101], min_stamina_pct=30.0)
