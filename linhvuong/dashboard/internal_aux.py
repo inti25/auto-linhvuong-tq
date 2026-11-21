@@ -280,6 +280,23 @@ class InternalAuxMixin:
         self.aux_tribute_bld_combo.set("官府 (Quan Phủ)")
         self.aux_tribute_bld_combo.pack(side="left", padx=4)
 
+        r_aux3b = tk.Frame(f_aux, bg=BG)
+        r_aux3b.pack(fill="x", padx=4, pady=2)
+        tk.Checkbutton(
+            r_aux3b,
+            text="Đào tạo tướng",
+            variable=self.aux_training_var,
+            command=self._on_aux_training_toggled,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=2)
+        self.aux_training_time_lbl = tk.Label(r_aux3b, text="(Tắt)", bg=BG, fg="#94a3b8", font=("Segoe UI", 8, "bold"))
+        self.aux_training_time_lbl.pack(side="left", padx=2)
+        ttk.Button(r_aux3b, text="Chọn tướng", command=self._open_training_dialog).pack(side="right", padx=2)
+
         r_aux4 = tk.Frame(f_aux, bg=BG)
         r_aux4.pack(fill="x", padx=4, pady=2)
         tk.Checkbutton(
@@ -1333,6 +1350,8 @@ class InternalAuxMixin:
             if hasattr(self, "aux_boost_time_lbl") and self.aux_boost_time_lbl.winfo_exists():
                 self._check_and_update_boost_status(async_check=True)
                 self._check_and_run_explore(async_check=True)
+                if hasattr(self, "_check_and_run_training"):
+                    self._check_and_run_training(async_check=True)
                 today_str = time.strftime("%Y-%m-%d")
                 if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():
                     if getattr(self, "_last_daily_claim_date", None) != today_str:

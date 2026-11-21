@@ -529,6 +529,32 @@ def test_auto_swap_tactician_profile_defaults_and_roundtrip():
     assert loaded.binh_man.bases["101"].min_tactician_stamina == "35"
 
 
+def test_training_profile_defaults_dedup_order_and_roundtrip():
+    from linhvuong.profile import TrainingProfile
+
+    # Tương thích ngược với hồ sơ cũ chưa có key training
+    legacy = Profile.from_dict({"version": 1})
+    assert legacy.training.enabled is False
+    assert legacy.training.vo_general_ids == []
+    assert legacy.training.van_general_ids == []
+
+    tp = TrainingProfile.from_dict({
+        "enabled": True,
+        "vo_general_ids": ["103", 101, 103, -5, "abc", 102],
+        "van_general_ids": [202, "201", 202, 0],
+    })
+    assert tp.enabled is True
+    assert tp.vo_general_ids == [103, 101, 102]
+    assert tp.van_general_ids == [202, 201]
+
+    prof = Profile()
+    prof.training = tp
+    roundtrip = Profile.from_dict(prof.to_dict())
+    assert roundtrip.training.enabled is True
+    assert roundtrip.training.vo_general_ids == [103, 101, 102]
+    assert roundtrip.training.van_general_ids == [202, 201]
+
+
 
 
 

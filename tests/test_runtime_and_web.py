@@ -748,7 +748,8 @@ function makeEl(tag, id = "", className = "") {
           "btn-apply-rsrc","btn-xfer-add","btn-xfer-del","xfer-int","btn-tgl-xfer","xfer-status-lbl",
           "btn-logi-load-stock","army-xfer-from","army-xfer-to","btn-army-xfer-load-stock",
           "army-xfer-weapon","army-xfer-loop","btn-tgl-army-xfer","btn-army-xfer-once",
-          "army-xfer-status-lbl","xfer-panel-market","xfer-panel-army"
+          "army-xfer-status-lbl","xfer-panel-market","xfer-panel-army",
+          "aux-training","aux-training-lbl","btn-open-training-aux"
         ];
         for (const cid of ids) {
           const c = makeEl("button", cid, "");
@@ -1976,3 +1977,101 @@ def test_runtime_and_web_auto_swap_tactician_forwarding_and_ui(tmp_path, monkeyp
     app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for elem_id in ("bm-swap-tac", "bm-min-tac-stam", "gd-swap-tac", "gd-min-tac-stam"):
         assert elem_id in app_js
+
+
+def test_runtime_and_web_general_training_endpoints_aux_and_captcha(tmp_path, monkeypatch):
+    from pathlib import Path
+    import time
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="webpassword")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "webpassword"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 53, "username": "trnuser", "password": "secret"},
+        ).status_code == 200
+
+        sess = wm.get_session("trnuser @ S53")
+        calls = []
+        state = {
+            "2": {"slots": 1, "list": []},
+            "1": {"slots": 1, "list": []},
+            "captcha": False,
+        }
+
+        def fake_call(ep, oid, payload=None, **_kw):
+            p = dict(payload or {})
+            calls.append((ep, oid, p))
+            if state["captcha"] and ep in ("Common.ashx", "OPT.ashx") and oid in (141, 178):
+                return {"ret": 110}
+            if ep == "Common.ashx" and oid == 141:
+                assert int(p["lCityID"]) > 0
+                return {"ret": 0, **state[str(p["lType"])], "hero": []}
+            if ep == "OPT.ashx" and oid == 178:
+                t = str(p["lType"])
+                pos = int(p["lPos"])
+                hid = int(p["lHeroID"])
+                state[t]["list"].append([pos, 86400, hid, 4001, f"H{hid}"])
+                return {"ret": 0, "exp": 321}
+            return {"ret": 0}
+
+        sess.gateway.call = fake_call
+
+        # 1. GET /training/status
+        r_st = client.get("/api/accounts/trnuser%20%40%20S53/training/status")
+        assert r_st.status_code == 200
+        trn_data = r_st.json()["training"]
+        assert trn_data["vo"]["unlocked_slots"] == 1
+        assert trn_data["van"]["unlocked_slots"] == 1
+
+        # 2. POST /training/run khi chưa chọn tướng -> 400
+        r_empty = client.post("/api/accounts/trnuser%20%40%20S53/training/run", json={})
+        assert r_empty.status_code == 400
+
+        # 3. Lưu profile training qua PUT /profile
+        r_put = client.put(
+            "/api/accounts/trnuser%20%40%20S53/profile",
+            json={"training": {"enabled": True, "vo_general_ids": [1], "van_general_ids": [2]}},
+        )
+        assert r_put.status_code == 200
+        assert r_put.json()["profile"]["training"]["enabled"] is True
+        assert sess._training_next_check_at == 0.0
+
+        # 4. Kiểm tra _check_training_once tự động đào tạo và đặt cooldown 24h
+        sess._check_training_once()
+        assert len(state["2"]["list"]) == 1 and state["2"]["list"][0][2] == 1
+        assert len(state["1"]["list"]) == 1 and state["1"]["list"][0][2] == 2
+        assert sess._training_next_check_at > time.monotonic()
+
+        # Gọi lại ngay khi đang trong cooldown -> không gọi thêm OPT.ashx?id=178 hoặc Common.ashx?id=141
+        call_count_before = len(calls)
+        sess._check_training_once()
+        assert len(calls) == call_count_before
+
+        # 5. Reset cooldown và test POST /training/run thủ công khi các ô đã đầy
+        r_run = client.post("/api/accounts/trnuser%20%40%20S53/training/run", json={})
+        assert r_run.status_code == 200
+        deadline = time.monotonic() + 2.0
+        while sess._training_running and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        # 6. Test Captcha 110 khi đào tạo thủ công
+        state["captcha"] = True
+        state["2"]["list"] = []
+        r_cap = client.post("/api/accounts/trnuser%20%40%20S53/training/run", json={"train_type": 2})
+        assert r_cap.status_code == 200
+        deadline = time.monotonic() + 2.0
+        while sess._training_running and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert sess.captcha_required is True
+
+    wm.graceful_shutdown()
+
+    # Kiểm tra các phần tử UI đào tạo tướng trên Web Dashboard (app.js)
+    app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("btn-open-training", "aux-training", "/training/status", "/training/run", "openTrainingModal"):
+        assert token in app_js

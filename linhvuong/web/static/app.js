@@ -239,6 +239,7 @@
         state.pendingSelfProfileUpdates = 0;
         renderActiveTab();
       }
+      if (typeof renderTrainingModalBody === "function" && $("trn-tbody")) renderTrainingModalBody();
     } else if (event === "roster_updated") {
       state.snapshot.roster = payload;
       renderActiveTab();
@@ -246,6 +247,7 @@
       if (typeof renderEquipModalBody === "function" && $("eq-tbody")) renderEquipModalBody();
       if (typeof renderArmamentModalBody === "function" && $("arm-tbody")) renderArmamentModalBody();
       if (typeof renderRenameModalBody === "function" && $("ren-tbody")) renderRenameModalBody();
+      if (typeof renderTrainingModalBody === "function" && $("trn-tbody")) renderTrainingModalBody();
     } else if (event === "techs_updated") {
       state.snapshot.tech_levels = payload.levels || {};
       state.snapshot.tech_current = payload.current || null;
@@ -601,6 +603,7 @@
       armament: "log-armament",
       rename: "log-rename",
       enhance: "log-enhance",
+      training: "log-training",
     };
     if (channel === "building" || channel === "logistics") {
       const mb = $("log-modal-box");
@@ -626,6 +629,21 @@
     return Math.max(0, base - elapsed);
   }
 
+  function getLiveTrainHallSummary(hallKey) {
+    const hall = state.snapshot?.aux?.training?.[hallKey];
+    if (!hall) return null;
+    const elapsed = state.auxSyncedAt ? Math.max(0, Math.floor((Date.now() - state.auxSyncedAt) / 1000)) : 0;
+    const unlockedSlots = Number(hall.unlocked_slots || 0);
+    if (unlockedSlots <= 0) return { text: "Chưa mở", ready: false };
+    const slots = (hall.slots || []).filter((s) => s.unlocked);
+    const rems = slots.map((s) => Math.max(0, Number(s.remaining_seconds || 0) - elapsed));
+    const freeCount = rems.filter((r) => r <= 0).length;
+    if (freeCount > 0) return { text: "Sẵn sàng", ready: true };
+    const activeRems = rems.filter((r) => r > 0);
+    if (activeRems.length > 0) return { text: fmtSec(Math.min(...activeRems)), ready: false };
+    return { text: "--", ready: false };
+  }
+
   function renderAuxCountdownsOnly() {
     const aux = state.snapshot?.aux;
     if (!aux) return;
@@ -641,6 +659,23 @@
       expEl.textContent = exploreLeft > 0 ? `(Còn ${fmtSec(exploreLeft)})` : "(Sẵn sàng)";
       expEl.style.color = exploreLeft > 0 ? "#4ade80" : "#fbbf24";
     }
+    const trnEl = $("aux-training-lbl");
+    if (trnEl) {
+      const voSum = getLiveTrainHallSummary("vo");
+      const vanSum = getLiveTrainHallSummary("van");
+      if (voSum || vanSum) {
+        trnEl.textContent = `(Võ: ${voSum ? voSum.text : "--"} | Văn: ${vanSum ? vanSum.text : "--"})`;
+        trnEl.style.color = (voSum?.ready || vanSum?.ready) ? "#fbbf24" : "#4ade80";
+      } else {
+        trnEl.textContent = state.snapshot?.profile?.training?.enabled ? "(Chờ kiểm tra)" : "";
+        trnEl.style.color = "#8a90b0";
+      }
+    }
+    const elapsed = state.auxSyncedAt ? Math.max(0, Math.floor((Date.now() - state.auxSyncedAt) / 1000)) : 0;
+    document.querySelectorAll(".train-slot-cd[data-slot-rem]").forEach((el) => {
+      const rem = Math.max(0, Number(el.dataset.slotRem || 0) - elapsed);
+      el.textContent = rem > 0 ? `Còn ${fmtSec(rem)}` : "✅ Sẵn sàng";
+    });
   }
 
   function renderAuxDomOnly() {
@@ -674,6 +709,9 @@
     if (renLbl) renLbl.textContent = `${aux.rename_status || "Sẵn sàng"}${aux.rename_progress?.total ? ` (${aux.rename_progress.done}/${aux.rename_progress.total})` : ""}`;
     const eqLbl = $("eq-status-lbl");
     if (eqLbl) eqLbl.textContent = aux.equip_status || "Sẵn sàng";
+    const trnLbl = $("train-status-lbl");
+    if (trnLbl) trnLbl.textContent = aux.training_status || "Sẵn sàng";
+    if (typeof renderTrainingModalSlots === "function" && $("trn-slots-grid")) renderTrainingModalSlots();
     const ntSt = $("nt-status-lbl");
     if (ntSt) ntSt.textContent = ntStatusText();
     if (typeof updateEnhanceAuxDom === "function") updateEnhanceAuxDom(aux);
@@ -833,6 +871,7 @@
     const res = prof.research;
     const rsrc = prof.resource;
     const logi = prof.logistics;
+    const trn = prof.training || { enabled: false, vo_general_ids: [], van_general_ids: [] };
     const dt = prof.ditrai;
     const bases = snap.roster.bases || [];
     const cities = snap.roster.cities || [];
@@ -1146,6 +1185,10 @@
                 <option value="2" ${Number(logi.tribute_building_gid) === 2 ? "selected" : ""}>城墙 (Tường Thành)</option>
               </select>
               <button id="btn-tribute-now" class="btn-sm">🏛️ Cống quận ngay</button>
+            </div>
+            <div class="form-row">
+              <label><input id="aux-training" type="checkbox" ${trn.enabled ? "checked" : ""}/> 🎓 Đào tạo tướng <span id="aux-training-lbl" style="color:#4ade80;"></span></label>
+              <button id="btn-open-training-aux" class="btn-sm">⚙️ Chọn tướng</button>
             </div>
             <div class="form-row" style="margin-bottom:0;">
               <button id="btn-apply-rsrc" class="btn-primary btn-sm">✅ Áp Dụng Thiết Lập</button>
@@ -1475,16 +1518,20 @@
         tribute_enabled: $("aux-tribute").checked,
         tribute_building_gid: Number($("aux-tribute-gid").value),
       },
+      training: {
+        enabled: $("aux-training").checked,
+      },
       ditrai: { dest_x: $("dt-x").value, dest_y: $("dt-y").value },
     });
     ["rsrc-gold", "rsrc-wood", "rsrc-iron", "rsrc-stone", "rsrc-food", "rsrc-gbox", "rsrc-tnbox",
-      "aux-daily", "aux-explore", "aux-whip", "aux-coin", "aux-turns", "logi-amt", "dt-x", "dt-y", "xfer-int", "aux-tribute", "aux-tribute-gid"].forEach((id) => {
+      "aux-daily", "aux-explore", "aux-whip", "aux-coin", "aux-turns", "logi-amt", "dt-x", "dt-y", "xfer-int", "aux-tribute", "aux-tribute-gid", "aux-training"].forEach((id) => {
       $(id).onchange = () => {
         if (id === "aux-whip" && $("aux-whip").checked) $("aux-coin").checked = false;
         if (id === "aux-coin" && $("aux-coin").checked) $("aux-whip").checked = false;
         saveResCfg();
       };
     });
+    $("btn-open-training-aux").onclick = openTrainingModal;
 
     $("btn-run-explore").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/aux/explore`, {
       method: "POST",
@@ -2071,6 +2118,7 @@
           <button id="btn-open-equip" class="btn-sm">🛡️ Trang Bị Tướng</button>
           <button id="btn-open-armament" class="btn-sm">⚔️ Quân Giới Tướng</button>
           <button id="btn-open-rename" class="btn-sm">✏️ Đổi Tên Tướng</button>
+          <button id="btn-open-training" class="btn-sm">🎓 Đào Tạo Tướng</button>
         </div>
       </div>
 
@@ -2186,6 +2234,7 @@
     $("btn-open-equip").onclick = openEquipModal;
     $("btn-open-armament").onclick = openArmamentModal;
     $("btn-open-rename").onclick = openRenameModal;
+    $("btn-open-training").onclick = openTrainingModal;
 
     $("mo-city").onchange = () => { state.moraleCityFilter = $("mo-city").value; renderActiveTab(); };
     root.querySelectorAll(".mo-chk").forEach((c) => (c.onchange = () => {
@@ -3108,6 +3157,8 @@
   let renderEquipModalBody = null;
   let renderArmamentModalBody = null;
   let renderRenameModalBody = null;
+  let renderTrainingModalBody = null;
+  let renderTrainingModalSlots = null;
 
   async function openEquipModal() {
     const bases = state.snapshot.roster.bases || [];
@@ -3482,6 +3533,224 @@
     };
     $("btn-ren-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/rename/stop`, { method: "POST" });
     renderRenameModalBody();
+  }
+
+  function openTrainingModal() {
+    const bases = state.snapshot.roster.bases || [];
+    const trn = state.snapshot.profile.training || { enabled: false, vo_general_ids: [], van_general_ids: [] };
+    state.snapshot.profile.training = {
+      enabled: !!trn.enabled,
+      vo_general_ids: [...(trn.vo_general_ids || [])],
+      van_general_ids: [...(trn.van_general_ids || [])],
+    };
+    let activeHall = "vo";
+    const initCity = state.selectedOverviewCityId && bases.some((b) => b.id === state.selectedOverviewCityId) ? String(state.selectedOverviewCityId) : "all";
+
+    openModal(
+      "🎓 Đào Tạo Tướng (Điểm Tướng Đài & Tụ Hiền Lâu)",
+      `<div class="form-row">
+         <label><input id="trn-enabled" type="checkbox" ${state.snapshot.profile.training.enabled ? "checked" : ""}/> 🔄 Tự động đào tạo hàng ngày (tự lặp lại mỗi 24h khi ô hồi xong)</label>
+         <button id="btn-trn-refresh" class="btn-sm" style="margin-left:auto;">🔄 Tải trạng thái</button>
+         <button id="btn-trn-run" class="btn-success btn-sm">🎓 Đào tạo ngay</button>
+       </div>
+       <div class="form-row">
+         <button id="btn-trn-hall-vo" class="btn-primary btn-sm">⚔️ Điểm Tướng Đài (Võ tướng)</button>
+         <button id="btn-trn-hall-van" class="btn-sm">📜 Tụ Hiền Lâu (Văn quan)</button>
+       </div>
+       <div id="trn-slots-grid" class="train-slots-grid"></div>
+       <div class="card" style="padding:8px 10px;margin-bottom:8px;">
+         <div style="font-size:12px;font-weight:700;margin-bottom:4px;">📋 Thứ tự ưu tiên đã chọn (<span id="trn-prio-title">Điểm Tướng Đài</span>):</div>
+         <div id="trn-prio-list" class="train-chip-list"></div>
+         <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">Ô trống sẽ lấy lần lượt theo thứ tự ưu tiên trên; nếu tướng đạt cấp tối đa hoặc không thể đào tạo, bot tự chuyển sang tướng kế tiếp.</div>
+       </div>
+       <div class="form-row">
+         <label>Thành / Trại <select id="trn-city"><option value="all">🌟 Tất cả căn cứ</option>${bases.map((b) => `<option value="${b.id}" ${String(b.id) === initCity ? "selected" : ""}>${esc(b.display_name || b.name)}</option>`).join("")}</select></label>
+         <label>Tìm <input id="trn-search" type="text" placeholder="Tên tướng..." style="width:130px;"/></label>
+         <label>Sắp xếp <select id="trn-sort"><option value="level_desc">Cấp Cao → Thấp</option><option value="level_asc">Cấp Thấp → Cao</option></select></label>
+         <button id="btn-trn-clear" class="btn-sm" style="margin-left:auto;">☐ Bỏ chọn mục này</button>
+       </div>
+       <div id="trn-summary" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+       <div class="table-wrap" style="max-height:220px;">
+         <table><thead><tr><th>Chọn</th><th>Tên tướng</th><th>Thành / Trại</th><th>Cấp</th><th>Chức vụ</th><th>Trạng thái</th></tr></thead>
+         <tbody id="trn-tbody"></tbody></table>
+       </div>
+       <div id="train-status-lbl" style="font-size:12px;color:var(--accent);margin-top:6px;">${esc(state.snapshot.aux?.training_status || "Sẵn sàng")}</div>
+       <div id="log-training" class="log-box" style="height:105px;margin-top:6px;">${esc((state.snapshot.logs.training || []).join("\n"))}</div>`,
+      `<button class="btn-sm" onclick="document.getElementById('modal-backdrop').classList.add('hidden')">Đóng</button>`
+    );
+
+    const getHallKey = () => (activeHall === "van" ? "van" : "vo");
+    const getListField = () => (activeHall === "van" ? "van_general_ids" : "vo_general_ids");
+    const getSelectedList = () => {
+      const t = state.snapshot.profile.training || {};
+      return [...(t[getListField()] || [])];
+    };
+    const saveTrainingPatch = (patch) => {
+      const next = { ...(state.snapshot.profile.training || {}), ...patch };
+      state.snapshot.profile.training = next;
+      if ($("aux-training")) $("aux-training").checked = !!next.enabled;
+      scheduleProfileSave({ training: next });
+    };
+
+    const getAllHallGenerals = () => {
+      const seen = new Set();
+      return (state.snapshot.roster.generals || []).filter(
+        (g) => g.role === getHallKey() && !seen.has(g.id) && seen.add(g.id)
+      );
+    };
+
+    const getActiveTrainingIds = () => {
+      const hall = state.snapshot.aux?.training?.[getHallKey()];
+      if (!hall || !Array.isArray(hall.slots)) return new Set();
+      const elapsed = state.auxSyncedAt ? Math.max(0, Math.floor((Date.now() - state.auxSyncedAt) / 1000)) : 0;
+      return new Set(
+        hall.slots
+          .filter((s) => s.unlocked && Math.max(0, Number(s.remaining_seconds || 0) - elapsed) > 0 && Number(s.hero_id) > 0)
+          .map((s) => Number(s.hero_id))
+      );
+    };
+
+    renderTrainingModalSlots = () => {
+      const grid = $("trn-slots-grid");
+      if (!grid) return;
+      const voCount = (state.snapshot.profile.training?.vo_general_ids || []).length;
+      const vanCount = (state.snapshot.profile.training?.van_general_ids || []).length;
+      const voSum = getLiveTrainHallSummary("vo");
+      const vanSum = getLiveTrainHallSummary("van");
+      if ($("btn-trn-hall-vo")) {
+        $("btn-trn-hall-vo").className = `${activeHall === "vo" ? "btn-primary" : ""} btn-sm`;
+        $("btn-trn-hall-vo").textContent = `⚔️ Điểm Tướng Đài (${voCount})${voSum ? ` • ${voSum.text}` : ""}`;
+      }
+      if ($("btn-trn-hall-van")) {
+        $("btn-trn-hall-van").className = `${activeHall === "van" ? "btn-primary" : ""} btn-sm`;
+        $("btn-trn-hall-van").textContent = `📜 Tụ Hiền Lâu (${vanCount})${vanSum ? ` • ${vanSum.text}` : ""}`;
+      }
+      const hall = state.snapshot.aux?.training?.[getHallKey()];
+      if (!hall || !Array.isArray(hall.slots)) {
+        grid.innerHTML = Array.from({ length: 5 }, (_, idx) => `<div class="train-slot-card"><strong>Ô ${idx + 1}</strong><span style="color:var(--muted);">Đang tải...</span></div>`).join("");
+        return;
+      }
+      const elapsed = state.auxSyncedAt ? Math.max(0, Math.floor((Date.now() - state.auxSyncedAt) / 1000)) : 0;
+      grid.innerHTML = hall.slots.map((s) => {
+        if (!s.unlocked) {
+          return `<div class="train-slot-card locked"><strong>Ô ${s.pos}</strong><span>🔒 Chưa mở</span></div>`;
+        }
+        const rem = Math.max(0, Number(s.remaining_seconds || 0) - elapsed);
+        if (rem > 0) {
+          return `<div class="train-slot-card busy"><strong>Ô ${s.pos}</strong><span>🎓 ${esc(s.hero_name || `#${s.hero_id}`)}</span><span class="train-slot-cd" data-slot-rem="${s.remaining_seconds}" style="color:#93c5fd;">Còn ${fmtSec(rem)}</span></div>`;
+        }
+        return `<div class="train-slot-card ready"><strong>Ô ${s.pos}</strong><span style="color:#4ade80;">✅ Sẵn sàng</span></div>`;
+      }).join("");
+    };
+
+    renderTrainingModalBody = () => {
+      renderTrainingModalSlots();
+      const prioTitle = $("trn-prio-title");
+      if (prioTitle) prioTitle.textContent = activeHall === "van" ? "Tụ Hiền Lâu (Văn quan)" : "Điểm Tướng Đài (Võ tướng)";
+      const allGens = getAllHallGenerals();
+      const genById = new Map(allGens.map((g) => [g.id, g]));
+      const selList = getSelectedList();
+      const selSet = new Set(selList);
+
+      const prioBox = $("trn-prio-list");
+      if (prioBox) {
+        if (!selList.length) {
+          prioBox.innerHTML = '<span style="font-size:12px;color:var(--muted);">Chưa chọn tướng nào cho phân hệ này.</span>';
+        } else {
+          prioBox.innerHTML = selList.map((gid, idx) => {
+            const g = genById.get(gid);
+            const label = g ? `${g.name} (Lv.${g.level})` : `#${gid}`;
+            return `<span class="train-chip">${idx + 1}. ${esc(label)} <button class="trn-mv-up" data-idx="${idx}" ${idx === 0 ? "disabled" : ""}>↑</button><button class="trn-mv-dn" data-idx="${idx}" ${idx === selList.length - 1 ? "disabled" : ""}>↓</button><button class="trn-rm" data-gid="${gid}">✕</button></span>`;
+          }).join("");
+          prioBox.querySelectorAll(".trn-mv-up").forEach((b) => (b.onclick = () => {
+            const i = Number(b.dataset.idx);
+            if (i > 0) {
+              const next = [...selList];
+              [next[i - 1], next[i]] = [next[i], next[i - 1]];
+              saveTrainingPatch({ [getListField()]: next });
+              renderTrainingModalBody();
+            }
+          }));
+          prioBox.querySelectorAll(".trn-mv-dn").forEach((b) => (b.onclick = () => {
+            const i = Number(b.dataset.idx);
+            if (i < selList.length - 1) {
+              const next = [...selList];
+              [next[i + 1], next[i]] = [next[i], next[i + 1]];
+              saveTrainingPatch({ [getListField()]: next });
+              renderTrainingModalBody();
+            }
+          }));
+          prioBox.querySelectorAll(".trn-rm").forEach((b) => (b.onclick = () => {
+            const gid = Number(b.dataset.gid);
+            saveTrainingPatch({ [getListField()]: selList.filter((x) => x !== gid) });
+            renderTrainingModalBody();
+          }));
+        }
+      }
+
+      const c = $("trn-city")?.value || "all";
+      const q = ($("trn-search")?.value || "").trim().toLowerCase();
+      const sortMode = $("trn-sort")?.value || "level_desc";
+      const rows = allGens
+        .filter((g) => (c === "all" || String(g.city_id) === c) && (!q || String(g.name || "").toLowerCase().includes(q)))
+        .sort((a, b) => (sortMode === "level_asc" ? a.level - b.level : b.level - a.level) || a.id - b.id);
+
+      const curBases = state.snapshot.roster.bases || [];
+      const activeIds = getActiveTrainingIds();
+      const tbody = $("trn-tbody");
+      if (tbody) {
+        tbody.innerHTML = rows.map((g) => {
+          const bname = curBases.find((b) => b.id === g.city_id)?.name || g.city_id;
+          const roleTxt = g.is_mayor ? "Thái thú" : (g.role === "van" ? "Văn quan" : "Võ tướng");
+          const stTxt = activeIds.has(g.id) ? "🎓 Đang đào tạo" : (g.status_text || "Rảnh rỗi");
+          return `<tr><td><input type="checkbox" class="trn-chk" data-gid="${g.id}" ${selSet.has(g.id) ? "checked" : ""}/></td><td>${esc(g.name)}</td><td>${esc(bname)}</td><td>${g.level}</td><td>${esc(roleTxt)}</td><td>${esc(stTxt)}</td></tr>`;
+        }).join("");
+        tbody.querySelectorAll(".trn-chk").forEach((chk) => (chk.onchange = () => {
+          const gid = Number(chk.dataset.gid);
+          const cur = getSelectedList();
+          const next = chk.checked ? (cur.includes(gid) ? cur : [...cur, gid]) : cur.filter((x) => x !== gid);
+          saveTrainingPatch({ [getListField()]: next });
+          renderTrainingModalBody();
+        }));
+      }
+      if ($("trn-summary")) {
+        $("trn-summary").textContent = `Hiển thị: ${rows.length} tướng • Đã chọn ưu tiên: ${selList.length} tướng`;
+      }
+    };
+
+    const loadTrainingStatus = async () => {
+      try {
+        const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/training/status`);
+        if (res.training) {
+          state.snapshot.aux = state.snapshot.aux || {};
+          state.snapshot.aux.training = res.training;
+          state.auxSyncedAt = Date.now();
+          renderAuxDomOnly();
+          renderTrainingModalBody();
+        }
+      } catch (e) {
+        showToast("Lỗi tải trạng thái đào tạo", e.message, "error");
+      }
+    };
+
+    $("trn-enabled").onchange = () => saveTrainingPatch({ enabled: $("trn-enabled").checked });
+    $("btn-trn-hall-vo").onclick = () => { activeHall = "vo"; renderTrainingModalBody(); };
+    $("btn-trn-hall-van").onclick = () => { activeHall = "van"; renderTrainingModalBody(); };
+    $("trn-city").onchange = renderTrainingModalBody;
+    $("trn-search").oninput = renderTrainingModalBody;
+    $("trn-sort").onchange = renderTrainingModalBody;
+    $("btn-trn-clear").onclick = () => { saveTrainingPatch({ [getListField()]: [] }); renderTrainingModalBody(); };
+    $("btn-trn-refresh").onclick = loadTrainingStatus;
+    $("btn-trn-run").onclick = async () => {
+      try {
+        await saveProfileImmediate({ training: state.snapshot.profile.training });
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/training/run`, { method: "POST", body: {} });
+        showToast("Đào Tạo Tướng", "Đang kiểm tra & thực thi đào tạo...");
+      } catch (e) { showToast("Lỗi Đào Tạo Tướng", e.message, "error"); }
+    };
+
+    renderTrainingModalBody();
+    loadTrainingStatus();
   }
 
   async function openSysLogsModal() {

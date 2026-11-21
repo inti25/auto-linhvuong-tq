@@ -64,6 +64,13 @@ class OverviewMixin:
             command=self._open_equip_dialog,
         )
         self.equip_btn.pack(side="left", padx=3)
+        self.training_btn = ttk.Button(
+            profile_frame,
+            text="🎓 Đào Tạo Tướng",
+            style="Action.TButton",
+            command=self._open_training_dialog,
+        )
+        self.training_btn.pack(side="left", padx=3)
 
         # Tầng trên: Thành & Doanh trại, Tướng đồn trú, Chi tiết biên chế
         top_body = tk.Frame(parent, bg=BG)

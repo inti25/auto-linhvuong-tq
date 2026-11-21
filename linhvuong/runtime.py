@@ -129,6 +129,15 @@ from .tasks.thao_phat import (
     ThaoPhatAutoRunner,
     ThaoPhatExecutor,
 )
+from .tasks.training import (
+    ALL_TRAIN_TYPES,
+    TRAIN_TYPE_VAN,
+    TRAIN_TYPE_VO,
+    TrainingHallState,
+    fetch_training_state,
+    resolve_training_city_id,
+    run_training_cycle,
+)
 from .troops import ArmyProvisioner
 from .world_chat import STATE_VI_NAMES
 
@@ -187,6 +196,7 @@ LOG_CHANNELS = (
     "armament",
     "rename",
     "enhance",
+    "training",
 )
 
 
@@ -516,6 +526,12 @@ class AccountSession:
         self._ren_status = "Sẵn sàng"
         self._ren_progress = {"done": 0, "total": 0}
 
+        self._training_running = False
+        self._training_status = "Sẵn sàng"
+        self._training_states: dict[int, TrainingHallState] = {}
+        self._training_next_check_at: float = 0.0
+        self._training_lock = threading.Lock()
+
         self._nien_thu_ann: Optional[dict] = None
         self._last_roster_err: Optional[str] = None
 
@@ -668,6 +684,7 @@ class AccountSession:
             ("explore", self._check_explore_once),
             ("daily_reward", self._check_daily_reward_once),
             ("tribute", self._check_tribute_once),
+            ("training", self._check_training_once),
         )
 
         def _loop():
@@ -689,6 +706,8 @@ class AccountSession:
                     wait_sec = min(wait_sec, max(1.0, float(aux["boost_left_seconds"])))
                 if self.profile.logistics.auto_explore and aux["explore_left_seconds"] > 0:
                     wait_sec = min(wait_sec, max(1.0, float(aux["explore_left_seconds"])))
+                if self.profile.training.enabled and self._training_next_check_at > 0:
+                    wait_sec = min(wait_sec, max(1.0, self._training_next_check_at - time.monotonic()))
                 self._aux_wakeup.wait(wait_sec)
                 self._aux_wakeup.clear()
 
@@ -769,7 +788,9 @@ class AccountSession:
             self.save_profile()
             data = self.profile.to_dict()
         self._emit("profile_updated", data)
-        if "building" in patch or "logistics" in patch:
+        if "training" in patch:
+            self._training_next_check_at = 0.0
+        if "building" in patch or "logistics" in patch or "training" in patch:
             self._aux_wakeup.set()
         return data
 
@@ -781,6 +802,7 @@ class AccountSession:
             self.save_profile()
             out = self.profile.to_dict()
         self._emit("profile_updated", out)
+        self._training_next_check_at = 0.0
         self._aux_wakeup.set()
         return out
 
@@ -798,6 +820,19 @@ class AccountSession:
             "active": self.proxy_raw or None,
             "alive": 1 if self.proxy_raw else 0,
             "total": 1 if self.proxy_raw else 0,
+        }
+
+    def _serialize_training_status(self) -> dict:
+        now = time.monotonic()
+        vo_state = self._training_states.get(TRAIN_TYPE_VO)
+        van_state = self._training_states.get(TRAIN_TYPE_VAN)
+        vo_dict = vo_state.to_dict(now) if vo_state is not None else None
+        van_dict = van_state.to_dict(now) if van_state is not None else None
+        return {
+            "vo": vo_dict,
+            "van": van_dict,
+            "vo_next_ready_seconds": vo_dict["next_ready_seconds"] if vo_dict else 0,
+            "van_next_ready_seconds": van_dict["next_ready_seconds"] if van_dict else 0,
         }
 
     def get_aux_status(self) -> dict:
@@ -836,6 +871,9 @@ class AccountSession:
             "rename_running": self._ren_running,
             "rename_status": self._ren_status,
             "rename_progress": dict(self._ren_progress),
+            "training_running": self._training_running,
+            "training_status": self._training_status,
+            "training": self._serialize_training_status(),
             "nien_thu_announcement": self._nien_thu_ann,
         }
 
@@ -1595,6 +1633,131 @@ class AccountSession:
         for cid in city_ids:
             self.tribute_city(cid, lg.tribute_building_gid)
         self._tribute_last_date = today
+
+    # -------------------------------------------------------------------------
+    # ĐÀO TẠO TƯỚNG (ĐIỂM TƯỚNG ĐÀI & TỤ HIỀN LẦU — LẶP LẠI HÀNG NGÀY)
+    # -------------------------------------------------------------------------
+    def _log_training(self, msg: str, *, forward_to_building: bool = False) -> None:
+        self.append_log("training", msg)
+        if forward_to_building:
+            self.append_log("building", msg)
+
+    def fetch_training_status(self) -> dict:
+        self._ensure_roster_loaded()
+        cid = resolve_training_city_id(self.roster, self._default_city_id())
+        if not cid:
+            raise ValueError("Không tìm thấy Thành hợp lệ (> 0) để kiểm tra đào tạo tướng.")
+        try:
+            for ttype in ALL_TRAIN_TYPES:
+                self._training_states[ttype] = fetch_training_state(self.gateway, ttype, cid)
+        except CaptchaRequired:
+            self._handle_captcha("Đọc trạng thái đào tạo tướng gặp Captcha (mã 110).")
+            raise RuntimeError("Server yêu cầu xác nhận Captcha (mã 110).")
+        self._emit("aux_updated", self.get_aux_status())
+        return self._serialize_training_status()
+
+    def run_training_now(self, train_type: Optional[int] = None) -> None:
+        if self._training_running:
+            raise RuntimeError("Tiến trình Đào Tạo Tướng đang chạy.")
+        if train_type is not None:
+            ttype = int(train_type)
+            if ttype not in (TRAIN_TYPE_VAN, TRAIN_TYPE_VO):
+                raise ValueError(f"Loại đào tạo không hợp lệ: {train_type}")
+            types_to_run: tuple[int, ...] = (ttype,)
+        else:
+            types_to_run = ALL_TRAIN_TYPES
+
+        tp = self.profile.training
+        has_vo = bool(tp.vo_general_ids)
+        has_van = bool(tp.van_general_ids)
+        if types_to_run == (TRAIN_TYPE_VO,) and not has_vo:
+            raise ValueError("Vui lòng chọn ít nhất 1 Võ tướng cho Điểm Tướng Đài.")
+        if types_to_run == (TRAIN_TYPE_VAN,) and not has_van:
+            raise ValueError("Vui lòng chọn ít nhất 1 Văn quan cho Tụ Hiền Lâu.")
+        if not has_vo and not has_van:
+            raise ValueError("Vui lòng chọn ít nhất 1 Võ tướng hoặc Văn quan để đào tạo.")
+
+        self._ensure_roster_loaded()
+        cid = resolve_training_city_id(self.roster, self._default_city_id())
+        if not cid:
+            raise ValueError("Không tìm thấy Thành hợp lệ (> 0) để đào tạo tướng.")
+
+        self._training_running = True
+        self._training_status = "Đang kiểm tra & đào tạo tướng..."
+        self._emit("aux_updated", self.get_aux_status())
+
+        def _worker():
+            try:
+                with self._training_lock:
+                    summary = run_training_cycle(
+                        self.gateway,
+                        cid,
+                        list(tp.vo_general_ids),
+                        list(tp.van_general_ids),
+                        roster=self.roster,
+                        on_log=lambda m: self._log_training(m, forward_to_building=m.startswith("🎓")),
+                        types_to_run=types_to_run,
+                    )
+                    self._training_states.update(summary.states)
+                    if types_to_run == ALL_TRAIN_TYPES:
+                        self._training_next_check_at = time.monotonic() + summary.next_check_seconds
+                    if summary.trained:
+                        self._training_status = f"Đã đào tạo {len(summary.trained)} tướng ({time.strftime('%H:%M:%S')})"
+                    elif summary.failed:
+                        self._training_status = f"Hoàn tất kiểm tra ({len(summary.failed)} lỗi)"
+                    else:
+                        self._training_status = f"Các ô đang hồi ({time.strftime('%H:%M:%S')})"
+            except CaptchaRequired:
+                self._training_status = "Tạm dừng (Captcha)"
+                self._log_training("⚠️ Đào tạo tướng gặp Captcha (mã 110).")
+                self._handle_captcha("Đào tạo tướng tạm dừng do Captcha (mã 110).")
+            except Exception as exc:
+                self._training_status = f"❌ Lỗi: {exc}"
+                self._log_training(f"❌ Lỗi đào tạo tướng: {exc}")
+            finally:
+                self._training_running = False
+                self._emit("aux_updated", self.get_aux_status())
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _check_training_once(self) -> None:
+        if self.captcha_required:
+            return
+        tp = self.profile.training
+        if not tp.enabled:
+            return
+        if not tp.vo_general_ids and not tp.van_general_ids:
+            return
+        now = time.monotonic()
+        if now < self._training_next_check_at:
+            return
+        cid = resolve_training_city_id(self.roster, self._default_city_id())
+        if not cid:
+            return
+        if not self._training_lock.acquire(blocking=False):
+            return
+        try:
+            self._training_running = True
+            summary = run_training_cycle(
+                self.gateway,
+                cid,
+                list(tp.vo_general_ids),
+                list(tp.van_general_ids),
+                roster=self.roster,
+                on_log=lambda m: self._log_training(m, forward_to_building=m.startswith("🎓")),
+            )
+            self._training_states.update(summary.states)
+            self._training_next_check_at = time.monotonic() + summary.next_check_seconds
+            if summary.trained:
+                self._training_status = f"Tự động đào tạo {len(summary.trained)} tướng ({time.strftime('%H:%M:%S')})"
+            elif summary.failed:
+                self._training_status = f"Tự động kiểm tra ({len(summary.failed)} lỗi)"
+            else:
+                self._training_status = f"Đang chờ hết hồi ({time.strftime('%H:%M:%S')})"
+            self._emit("aux_updated", self.get_aux_status())
+        finally:
+            self._training_running = False
+            self._training_lock.release()
 
     def transfer_loop_orders(self) -> list[ArmyTransferOrder]:
         return [

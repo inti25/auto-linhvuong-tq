@@ -463,6 +463,10 @@ _Avoid_: Lưu mật khẩu thô, auto-login cache, file password
 Cơ chế kiểm tra tỷ lệ thể lực của **Mưu sĩ** đang biên chế cho **Võ tướng xuất kích** (trong **Bình Man** và **Gọi Man**) và tự động thay thế bằng **Văn quan** rảnh rỗi cùng căn cứ đạt ngưỡng thể lực tối thiểu, ưu tiên theo cấp độ giảm dần.
 _Avoid_: Đổi quân sư tự động, auto swap partner
 
+**Đào Tạo Tướng**:
+Hoạt động huấn luyện nhận điểm kinh nghiệm định kỳ cấp tài khoản tại **Điểm Tướng Đài** (`lType=2`, cho **Võ tướng**) và **Tụ Hiền Lâu** (`lType=1`, cho **Văn quan**). Hệ thống kiểm tra trạng thái tối đa 5 ô đào tạo qua `Common.ashx?id=141` (yêu cầu `lCityID > 0`) và gửi lệnh đào tạo qua `OPT.ashx?id=178` cho các tướng theo thứ tự ưu tiên đã chọn; mỗi ô sau khi kích hoạt sẽ vào chu kỳ hồi **24 giờ (86.400 giây)** và không làm tướng bị bận.
+_Avoid_: Train tướng tự động, mở khóa ô bằng Nguyên bảo (`OPT.ashx?id=177`)
+
 
 ## Danh Mục Công Trình (Nhà)
 

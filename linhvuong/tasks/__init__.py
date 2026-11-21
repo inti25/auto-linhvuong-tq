@@ -8,8 +8,16 @@ from .logistics import ArmyTransferOrder, LogisticsTask
 from .nien_thu import NienThuTask
 from .research import ResearchTask, TechPlan
 from .thao_phat import ThaoPhat
+from .training import (
+    ALL_TRAIN_TYPES,
+    TRAIN_TYPE_VAN,
+    TRAIN_TYPE_VO,
+    TrainingHallState,
+    run_training_cycle,
+)
 
 __all__ = [
+    "ALL_TRAIN_TYPES",
     "BinhMan",
     "MAN_TARGET_OPTIONS",
     "MODE_CAMP",
@@ -24,5 +32,9 @@ __all__ = [
     "ResearchTask",
     "TechPlan",
     "ThaoPhat",
+    "TRAIN_TYPE_VAN",
+    "TRAIN_TYPE_VO",
+    "TrainingHallState",
+    "run_training_cycle",
 ]
 

@@ -83,6 +83,7 @@ from .shared import (
 )
 from .tactician_dialog import TacticianDialogMixin
 from .thaophat import ThaoPhatMixin
+from .training_dialog import TrainingDialogMixin
 
 logger = logging.getLogger("linhvuong.dashboard")
 
@@ -92,6 +93,7 @@ class Dashboard(
     OverviewMixin,
     TacticianDialogMixin,
     EquipDialogMixin,
+    TrainingDialogMixin,
     CraftingMixin,
     BuildingMixin,
     InternalAuxMixin,
@@ -269,6 +271,14 @@ class Dashboard(
         self._boost_left_seconds: int = 0
         self._boost_countdown_after_id: Optional[str] = None
         self.aux_tribute_var = tk.BooleanVar(value=False)
+        self.aux_training_var = tk.BooleanVar(value=False)
+        self._training_vo_ids: list[int] = []
+        self._training_van_ids: list[int] = []
+        self._training_states: dict = {}
+        self._training_next_check_at: float = 0.0
+        self._training_running: bool = False
+        self._training_lock = threading.Lock()
+        self._training_countdown_after_id: Optional[str] = None
         self.aux_explore_var = tk.BooleanVar(value=False)
         self.aux_explore_whip_var = tk.BooleanVar(value=False)
         self.aux_explore_coin_var = tk.BooleanVar(value=False)
@@ -889,6 +899,8 @@ class Dashboard(
             self._on_tac_roster_updated()
         if hasattr(self, "_on_equip_roster_updated"):
             self._on_equip_roster_updated()
+        if hasattr(self, "_refresh_training_dialog_all"):
+            self._refresh_training_dialog_all()
 
         today_str = time.strftime("%Y-%m-%d")
         if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():
@@ -917,6 +929,8 @@ class Dashboard(
                 self.after_cancel(self._boost_countdown_after_id)
             if getattr(self, "_explore_countdown_after_id", None) is not None:
                 self.after_cancel(self._explore_countdown_after_id)
+            if getattr(self, "_training_countdown_after_id", None) is not None:
+                self.after_cancel(self._training_countdown_after_id)
         except Exception:
             pass
         for name in ("_tp_runner", "_gd_runner", "_bm_runner", "_bld_runner", "_res_runner"):

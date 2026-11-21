@@ -579,6 +579,23 @@ def create_app(
         except (ValueError, KeyError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/accounts/{account_key}/training/status", dependencies=[Depends(require_admin)])
+    def training_status(account_key: str) -> dict:
+        try:
+            return {"ok": True, "training": _get_session(account_key).fetch_training_status()}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/training/run", dependencies=[Depends(require_admin)])
+    def training_run(account_key: str, body: dict = Body(default={})) -> dict:
+        try:
+            raw_type = body.get("train_type") if isinstance(body, dict) else None
+            ttype = int(raw_type) if raw_type not in (None, "", 0, "0") else None
+            _get_session(account_key).run_training_now(ttype)
+            return {"ok": True}
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/api/accounts/{account_key}/aux/city-weapons", dependencies=[Depends(require_admin)])
     def aux_city_weapons(account_key: str, city_id: int) -> dict:
         try:
