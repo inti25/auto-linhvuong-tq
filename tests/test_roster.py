@@ -169,3 +169,55 @@ def test_fetch_roster_only_queries_specified_base_ids():
     gens = r.generals_of(15230)
     assert len(gens) > 0
 
+
+def test_fetch_roster_resolves_tacticians_for_zero_troop_martial_generals():
+    """Common.ashx?id=76 bỏ qua Võ tướng 0 quân -> phải truy vấn Common.ashx?id=14 cho Văn spec 2/3 chưa ánh xạ."""
+
+    class ZeroTroopSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            self.calls.append((key, dict(data or {})))
+            if key == "Common.ashx?id=29":
+                return Resp({"ret": 0, "city": [[15237, "ThienNam"]]})
+            if key == "City.ashx?id=7":
+                return Resp({"ret": 0, "infos": []})
+            if key == "Common.ashx?id=32" and data.get("type") == "1":
+                return Resp({
+                    "ret": 0,
+                    "list": [[15237, "ThienNam", 229, 244, [
+                        [6332, "VanCoQuan", "", 1, 3, 0, 100, 100, 1000, 1000, 0, 0, 0, 0, 0],
+                        [6331, "VanKhongQuan", "", 1, 3, 0, 101, 100, 1000, 1000, 0, 0, 0, 0, 0],
+                        [6333, "VanRanh", "", 1, 0, 0, 90, 100, 900, 900, 0, 0, 0, 0, 0],
+                    ]]],
+                })
+            if key == "Common.ashx?id=32" and data.get("type") == "2":
+                return Resp({
+                    "ret": 0,
+                    "list": [[15237, "ThienNam", 229, 244, [
+                        [6330, "VoCoQuan", "", 2, 0, 0, 100, 100, 1000, 1000, 0, 0, 0, 0, 0],
+                        [6341, "VoKhongQuan", "", 2, 0, 0, 101, 100, 1000, 1000, 0, 0, 0, 0, 0],
+                    ]]],
+                })
+            if key == "Common.ashx?id=76":
+                return Resp({
+                    "ret": 0,
+                    "list": [[15237, "ThienNam", [[6330, "VoCoQuan", 6332, "VanCoQuan", 0, 100, 0, 0, 0, 100, 0]]]],
+                })
+            if key == "Common.ashx?id=14":
+                return Resp({"ret": 0, "partner_id": 6341})
+            return Resp({"ret": 0})
+
+    sess = ZeroTroopSession()
+    gw = GatewayClient(57, sess, sleep=lambda s: None)
+    r = fetch_roster(gw)
+    gens = {g.id: g for g in r.generals_of(15237)}
+    assert gens[6330].tactician_id == 6332
+    assert gens[6341].tactician_id == 6331
+    assert gens[6341].tactician_name == "VanKhongQuan"
+    c14_calls = [d for k, d in sess.calls if k == "Common.ashx?id=14"]
+    assert [d["lGeneralID"] for d in c14_calls] == ["6331"]
+
+

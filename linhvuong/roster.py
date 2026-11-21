@@ -176,6 +176,44 @@ class Roster:
 _ROLES = {1: "van", 2: "vo"}
 
 
+def _resolve_missing_tacticians(
+    gateway: GatewayClient,
+    raw_generals_by_cid: dict[int, list[tuple[int, list]]],
+    target_ids: Optional[set[int]],
+    tactician_map: dict[int, tuple[int, str]],
+) -> None:
+    """Bổ sung ánh xạ Mưu sĩ cho Võ tướng chưa có quân (vắng mặt ở Common.ashx?id=76) qua Common.ashx?id=14."""
+    call_fn = getattr(gateway, "call", None)
+    if not callable(call_fn):
+        return
+
+    resolved_tac_ids = {tid for tid, _ in tactician_map.values() if tid > 0}
+    for cid, glist in raw_generals_by_cid.items():
+        if target_ids is not None and cid not in target_ids:
+            continue
+        for type_, g in glist:
+            if type_ != 1:
+                continue
+            spec = int(g[4]) if len(g) > 4 else 0
+            if spec not in (2, 3):
+                continue
+            van_id = int(g[0])
+            if van_id in resolved_tac_ids:
+                continue
+            van_name = str(g[1])
+            resp = call_fn("Common.ashx", 14, {"lGeneralID": str(van_id), "lCityID": str(cid)})
+            if not isinstance(resp, dict) or resp.get("ret") != 0:
+                continue
+            raw_vo = resp.get("partner_id")
+            try:
+                vo_id = int(raw_vo) if raw_vo not in (None, "", 0, "0") else 0
+            except (TypeError, ValueError):
+                vo_id = 0
+            if vo_id > 0 and tactician_map.get(vo_id, (0, ""))[0] <= 0:
+                tactician_map[vo_id] = (van_id, van_name)
+                resolved_tac_ids.add(van_id)
+
+
 def fetch_roster(
     gateway: GatewayClient,
     only_base_ids: Optional[Iterable[int]] = None,
@@ -256,6 +294,7 @@ def fetch_roster(
     upgrading_map = {}
     tactician_map: dict[int, tuple[int, str]] = {}
     all_bases = list(cities_map.values()) + list(camps_map.values())
+    target_ids: Optional[set[int]] = None
     if only_base_ids is not None:
         target_ids = {int(x) for x in only_base_ids}
         bases_to_query = [b for b in all_bases if b.id in target_ids]
@@ -278,6 +317,10 @@ def fetch_roster(
                         up_t = int(g[10])
                         upgrading_map[gid] = up_t
                         roster._upgrading_time[gid] = up_t
+
+    # Võ tướng 0 quân không xuất hiện trong Common.ashx?id=76: tra cứu thêm qua Văn quan special_status 2/3
+    if include_civil:
+        _resolve_missing_tacticians(gateway, raw_generals_by_cid, target_ids, tactician_map)
 
     # 5. Khởi tạo đối tượng General hoàn chỉnh
     for cid, glist in raw_generals_by_cid.items():
