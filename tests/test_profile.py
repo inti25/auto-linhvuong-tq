@@ -488,6 +488,47 @@ def test_sync_with_bases_initializes_first_enabled_when_empty():
     assert prof.building.cities["10254"].enabled is False
 
 
+def test_auto_swap_tactician_profile_defaults_and_roundtrip():
+    from linhvuong.profile import BaseBinhManConfig, BinhManProfile, GoiDanProfile
+
+    # Giá trị mặc định và tương thích ngược với hồ sơ cũ chưa có trường mới
+    prof = Profile()
+    assert prof.goi_dan.auto_swap_tactician is False
+    assert prof.goi_dan.min_tactician_stamina == "30"
+    assert prof.binh_man.auto_swap_tactician is False
+    assert prof.binh_man.min_tactician_stamina == "30"
+    legacy_base = BaseBinhManConfig.from_dict({"enabled": True, "mode": 2})
+    assert legacy_base.auto_swap_tactician is False
+    assert legacy_base.min_tactician_stamina == "30"
+    legacy_gd = GoiDanProfile.from_dict({"city_id": 101})
+    assert legacy_gd.auto_swap_tactician is False
+    assert legacy_gd.min_tactician_stamina == "30"
+    legacy_bm = BinhManProfile.from_dict({"mode": 1})
+    assert legacy_bm.auto_swap_tactician is False
+    assert legacy_bm.min_tactician_stamina == "30"
+
+    # Roundtrip cấu hình mới
+    prof.goi_dan.auto_swap_tactician = True
+    prof.goi_dan.min_tactician_stamina = "45"
+    prof.binh_man.auto_swap_tactician = True
+    prof.binh_man.min_tactician_stamina = "50"
+    prof.binh_man.bases["101"] = BaseBinhManConfig(
+        name="Thanh1",
+        enabled=True,
+        mode=2,
+        auto_swap_tactician=True,
+        min_tactician_stamina="35",
+    )
+
+    loaded = Profile.from_dict(prof.to_dict())
+    assert loaded.goi_dan.auto_swap_tactician is True
+    assert loaded.goi_dan.min_tactician_stamina == "45"
+    assert loaded.binh_man.auto_swap_tactician is True
+    assert loaded.binh_man.min_tactician_stamina == "50"
+    assert loaded.binh_man.bases["101"].auto_swap_tactician is True
+    assert loaded.binh_man.bases["101"].min_tactician_stamina == "35"
+
+
 
 
 

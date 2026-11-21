@@ -63,12 +63,14 @@ from .generals import (
     EQUIP_MODE_UNEQUIP,
     EQUIP_TYPES,
     RENAME_MAX_WIDTH,
+    auto_swap_low_stamina_tacticians,
     build_rename_plan,
     collect_reward_targets,
     configure_equipment,
     configure_tacticians,
     fetch_equipment_inventory,
     general_name_width,
+    parse_stamina_threshold,
     rename_generals,
     reward_all_generals,
     validate_general_name,
@@ -2086,6 +2088,8 @@ class AccountSession:
             auto_recruit=gd.auto_recruit,
             auto_morale=gd.auto_morale,
             min_morale=max(0, min(100, _safe_int(gd.min_morale, 95))),
+            auto_swap_tactician=bool(getattr(gd, "auto_swap_tactician", False)),
+            min_tactician_stamina=parse_stamina_threshold(getattr(gd, "min_tactician_stamina", "30")),
         )
 
     def start_goidan(self) -> None:
@@ -2116,6 +2120,8 @@ class AccountSession:
             archers=max(0, _safe_int(gd.target_archers, 0)),
         )
         min_morale = max(0, min(100, _safe_int(gd.min_morale, 95)))
+        auto_swap_tac = bool(getattr(gd, "auto_swap_tactician", False))
+        min_tac_stam = parse_stamina_threshold(getattr(gd, "min_tactician_stamina", "30"))
 
         def _worker():
             try:
@@ -2124,6 +2130,15 @@ class AccountSession:
                 for gid in gd.generals:
                     prov.heal_general(cid, gid)
                 fresh = fetch_roster(self.gateway, only_base_ids=[cid])
+                if auto_swap_tac:
+                    auto_swap_low_stamina_tacticians(
+                        gateway=self.gateway,
+                        roster=fresh,
+                        base_id=cid,
+                        general_ids=list(gd.generals),
+                        min_stamina_pct=min_tac_stam,
+                        on_log=lambda m: self.append_log("goidan", m),
+                    )
                 troops_added = False
                 if target_army.total > 0 and gd.auto_recruit:
                     needed = 0
@@ -2145,7 +2160,7 @@ class AccountSession:
                         if any(succ and diff > 0 for _, diff, succ, _ in (res or [])):
                             troops_added = True
                 if gd.auto_morale:
-                    city_gens = {g.id: g for g in fresh.generals_of(cid)}
+                    city_gens = {g.id: g for g in fresh.generals_of(cid) if g.role == "vo"}
                     MoraleTrainer(self.gateway).adjust_squad_morale(
                         base_id=cid, general_ids=list(gd.generals), target_morale=min_morale,
                         base_gens=city_gens, on_notify=lambda m: self.append_log("goidan", m),
@@ -2153,6 +2168,8 @@ class AccountSession:
                     )
                 self.append_log("goidan", "🏁 Hoàn tất biên chế Gọi Man!")
                 self.reload_roster()
+            except CaptchaRequired:
+                self._handle_captcha("Đổi Mưu sĩ Gọi Man gặp Captcha (mã 110).")
             except Exception as exc:
                 self.append_log("goidan", f"❌ Lỗi biên chế Gọi Man: {exc}")
 
@@ -2232,6 +2249,8 @@ class AccountSession:
                     peers=[p for p in all_peers if p.base_id != b.id],
                     non_blocking_relocate=True,
                     base_name=b.name,
+                    auto_swap_tactician=bool(getattr(cfg, "auto_swap_tactician", False)),
+                    min_tactician_stamina=parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30")),
                 )
             )
         if not tasks:
@@ -2301,9 +2320,20 @@ class AccountSession:
                         archers=max(0, _safe_int(cfg.target_archers, 0)),
                     )
                     min_morale = max(0, min(100, _safe_int(cfg.min_morale, 95)))
+                    auto_swap_tac = bool(getattr(cfg, "auto_swap_tactician", False))
+                    min_tac_stam = parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30"))
                     for gid in cfg.generals:
                         prov.heal_general(b.id, gid)
-                    fresh = fetch_roster(self.gateway, only_base_ids=[b.id], include_civil=False, include_cities=False)
+                    fresh = fetch_roster(self.gateway, only_base_ids=[b.id], include_civil=auto_swap_tac, include_cities=False)
+                    if auto_swap_tac:
+                        auto_swap_low_stamina_tacticians(
+                            gateway=self.gateway,
+                            roster=fresh,
+                            base_id=b.id,
+                            general_ids=list(cfg.generals),
+                            min_stamina_pct=min_tac_stam,
+                            on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
+                        )
                     troops_added = False
                     if target_army.total > 0:
                         for gid in cfg.generals:
@@ -2322,12 +2352,15 @@ class AccountSession:
                                 on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                             )
                     if cfg.auto_morale:
-                        gens = {g.id: g for g in fresh.generals_of(b.id)}
+                        gens = {g.id: g for g in fresh.generals_of(b.id) if g.role == "vo"}
                         MoraleTrainer(self.gateway).adjust_squad_morale(
                             base_id=b.id, general_ids=list(cfg.generals), target_morale=min_morale,
                             base_gens=gens, on_notify=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                             refresh_from_server=troops_added,
                         )
+                except CaptchaRequired:
+                    self._handle_captcha(f"Đổi Mưu sĩ Bình Man [{b.name}] gặp Captcha (mã 110).")
+                    break
                 except Exception as exc:
                     self.append_log("binhman", f"❌ [{b.name}] Lỗi biên chế: {exc}")
             self.append_log("binhman", "🏁 Hoàn tất biên chế Bình Man!")

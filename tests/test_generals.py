@@ -12,13 +12,16 @@ from linhvuong.generals import (
     MODE_BY_NAME,
     MODE_REMOVE,
     MODE_SEQUENTIAL,
+    auto_swap_low_stamina_tacticians,
     classify_item_role,
     collect_reward_targets,
     configure_equipment,
     configure_tacticians,
     equip_general_item,
     fetch_equipment_inventory,
+    general_stamina_percent,
     get_item_display_name,
+    parse_stamina_threshold,
     reward_all_generals,
     reward_general,
     reward_money_needed,
@@ -42,6 +45,8 @@ def _make_gen(
     special_status: int = 0,
     tactician_id: int = 0,
     tactician_name: str = "",
+    stamina: int = 100,
+    stamina_max: int = 100,
 ) -> General:
     _ = city_id
     return General(
@@ -50,8 +55,8 @@ def _make_gen(
         role=role,
         level=level,
         morale=100,
-        stamina=100,
-        stamina_max=100,
+        stamina=stamina,
+        stamina_max=stamina_max,
         loyalty=loyalty,
         status=status,
         special_status=special_status,
@@ -804,3 +809,121 @@ def test_configure_equipment_smart_civil_mayor_tactician_idle_priority():
         (12, 4, 4004),  # Văn nhàn rỗi Lv.150 lấy 飞镰 (4202)
         (10, 4, 4003),  # Thái thú Lv.200 vét ô trống cuối cùng bằng 松风 (4201)
     ]
+
+
+def test_auto_swap_low_stamina_tacticians_priority_filters_and_unassigned():
+    """Đổi Mưu sĩ < ngưỡng và gán tướng chưa có MS theo cấp cao -> thấp, loại trừ Thái thú/bận/đang biên chế/thấp TL."""
+    assert parse_stamina_threshold("30") == 30.0
+    assert parse_stamina_threshold("-5") == 0.0
+    assert parse_stamina_threshold("150") == 100.0
+    assert parse_stamina_threshold("abc", 30.0) == 30.0
+
+    c1 = _make_city(100, "ThanhA")
+    c2 = _make_city(200, "ThanhB")
+    # Võ tướng trong thành 100:
+    vo_high = _make_gen(1, "VoHigh", "vo", city_id=100, level=80, tactician_id=11, tactician_name="MSLow1")
+    vo_mid_unassigned = _make_gen(2, "VoUnassigned", "vo", city_id=100, level=60, tactician_id=0)
+    vo_low_healthy = _make_gen(3, "VoHealthy", "vo", city_id=100, level=40, tactician_id=12, tactician_name="MSHealthy")
+    vo_zero_max = _make_gen(4, "VoZeroMax", "vo", city_id=100, level=35, tactician_id=13, tactician_name="MSZeroMax")
+    vo_busy = _make_gen(5, "VoBusy", "vo", city_id=100, level=90, status=16, tactician_id=14, tactician_name="MSBusy")
+    vo_other_unselected = _make_gen(6, "VoOther", "vo", city_id=100, level=50, tactician_id=15, tactician_name="MSViaActive")
+
+    # Mưu sĩ hiện tại + Văn quan ứng viên tại thành 100:
+    ms_low1 = _make_gen(11, "MSLow1", "van", city_id=100, level=70, special_status=2, stamina=29, stamina_max=100)  # 29% < 30%
+    ms_healthy = _make_gen(12, "MSHealthy", "van", city_id=100, level=50, special_status=2, stamina=30, stamina_max=100)  # đúng 30% -> giữ
+    ms_zero_max = _make_gen(13, "MSZeroMax", "van", city_id=100, level=40, special_status=2, stamina=0, stamina_max=0)  # stamina_max=0 -> 100%
+    ms_busy = _make_gen(14, "MSBusy", "van", city_id=100, level=50, special_status=2, stamina=10, stamina_max=100)
+    # special_status=0 nhưng đang được VoOther biên chế -> active_tactician_ids() phải loại trừ
+    ms_via_active = _make_gen(15, "MSViaActive", "van", city_id=100, level=99, special_status=0, stamina=100, stamina_max=100)
+
+    van_mayor = _make_gen(20, "ThaiThu", "van", city_id=100, level=99, special_status=1, stamina=100, stamina_max=100)
+    van_busy = _make_gen(21, "VanBan", "van", city_id=100, level=98, status=2, special_status=0, stamina=100, stamina_max=100)
+    van_low_stam = _make_gen(22, "VanYeu", "van", city_id=100, level=95, special_status=0, stamina=25, stamina_max=100)
+    van_ok_high = _make_gen(23, "VanCao", "van", city_id=100, level=85, special_status=0, stamina=40, stamina_max=100)
+    van_ok_mid = _make_gen(24, "VanTrung", "van", city_id=100, level=55, special_status=0, stamina=90, stamina_max=100)
+    van_other_city = _make_gen(30, "VanThanhKhac", "van", city_id=200, level=99, special_status=0, stamina=100, stamina_max=100)
+
+    assert general_stamina_percent(ms_zero_max) == 100.0
+    assert general_stamina_percent(ms_low1) == 29.0
+
+    roster = Roster(
+        cities=[c1, c2],
+        camps=[],
+        _generals={
+            100: [
+                vo_high, vo_mid_unassigned, vo_low_healthy, vo_zero_max, vo_busy, vo_other_unselected,
+                ms_low1, ms_healthy, ms_zero_max, ms_busy, ms_via_active,
+                van_mayor, van_busy, van_low_stam, van_ok_high, van_ok_mid,
+            ],
+            200: [van_other_city],
+        },
+    )
+    gw = FakeGateway()
+    logs: list[str] = []
+    summary = auto_swap_low_stamina_tacticians(
+        gw, roster, base_id=100, general_ids=[1, 2, 3, 4, 5], min_stamina_pct=30.0, on_log=logs.append
+    )
+
+    assert summary.checked == 5
+    assert summary.swapped == 1
+    assert summary.assigned == 1
+    assert summary.kept_healthy == 2
+    assert summary.skipped_busy == 1
+    assert summary.no_replacement == 0
+    assert summary.failed == 0
+    # VoHigh (lv80) lấy VanCao (lv85); VoUnassigned (lv60) lấy VanTrung (lv55)
+    assert [(c[2]["lType"], c[2]["lGeneralID"], c[2]["lFollowGeneralID"], c[2]["lCityID"]) for c in gw.calls] == [
+        ("0", "11", "0", "100"),
+        ("3", "23", "1", "100"),
+        ("3", "24", "2", "100"),
+    ]
+
+
+def test_auto_swap_low_stamina_tacticians_no_replacement_keeps_existing():
+    """Khi không có Văn quan cùng thành đạt ngưỡng, tuyệt đối không tháo Mưu sĩ hiện tại."""
+    c1 = _make_city(100, "ThanhA")
+    vo = _make_gen(1, "Vo1", "vo", city_id=100, level=80, tactician_id=11, tactician_name="MSYeu")
+    ms_low = _make_gen(11, "MSYeu", "van", city_id=100, level=70, special_status=2, stamina=10, stamina_max=100)
+    van_low = _make_gen(12, "VanYeu", "van", city_id=100, level=90, special_status=0, stamina=29, stamina_max=100)
+    roster = Roster(cities=[c1], camps=[], _generals={100: [vo, ms_low, van_low]})
+
+    gw = FakeGateway()
+    logs: list[str] = []
+    summary = auto_swap_low_stamina_tacticians(gw, roster, 100, [1], min_stamina_pct=30.0, on_log=logs.append)
+
+    assert summary.no_replacement == 1
+    assert summary.swapped == 0
+    assert gw.calls == []
+    assert any("giữ nguyên và tiếp tục xuất quân" in m for m in logs)
+
+
+def test_auto_swap_low_stamina_tacticians_rollback_and_captcha():
+    """Nếu gán Văn quan mới thất bại sau khi tháo Mưu sĩ cũ -> rollback gán lại cũ; gặp 110 -> CaptchaRequired."""
+    from linhvuong.tasks.base import CaptchaRequired
+
+    c1 = _make_city(100, "ThanhA")
+    vo = _make_gen(1, "Vo1", "vo", city_id=100, level=80, tactician_id=11, tactician_name="MSCu")
+    ms_low = _make_gen(11, "MSCu", "van", city_id=100, level=70, special_status=2, stamina=5, stamina_max=100)
+    van_new = _make_gen(12, "VanMoi", "van", city_id=100, level=85, special_status=0, stamina=90, stamina_max=100)
+    roster = Roster(cities=[c1], camps=[], _generals={100: [vo, ms_low, van_new]})
+
+    def _fail_new(_ep, _oid, body):
+        if body["lType"] == "3" and body["lGeneralID"] == "12":
+            return {"ret": 10022}
+        return {"ret": 0}
+
+    gw = FakeGateway(_fail_new)
+    logs: list[str] = []
+    summary = auto_swap_low_stamina_tacticians(gw, roster, 100, [1], min_stamina_pct=30.0, on_log=logs.append)
+    assert summary.failed == 1
+    assert summary.rolled_back == 1
+    assert summary.swapped == 0
+    assert [(c[2]["lType"], c[2]["lGeneralID"], c[2]["lFollowGeneralID"]) for c in gw.calls] == [
+        ("0", "11", "0"),   # Tháo MSCu
+        ("3", "12", "1"),   # Gán VanMoi thất bại
+        ("3", "11", "1"),   # Rollback gán lại MSCu
+    ]
+
+    gw_cap = FakeGateway(lambda _ep, _oid, _body: {"ret": 110})
+    with pytest.raises(CaptchaRequired):
+        auto_swap_low_stamina_tacticians(gw_cap, roster, 100, [1], min_stamina_pct=30.0)

@@ -1392,3 +1392,88 @@ def test_web_enhance_endpoints_high_level_destroy_guard_and_captcha(tmp_path, mo
         assert client.post("/api/accounts/enhuser%20%40%20S53/enhance/stop").status_code == 200
 
     wm.graceful_shutdown()
+
+
+def test_runtime_and_web_auto_swap_tactician_forwarding_and_ui(tmp_path, monkeypatch):
+    from pathlib import Path
+    import time
+    import linhvuong.runtime as rt_mod
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="webpassword")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "webpassword"}).status_code == 200
+        assert client.post(
+            "/api/accounts/login",
+            json={"server_id": 53, "username": "tacswap", "password": "secret"},
+        ).status_code == 200
+
+        sess = wm.get_session("tacswap @ S53")
+        assert sess is not None
+
+        assert client.put(
+            "/api/accounts/tacswap%20%40%20S53/profile",
+            json={
+                "goi_dan": {
+                    "city_id": 1001,
+                    "generals": [1],
+                    "auto_swap_tactician": True,
+                    "min_tactician_stamina": "42",
+                },
+                "binh_man": {
+                    "bases": {
+                        "1001": {
+                            "enabled": True,
+                            "mode": 2,
+                            "generals": [1],
+                            "auto_swap_tactician": True,
+                            "min_tactician_stamina": "33",
+                        }
+                    }
+                },
+            },
+        ).status_code == 200
+
+        gd_task = sess._create_goidan_task()
+        assert gd_task.auto_swap_tactician is True
+        assert gd_task.min_tactician_stamina == 42.0
+
+        bm_tasks = sess._create_binhman_tasks()
+        assert len(bm_tasks) == 1
+        assert bm_tasks[0].auto_swap_tactician is True
+        assert bm_tasks[0].min_tactician_stamina == 33.0
+
+        # Kiểm tra adjust_goidan_troops và adjust_binhman_troops gọi auto_swap_low_stamina_tacticians
+        swapped_calls: list[tuple[int, float]] = []
+        monkeypatch.setattr(
+            rt_mod,
+            "fetch_roster",
+            lambda *_a, **_kw: sess.roster,
+        )
+        monkeypatch.setattr(
+            rt_mod,
+            "auto_swap_low_stamina_tacticians",
+            lambda gateway, roster, base_id, general_ids, min_stamina_pct=30.0, on_log=None: swapped_calls.append(
+                (base_id, min_stamina_pct)
+            ),
+        )
+        monkeypatch.setattr(sess.profile.goi_dan, "auto_morale", False)
+        sess.profile.binh_man.bases["1001"].auto_morale = False
+
+        sess.adjust_goidan_troops()
+        sess.adjust_binhman_troops(base_id=1001)
+        deadline = time.monotonic() + 2.0
+        while len(swapped_calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert (1001, 42.0) in swapped_calls
+        assert (1001, 33.0) in swapped_calls
+
+    wm.graceful_shutdown()
+
+    # Kiểm tra parity điều khiển trên Web Dashboard (app.js)
+    app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for elem_id in ("bm-swap-tac", "bm-min-tac-stam", "gd-swap-tac", "gd-min-tac-stam"):
+        assert elem_id in app_js

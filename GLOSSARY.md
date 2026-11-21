@@ -459,6 +459,10 @@ _Avoid_: Game session, token đăng nhập game
 Kho lưu trữ tùy chọn bảo vệ mật khẩu tài khoản game ở trạng thái mã hóa trên ổ đĩa, cho phép dịch vụ nền tự động khôi phục kết nối sau khi khởi động lại máy chủ khi được mở khóa.
 _Avoid_: Lưu mật khẩu thô, auto-login cache, file password
 
+**Tự Động Đổi Mưu Sĩ**:
+Cơ chế kiểm tra tỷ lệ thể lực của **Mưu sĩ** đang biên chế cho **Võ tướng xuất kích** (trong **Bình Man** và **Gọi Man**) và tự động thay thế bằng **Văn quan** rảnh rỗi cùng căn cứ đạt ngưỡng thể lực tối thiểu, ưu tiên theo cấp độ giảm dần.
+_Avoid_: Đổi quân sư tự động, auto swap partner
+
 
 ## Danh Mục Công Trình (Nhà)
 

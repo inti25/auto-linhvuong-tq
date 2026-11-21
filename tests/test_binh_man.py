@@ -1080,3 +1080,119 @@ def test_binh_man_recover_in_city_refills_only_missing_troops():
     troop_add_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
     assert len(troop_add_calls) == 1
     assert troop_add_calls[0]["lAmount"] == "5000"
+
+
+def test_binh_man_auto_swap_tactician_before_attack_without_target_army():
+    """Khi bật auto_swap_tactician (dù target_army=None), Bình Man đổi Mưu sĩ dưới ngưỡng theo cấp cao -> thấp rồi xuất kích."""
+    origin_mid = mid_from_coords(10, 10)
+    man_mid = mid_from_coords(11, 10)
+
+    def _c32(body):
+        t = body.get("type")
+        if t == "1":
+            return {
+                "ret": 0,
+                "list": [
+                    [
+                        1001,
+                        "ThienCo",
+                        10,
+                        10,
+                        [
+                            # [0]id, [1]name, ..., [4]special, [5]status, [6]lv, [7]loy, [8]stam, [9]stam_max
+                            [201, "MSCu", "", 1, 2, 0, 70, 100, 15, 100, 0, 0, 0, 0, 0],       # 15% < 30%
+                            [202, "ThaiThu", "", 1, 1, 0, 99, 100, 100, 100, 0, 0, 0, 0, 0],   # Thái thú -> bỏ qua
+                            [203, "VanThap", "", 1, 0, 0, 40, 100, 90, 100, 0, 0, 0, 0, 0],    # 90% >= 30%, lv 40
+                            [204, "VanCao", "", 1, 0, 0, 85, 100, 50, 100, 0, 0, 0, 0, 0],     # 50% >= 30%, lv 85 -> ưu tiên chọn
+                        ],
+                    ]
+                ],
+            }
+        return {
+            "ret": 0,
+            "list": [[1001, "ThienCo", 10, 10, [[15, "TrieuVan", "", 2, 0, 0, 80, 100, 90, 100, 0, 0, 0, 0, 0]]]],
+        }
+
+    # Note: FakeServer handler callable takes no args, so inspect server.calls[-1]
+    server = FakeServer(
+        map_views={origin_mid: {"npc_tent": [man(11, 10, 777, 7)]}, man_mid: {"npc_tent": [man(11, 10, 777, 7)]}},
+        handlers={
+            "Common.ashx?id=32": lambda: _c32(server.calls[-1][1]),
+            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TrieuVan", 201, "MSCu", 0, 0, 5000, 0, 0, 100, 0]]]]},
+            "OPT.ashx?id=5": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        check_idle=False,
+        auto_swap_tactician=True,
+        min_tactician_stamina=30,
+    )
+    out = task.run_once()
+    assert out == "attacked"
+
+    tac_calls = [d for k, d in server.calls if k == "OPT.ashx?id=5"]
+    assert [(d["lType"], d["lGeneralID"], d["lFollowGeneralID"], d["lCityID"]) for d in tac_calls] == [
+        ("0", "201", "0", "1001"),   # Tháo MSCu
+        ("3", "204", "15", "1001"),  # Gán VanCao (lv 85) -> TrieuVan
+    ]
+    assert any("MSCu" in m and "VanCao" in m for m in alerts)
+
+
+def test_binh_man_mode1_camp_swaps_only_within_camp_and_continues_when_no_replacement():
+    """ADR-0044: Bình Man Chế độ 1 chỉ đổi trong phạm vi Doanh trại, không kéo từ Thành mẹ và vẫn xuất quân nếu hết ứng viên."""
+    origin_mid = mid_from_coords(10, 10)
+
+    def _c32(body):
+        t = body.get("type")
+        if t == "1":
+            return {
+                "ret": 0,
+                "list": [
+                    [-500, "TienDon", 10, 10, [[201, "MSYeu", "", 1, 2, 0, 60, 100, 10, 100, 0, 0, 0, 0, 0]]],
+                    # Thành mẹ 1001 có Văn quan khỏe nhưng ở Chế độ 1 KHÔNG được rút từ Thành mẹ
+                    [1001, "ThanhMe", 5, 5, [[299, "VanThanhMe", "", 1, 0, 0, 99, 100, 100, 100, 0, 0, 0, 0, 0]]],
+                ],
+            }
+        return {
+            "ret": 0,
+            "list": [[-500, "TienDon", 10, 10, [[15, "QuanVu", "", 2, 0, 0, 70, 100, 90, 100, 0, 0, 0, 0, 0]]]],
+        }
+
+    server = FakeServer(
+        map_views={origin_mid: {"npc_tent": [man(10, 11, 888, 7)]}},
+        handlers={
+            "Common.ashx?id=32": lambda: _c32(server.calls[-1][1]),
+            "Common.ashx?id=76": {"ret": 0, "list": [[-500, "TienDon", [[15, "QuanVu", 201, "MSYeu", 0, 0, 5000, 0, 0, 100, 0]]]]},
+            "OPT.ashx?id=5": {"ret": 0},
+            "OPT.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        camp_id=-500,
+        parent_city_id=1001,
+        mode=1,
+        check_idle=False,
+        auto_swap_tactician=True,
+        min_tactician_stamina=30,
+    )
+    out = task.run_once()
+    assert out == "attacked"
+    assert [d for k, d in server.calls if k == "OPT.ashx?id=5"] == []
+    assert [d for k, d in server.calls if k == "OPT.ashx?id=50"] == []
+    assert any("không có Văn quan đủ thể lực" in m for m in alerts)

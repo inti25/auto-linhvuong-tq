@@ -128,6 +128,8 @@ class ProfileSyncMixin:
             "gd_auto_recruit_var",
             "gd_auto_morale_var",
             "gd_min_morale_var",
+            "gd_auto_swap_tactician_var",
+            "gd_min_tactician_stamina_var",
             "gd_action_mode_var",
             # Bình man
             "bm_mode_var",
@@ -142,6 +144,8 @@ class ProfileSyncMixin:
             "bm_auto_recruit_var",
             "bm_auto_morale_var",
             "bm_min_morale_var",
+            "bm_auto_swap_tactician_var",
+            "bm_min_tactician_stamina_var",
             "bm_action_mode_var",
             # Chiến trường & Bắt Boss
             "bt_auto_counter_var",

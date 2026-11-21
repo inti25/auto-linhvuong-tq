@@ -21,6 +21,7 @@ import time
 from typing import Any, Callable, Optional
 
 from ..battle import BattleEngine, BattleReport, BattleState, CombatConfig
+from ..generals import auto_swap_low_stamina_tacticians
 from ..locks import TargetLocks
 from ..roster import Army, fetch_roster
 from ..scan import BasePeer, Target
@@ -87,6 +88,8 @@ class BinhMan:
         peers_fn: Optional[Callable[[], list[BasePeer]]] = None,
         non_blocking_relocate: bool = False,
         base_name: str = "",
+        auto_swap_tactician: bool = False,
+        min_tactician_stamina: float = 30.0,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -115,6 +118,8 @@ class BinhMan:
         self.peers_fn = peers_fn
         self.non_blocking_relocate = non_blocking_relocate
         self.base_name = base_name
+        self.auto_swap_tactician = bool(auto_swap_tactician)
+        self.min_tactician_stamina = max(0.0, min(100.0, float(min_tactician_stamina)))
         self._camp_frozen_until: float = 0.0
 
         # Tự động suy ra mode nếu không chỉ định: có camp_id là Chế độ 1, không có là Chế độ 2
@@ -146,7 +151,7 @@ class BinhMan:
                 roster = fetch_roster(
                     self.ctx.gateway,
                     only_base_ids=[self.origin_id],
-                    include_civil=False,
+                    include_civil=bool(self.auto_swap_tactician),
                     include_cities=False,
                 )
                 gens = {g.id: g for g in roster.generals_of(self.origin_id)}
@@ -446,51 +451,70 @@ class BinhMan:
                     self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
                 return "generals_busy"
 
-        # 3. Chuẩn bị quân lực & Luyện sĩ khí trước khi xuất quân (tái sử dụng pre_roster nếu có)
-        if self.origin_id and self.target_army is not None and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale):
+        # 3. Tự động đổi Mưu sĩ & Chuẩn bị quân lực / Luyện sĩ khí trước khi xuất quân (tái sử dụng pre_roster nếu có)
+        needs_army_prep = bool(
+            self.target_army is not None
+            and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
+        )
+        if self.origin_id and (needs_army_prep or self.auto_swap_tactician):
             try:
                 roster = pre_roster or fetch_roster(
                     self.ctx.gateway,
                     only_base_ids=[self.origin_id],
-                    include_civil=False,
+                    include_civil=bool(self.auto_swap_tactician),
                     include_cities=False,
                 )
-                base_gens = {g.id: g for g in roster.generals_of(self.origin_id)}
             except Exception:
                 roster = None
-                base_gens = {}
 
-            is_city = (self.mode == MODE_CITY or int(self.origin_id) > 0)
-            troops_added = False
-            for gid in self.generals:
-                self.provisioner.heal_general(self.origin_id, gid)
-                if self.auto_recruit and self.target_army.total > 0 and roster:
-                    cur_army = roster.army_of(gid)
-                    # Thành thì cho phép mua tân binh (auto_recruit=True), Doanh trại chỉ rút đồn trú (auto_recruit=False)
-                    adj_res = self.provisioner.adjust_troops(
-                        base_id=self.origin_id,
-                        general_id=gid,
-                        current_army=cur_army,
-                        target_army=self.target_army,
-                        auto_recruit=is_city,
-                        on_log=self.ctx.notify,
-                    )
-                    if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
-                        troops_added = True
-
-            if self.auto_morale and base_gens:
-                trainer = MoraleTrainer(self.ctx.gateway)
-                ready, wait_reasons = trainer.adjust_squad_morale(
+            if self.auto_swap_tactician and roster is not None:
+                auto_swap_low_stamina_tacticians(
+                    gateway=self.ctx.gateway,
+                    roster=roster,
                     base_id=self.origin_id,
                     general_ids=self.generals,
-                    target_morale=self.min_morale,
-                    base_gens=base_gens,
-                    on_notify=self.ctx.notify,
-                    stop_event=getattr(self.ctx, "stop_event", None),
-                    refresh_from_server=troops_added,
+                    min_stamina_pct=self.min_tactician_stamina,
+                    on_log=self.ctx.notify,
+                    stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
                 )
-                if not ready:
-                    return "waiting_morale"
+
+            if needs_army_prep:
+                base_gens = (
+                    {g.id: g for g in roster.generals_of(self.origin_id) if g.role == "vo"}
+                    if roster
+                    else {}
+                )
+                is_city = (self.mode == MODE_CITY or int(self.origin_id) > 0)
+                troops_added = False
+                for gid in self.generals:
+                    self.provisioner.heal_general(self.origin_id, gid)
+                    if self.auto_recruit and self.target_army and self.target_army.total > 0 and roster:
+                        cur_army = roster.army_of(gid)
+                        # Thành thì cho phép mua tân binh (auto_recruit=True), Doanh trại chỉ rút đồn trú (auto_recruit=False)
+                        adj_res = self.provisioner.adjust_troops(
+                            base_id=self.origin_id,
+                            general_id=gid,
+                            current_army=cur_army,
+                            target_army=self.target_army,
+                            auto_recruit=is_city,
+                            on_log=self.ctx.notify,
+                        )
+                        if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                            troops_added = True
+
+                if self.auto_morale and base_gens:
+                    trainer = MoraleTrainer(self.ctx.gateway)
+                    ready, wait_reasons = trainer.adjust_squad_morale(
+                        base_id=self.origin_id,
+                        general_ids=self.generals,
+                        target_morale=self.min_morale,
+                        base_gens=base_gens,
+                        on_notify=self.ctx.notify,
+                        stop_event=getattr(self.ctx, "stop_event", None),
+                        refresh_from_server=troops_added,
+                    )
+                    if not ready:
+                        return "waiting_morale"
 
         # 4. Quét tìm Man mục tiêu (áp dụng Quy Tắc Ưu Tiên Căn Cứ Gần Nhất - ADR-0029)
         active_peers = self.peers_fn() if self.peers_fn else self.peers

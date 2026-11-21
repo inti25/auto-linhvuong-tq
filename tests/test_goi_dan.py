@@ -1204,6 +1204,92 @@ def test_goi_man_marks_busy_target_on_209_and_tries_next_candidate():
     assert ctx.locks.is_locked_by_other(1184, owner=123)
 
 
+def test_goi_man_auto_swap_tactician_and_fallback_when_no_replacement():
+    """Gọi Man tự động đổi Mưu sĩ dưới ngưỡng (kể cả khi target_army=None) và giữ nguyên nếu không có Văn quan thay thế."""
+    mid = mid_from_coords(2, 2)
+
+    # Case 1: Có Văn quan đạt ngưỡng -> tháo cũ, gán mới (cao -> thấp), sau đó gọi & đánh
+    def _c32_ok(body):
+        if body.get("type") == "1":
+            return {
+                "ret": 0,
+                "list": [[123, "ThanhA", 2, 2, [
+                    [301, "MSYeu", "", 1, 2, 0, 60, 100, 20, 100, 0, 0, 0, 0, 0],
+                    [302, "VanThap", "", 1, 0, 0, 30, 100, 100, 100, 0, 0, 0, 0, 0],
+                    [303, "VanCao", "", 1, 0, 0, 90, 100, 35, 100, 0, 0, 0, 0, 0],
+                ]]],
+            }
+        return {"ret": 0, "list": [[123, "ThanhA", 2, 2, [[10, "TrieuVan", "", 2, 0, 0, 80, 100, 90, 100, 0, 0, 0, 0, 0]]]]}
+
+    server1 = FakeServer(
+        handlers={
+            "Common.ashx?id=32": lambda: _c32_ok(server1.calls[-1][1]),
+            "Common.ashx?id=76": {"ret": 0, "list": [[123, "ThanhA", [[10, "TrieuVan", 301, "MSYeu", 0, 0, 5000, 0, 0, 100, 0]]]]},
+            "OPT.ashx?id=5": {"ret": 0},
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server1.map_views.update({mid: {"npc_tent": [man(2, 2, 888, VONG_LINH)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        }
+    )
+    ctx1, alerts1 = ctx_for(server1)
+    task1 = GoiDan(
+        ctx1,
+        generals=[10],
+        origin=(2, 2),
+        radius=5,
+        mode="vong_linh",
+        city_id=123,
+        check_idle=False,
+        auto_swap_tactician=True,
+        min_tactician_stamina=30,
+    )
+    assert task1.run_once() == "called_and_attacked"
+    tac_calls1 = [d for k, d in server1.calls if k == "OPT.ashx?id=5"]
+    assert [(d["lType"], d["lGeneralID"], d["lFollowGeneralID"]) for d in tac_calls1] == [
+        ("0", "301", "0"),
+        ("3", "303", "10"),
+    ]
+    assert any("VanCao" in m for m in alerts1)
+
+    # Case 2: Không có Văn quan nào >= 40% -> không gọi OPT.ashx?id=5, vẫn gọi & đánh bình thường
+    def _c32_none(body):
+        if body.get("type") == "1":
+            return {
+                "ret": 0,
+                "list": [[123, "ThanhA", 2, 2, [
+                    [301, "MSYeu", "", 1, 2, 0, 60, 100, 20, 100, 0, 0, 0, 0, 0],
+                    [302, "VanYeu", "", 1, 0, 0, 90, 100, 35, 100, 0, 0, 0, 0, 0],
+                ]]],
+            }
+        return {"ret": 0, "list": [[123, "ThanhA", 2, 2, [[10, "TrieuVan", "", 2, 0, 0, 80, 100, 90, 100, 0, 0, 0, 0, 0]]]]}
+
+    server2 = FakeServer(
+        handlers={
+            "Common.ashx?id=32": lambda: _c32_none(server2.calls[-1][1]),
+            "Common.ashx?id=76": {"ret": 0, "list": [[123, "ThanhA", [[10, "TrieuVan", 301, "MSYeu", 0, 0, 5000, 0, 0, 100, 0]]]]},
+            "OPT.ashx?id=5": {"ret": 0},
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server2.map_views.update({mid: {"npc_tent": [man(2, 2, 889, VONG_LINH)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        }
+    )
+    ctx2, alerts2 = ctx_for(server2)
+    task2 = GoiDan(
+        ctx2,
+        generals=[10],
+        origin=(2, 2),
+        radius=5,
+        mode="vong_linh",
+        city_id=123,
+        check_idle=False,
+        auto_swap_tactician=True,
+        min_tactician_stamina=40,
+    )
+    assert task2.run_once() == "called_and_attacked"
+    assert [d for k, d in server2.calls if k == "OPT.ashx?id=5"] == []
+    assert any("không có Văn quan đủ thể lực" in m for m in alerts2)
+
+
 
 
 

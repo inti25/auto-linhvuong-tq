@@ -207,6 +207,8 @@ class GoiDanProfile:
     auto_recruit: bool = True
     auto_morale: bool = True
     min_morale: str = "95"
+    auto_swap_tactician: bool = False
+    min_tactician_stamina: str = "30"
     attack_action_mode: str = "adaptive"
     action_combo_idx: int = 0
 
@@ -250,6 +252,8 @@ class GoiDanProfile:
             auto_recruit=bool(auto_rec),
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
+            auto_swap_tactician=bool(data.get("auto_swap_tactician", False)),
+            min_tactician_stamina=str(data.get("min_tactician_stamina", "30")),
             attack_action_mode=str(data.get("attack_action_mode", "adaptive")),
             action_combo_idx=int(data.get("action_combo_idx", 0)),
         )
@@ -280,6 +284,8 @@ class BaseBinhManConfig:
     auto_recruit: bool = True
     auto_morale: bool = True
     min_morale: str = "95"
+    auto_swap_tactician: bool = False
+    min_tactician_stamina: str = "30"
     attack_action_mode: str = "adaptive"
     action_combo_idx: int = 0
 
@@ -325,6 +331,8 @@ class BaseBinhManConfig:
             auto_recruit=bool(data.get("auto_recruit", True)),
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
+            auto_swap_tactician=bool(data.get("auto_swap_tactician", False)),
+            min_tactician_stamina=str(data.get("min_tactician_stamina", "30")),
             attack_action_mode=str(data.get("attack_action_mode", "adaptive")),
             action_combo_idx=int(data.get("action_combo_idx", 0)),
         )
@@ -350,6 +358,8 @@ class BinhManProfile:
     auto_recruit: bool = True
     auto_morale: bool = True
     min_morale: str = "95"
+    auto_swap_tactician: bool = False
+    min_tactician_stamina: str = "30"
     attack_action_mode: str = "adaptive"
     action_combo_idx: int = 0
     bases: dict[str, BaseBinhManConfig] = field(default_factory=dict)
@@ -401,6 +411,8 @@ class BinhManProfile:
             auto_recruit=bool(data.get("auto_recruit", True)),
             auto_morale=bool(data.get("auto_morale", True)),
             min_morale=str(data.get("min_morale", "95")),
+            auto_swap_tactician=bool(data.get("auto_swap_tactician", False)),
+            min_tactician_stamina=str(data.get("min_tactician_stamina", "30")),
             attack_action_mode=str(data.get("attack_action_mode", "adaptive")),
             action_combo_idx=int(data.get("action_combo_idx", 0)),
             bases=bases_map,
