@@ -77,6 +77,13 @@ from .generals import (
 )
 from .locks import TargetLocks
 from .logger import setup_logger
+from .market import (
+    BOX_OPTION_IDS,
+    CityMarketCache,
+    ResourceMonitorSettings,
+    parse_sell_threshold_pct,
+    process_city_resource_cycle,
+)
 from .notifications import (
     NotificationConfig,
     dispatch_boss_alert,
@@ -105,7 +112,6 @@ from .tasks.building import (
     BuildingPlan,
     BuildingTask,
     chest_needs_city_switch,
-    fetch_city_resources_snapshot,
     parse_boost_remaining_time,
     run_batch_open_chest,
 )
@@ -165,7 +171,7 @@ AUTO_START_TASK_LABELS = (
     ("nienthu", "🧧 Niên thú"),
     ("crafting", "🛡️ Chế tạo quân giới"),
     ("transfer_loop", "🚚 Chuyển quân giới lặp"),
-    ("resource_monitor", "📦 Tự mở rương TN/Vàng"),
+    ("resource_monitor", "📦 Tài Nguyên"),
 )
 
 
@@ -1368,8 +1374,9 @@ class AccountSession:
         stop_ev = threading.Event()
         self._res_monitor_stop = stop_ev
         self._res_monitor_running = True
-        self.append_log("building", f"▶️ Bắt đầu giám sát ngưỡng tài nguyên cho {len(res_cids)} thành...")
-        box_ids = [1, 6, 11, 16, 24, 35]
+        self.append_log("building", f"▶️ Bắt đầu giám sát tài nguyên cho {len(res_cids)} thành...")
+        market_cache = CityMarketCache()
+        warned_conflicts: set[tuple[int, str]] = set()
 
         def _loop():
             while self._res_monitor_running and not stop_ev.is_set():
@@ -1377,51 +1384,42 @@ class AccountSession:
                 cur_valid_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
                 raw_cids = list(r_cfg.resource_cities) or res_cids
                 cids = [cid for cid in raw_cids if cur_valid_ids is None or cid in cur_valid_ids]
+
+                g_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.gold_box_idx)))
+                tn_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.tn_box_idx)))
+                settings = ResourceMonitorSettings(
+                    gold_threshold=_safe_int(r_cfg.gold_threshold, 100000000),
+                    buy_pcts={
+                        "wood": max(0.0, _safe_float(r_cfg.wood_pct, 70.0)),
+                        "iron": max(0.0, _safe_float(r_cfg.iron_pct, 70.0)),
+                        "stone": max(0.0, _safe_float(r_cfg.stone_pct, 70.0)),
+                        "food": max(0.0, _safe_float(r_cfg.food_pct, 70.0)),
+                    },
+                    gold_box_id=BOX_OPTION_IDS[g_idx],
+                    tn_box_id=BOX_OPTION_IDS[tn_idx],
+                    prefer_market_buy=bool(getattr(r_cfg, "prefer_market_buy", False)),
+                    auto_sell_resource=bool(getattr(r_cfg, "auto_sell_resource", False)),
+                    sell_threshold_pct=parse_sell_threshold_pct(getattr(r_cfg, "sell_threshold_pct", "90")),
+                )
+
                 for cid in cids:
                     if not self._res_monitor_running or stop_ev.is_set():
                         break
                     try:
                         base = self.roster.base_by_id(cid)
                         cname = base.name if base else f"Thành {cid}"
-                        snap = fetch_city_resources_snapshot(self.gateway, cid, include_gold=True)
-                        if snap.get("ret", 0) == 4:
+                        res = process_city_resource_cycle(
+                            self.gateway,
+                            cid,
+                            cname,
+                            settings,
+                            market_cache,
+                            notify=lambda m: self.append_log("building", m),
+                            warned_conflicts=warned_conflicts,
+                        )
+                        if res.get("city_missing"):
                             self._trigger_roster_resync_async(cid)
                             continue
-
-                        money = snap.get("money")
-                        gold_th = _safe_int(r_cfg.gold_threshold, 100000000)
-                        need_gold = money is not None and money < gold_th
-
-                        max_storage = snap.get("max_storage") or 1000000
-                        w_pct = max(0.0, _safe_float(r_cfg.wood_pct, 70.0) / 100.0)
-                        i_pct = max(0.0, _safe_float(r_cfg.iron_pct, 70.0) / 100.0)
-                        s_pct = max(0.0, _safe_float(r_cfg.stone_pct, 70.0) / 100.0)
-                        f_pct = max(0.0, _safe_float(r_cfg.food_pct, 70.0) / 100.0)
-                        need_tn = bool(snap.get("has_resources")) and any(
-                            snap.get(k) is not None and snap.get(k) < max_storage * pct
-                            for k, pct in (("wood", w_pct), ("iron", i_pct), ("stone", s_pct), ("food", f_pct))
-                        )
-
-                        if need_gold or need_tn:
-                            self.gateway.call("City.ashx", 50, {"tid": str(cid), "_": ""})
-
-                        if need_gold:
-                            g_idx = max(0, min(len(box_ids) - 1, int(r_cfg.gold_box_idx)))
-                            g_box_id = box_ids[g_idx]
-                            r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(g_box_id), "_": ""}) or {}
-                            if r_box.get("ret", 0) == 0:
-                                self.append_log("building", f"💰 [{cname}] Vàng={money:,} < {gold_th:,}: Đã mở rương vàng #{g_box_id}.")
-                            else:
-                                self.append_log("building", f"⚠️ [{cname}] Mở rương vàng #{g_box_id} lỗi (ret={r_box.get('ret')}).")
-
-                        if need_tn:
-                            tn_idx = max(0, min(len(box_ids) - 1, int(r_cfg.tn_box_idx)))
-                            tn_box_id = box_ids[tn_idx]
-                            r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(tn_box_id), "_": ""}) or {}
-                            if r_box.get("ret", 0) == 0:
-                                self.append_log("building", f"📦 [{cname}] Khoáng sản dưới ngưỡng: Đã mở rương TN #{tn_box_id}.")
-                            else:
-                                self.append_log("building", f"⚠️ [{cname}] Mở rương TN #{tn_box_id} lỗi (ret={r_box.get('ret')}).")
                     except CaptchaRequired:
                         self._handle_captcha("Giám sát tài nguyên gặp Captcha (mã 110).")
                         if self._res_monitor_thread is threading.current_thread():

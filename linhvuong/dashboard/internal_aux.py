@@ -9,12 +9,17 @@ import tkinter as tk
 from tkinter import messagebox as _default_messagebox, ttk
 from typing import Any, Callable, Optional
 
+from ..market import (
+    CityMarketCache,
+    ResourceMonitorSettings,
+    parse_sell_threshold_pct,
+    process_city_resource_cycle,
+)
 from ..tasks.base import CaptchaRequired
 from ..tasks.building import (
     CHEST_MAPPING,
     BuildingTask as _DefaultBuildingTask,
     chest_needs_city_switch,
-    fetch_city_resources_snapshot,
     parse_boost_remaining_time,
     run_batch_open_chest,
 )
@@ -43,6 +48,9 @@ class InternalAuxMixin:
             "gold_box_idx": self.res_gold_box_combo.current() if hasattr(self, "res_gold_box_combo") else 2,
             "tn_box_idx": self.res_tn_box_combo.current() if hasattr(self, "res_tn_box_combo") else 4,
             "auto_open_box": bool(self.bld_open_box_var.get()) if hasattr(self, "bld_open_box_var") else False,
+            "prefer_market_buy": bool(self.res_prefer_market_var.get()) if hasattr(self, "res_prefer_market_var") else False,
+            "auto_sell_resource": bool(self.res_auto_sell_var.get()) if hasattr(self, "res_auto_sell_var") else False,
+            "sell_threshold_pct": self.res_sell_pct_var.get() if hasattr(self, "res_sell_pct_var") else "90",
             "resource_cities": sorted(list(self._selected_resource_cities)),
         }
 
@@ -59,6 +67,13 @@ class InternalAuxMixin:
             self.res_food_pct_var.set(str(res_cfg["food_pct"]))
         if hasattr(self, "bld_open_box_var") and "auto_open_box" in res_cfg:
             self.bld_open_box_var.set(bool(res_cfg["auto_open_box"]))
+        if hasattr(self, "res_prefer_market_var"):
+            self.res_prefer_market_var.set(bool(res_cfg.get("prefer_market_buy", False)))
+        if hasattr(self, "res_auto_sell_var"):
+            self.res_auto_sell_var.set(bool(res_cfg.get("auto_sell_resource", False)))
+        if hasattr(self, "res_sell_pct_var"):
+            raw_sell = res_cfg.get("sell_threshold_pct", "90")
+            self.res_sell_pct_var.set(str(raw_sell) if raw_sell not in (None, "") else "90")
         if hasattr(self, "res_gold_box_combo") and "gold_box_idx" in res_cfg:
             try:
                 g_idx = int(res_cfg["gold_box_idx"])
@@ -255,6 +270,32 @@ class InternalAuxMixin:
         self.res_tn_box_combo.set(box_options[4])
         self.res_tn_box_combo.pack(side="left", fill="x", expand=True, padx=4)
         self.bld_box_combo = self.res_tn_box_combo
+
+        tk.Checkbutton(
+            f_res_thresh,
+            text="Ưu tiên mua ở chợ (Thành có Chợ)",
+            variable=self.res_prefer_market_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", padx=6, pady=(2, 1))
+
+        r_sell = tk.Frame(f_res_thresh, bg=BG)
+        r_sell.pack(fill="x", padx=6, pady=(1, 2))
+        tk.Checkbutton(
+            r_sell,
+            text="Bán tài nguyên nếu quá",
+            variable=self.res_auto_sell_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(side="left")
+        ttk.Entry(r_sell, textvariable=self.res_sell_pct_var, width=4).pack(side="left", padx=(4, 2))
+        tk.Label(r_sell, text="%", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
 
         ttk.Button(f_res_thresh, text="Áp Dụng Thiết Lập", style="Success.TButton", command=self._apply_resource_settings).pack(pady=4)
 
@@ -574,8 +615,18 @@ class InternalAuxMixin:
         f_pct = self.res_food_pct_var.get()
         g_box = self.res_gold_box_combo.get() if hasattr(self, "res_gold_box_combo") else ""
         tn_box = self.res_tn_box_combo.get() if hasattr(self, "res_tn_box_combo") else ""
+        prefer_mkt = bool(self.res_prefer_market_var.get()) if hasattr(self, "res_prefer_market_var") else False
+        auto_sell = bool(self.res_auto_sell_var.get()) if hasattr(self, "res_auto_sell_var") else False
+        sell_pct_val = parse_sell_threshold_pct(
+            self.res_sell_pct_var.get() if hasattr(self, "res_sell_pct_var") else "90"
+        )
+        if hasattr(self, "res_sell_pct_var"):
+            self.res_sell_pct_var.set(f"{sell_pct_val:g}")
         self._append_bld_log(
-            f"✅ Áp dụng thiết lập tài nguyên: Vàng<{gold_th}, TN G/S/Đ/T<{w_pct}%/{i_pct}%/{s_pct}%/{f_pct}%, Rương: {g_box.split(':')[0]} / {tn_box.split(':')[0]}"
+            f"✅ Áp dụng thiết lập tài nguyên: Vàng<{gold_th}, TN G/S/Đ/T<{w_pct}%/{i_pct}%/{s_pct}%/{f_pct}%, "
+            f"Rương: {g_box.split(':')[0]} / {tn_box.split(':')[0]}, "
+            f"Ưu tiên mua Chợ={'Bật' if prefer_mkt else 'Tắt'}, "
+            f"Bán quá {sell_pct_val:g}%={'Bật' if auto_sell else 'Tắt'}"
         )
         try:
             self._save_unified_profile()
@@ -618,7 +669,23 @@ class InternalAuxMixin:
             self._append_bld_log("⏹️ Đã dừng giám sát tài nguyên.")
 
     def _run_resource_monitor_loop(self):
-        while self._res_monitor_running:
+        market_cache = CityMarketCache()
+        warned_conflicts: set[tuple[int, str]] = set()
+
+        def _parse_pct_val(raw_val: str) -> float:
+            try:
+                return max(0.0, float(str(raw_val).replace(",", ".").strip()))
+            except (ValueError, TypeError):
+                return 70.0
+
+        def _parse_box_id(combo: Any, default_id: int) -> int:
+            box_str = combo.get() if combo is not None else str(default_id)
+            try:
+                return int(str(box_str).split(":")[0].strip())
+            except (ValueError, IndexError):
+                return default_id
+
+        while self._res_monitor_running and not getattr(self, "_destroyed", False):
             valid_base_ids = (
                 {b.id for b in self.roster.bases} if (self.roster and self.roster.bases) else None
             )
@@ -630,6 +697,31 @@ class InternalAuxMixin:
                 if valid_base_ids is None or self._current_bld_city_id in valid_base_ids:
                     target_cids = [self._current_bld_city_id]
 
+            try:
+                try:
+                    gold_th = int(self.res_gold_thresh_var.get().replace(",", "").replace(".", "").strip())
+                except (ValueError, AttributeError):
+                    gold_th = 100000000
+
+                settings = ResourceMonitorSettings(
+                    gold_threshold=gold_th,
+                    buy_pcts={
+                        "wood": _parse_pct_val(self.res_wood_pct_var.get()),
+                        "iron": _parse_pct_val(self.res_iron_pct_var.get()),
+                        "stone": _parse_pct_val(self.res_stone_pct_var.get()),
+                        "food": _parse_pct_val(self.res_food_pct_var.get()),
+                    },
+                    gold_box_id=_parse_box_id(getattr(self, "res_gold_box_combo", None), 11),
+                    tn_box_id=_parse_box_id(getattr(self, "res_tn_box_combo", None), 24),
+                    prefer_market_buy=bool(self.res_prefer_market_var.get()) if hasattr(self, "res_prefer_market_var") else False,
+                    auto_sell_resource=bool(self.res_auto_sell_var.get()) if hasattr(self, "res_auto_sell_var") else False,
+                    sell_threshold_pct=parse_sell_threshold_pct(
+                        self.res_sell_pct_var.get() if hasattr(self, "res_sell_pct_var") else "90"
+                    ),
+                )
+            except (RuntimeError, tk.TclError):
+                break
+
             for cid in target_cids:
                 if not self._res_monitor_running:
                     break
@@ -640,72 +732,31 @@ class InternalAuxMixin:
                         if b:
                             cname = b.name
 
-                    # 1. Gọi City.ashx?id=20 + City.ashx?id=6 lấy tài nguyên và vàng hiện tại
-                    snap = fetch_city_resources_snapshot(self.gateway, cid, include_gold=True)
-                    if snap.get("ret", 0) == 4:
+                    res = process_city_resource_cycle(
+                        self.gateway,
+                        cid,
+                        cname,
+                        settings,
+                        market_cache,
+                        notify=lambda m: self.after(0, self._append_bld_log, m),
+                        warned_conflicts=warned_conflicts,
+                    )
+                    if res.get("city_missing"):
                         try:
                             self.after(0, self._append_bld_log, f"⚠️ [{cname}] Không còn tồn tại trên máy chủ (mã 4); đang đồng bộ lại...")
                             self.after(0, self.reload)
                         except Exception:
                             pass
                         continue
-                    money = snap.get("money")
-                    max_storage = snap.get("max_storage") or 1000000
 
-                    # 2. Kiểm tra ngưỡng vàng
+                except CaptchaRequired:
+                    self._res_monitor_running = False
                     try:
-                        gold_th = int(self.res_gold_thresh_var.get().replace(",", "").replace(".", "").strip())
-                    except ValueError:
-                        gold_th = 100000000
-                    need_gold = money is not None and money < gold_th
-
-                    # 3. Kiểm tra ngưỡng khoáng sản %
-                    try:
-                        w_pct = float(self.res_wood_pct_var.get()) / 100.0
-                        i_pct = float(self.res_iron_pct_var.get()) / 100.0
-                        s_pct = float(self.res_stone_pct_var.get()) / 100.0
-                        f_pct = float(self.res_food_pct_var.get()) / 100.0
-                    except ValueError:
-                        w_pct = i_pct = s_pct = f_pct = 0.7
-
-                    need_tn = bool(snap.get("has_resources")) and any(
-                        snap.get(k) is not None and snap.get(k) < max_storage * pct
-                        for k, pct in (("wood", w_pct), ("iron", i_pct), ("stone", s_pct), ("food", f_pct))
-                    )
-
-                    if need_gold or need_tn:
-                        self.gateway.call("City.ashx", 50, {"tid": str(cid), "_": ""})
-
-                    if need_gold:
-                        g_box_str = self.res_gold_box_combo.get() if hasattr(self, "res_gold_box_combo") else "11"
-                        try:
-                            g_box_id = int(g_box_str.split(":")[0].strip())
-                        except (ValueError, IndexError):
-                            g_box_id = 11
-                        r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(g_box_id), "_": ""}) or {}
-                        ret = r_box.get("ret", 0)
-                        if ret == 0:
-                            self.after(0, self._append_bld_log, f"💰 [{cname}] Vàng={money:,} < ngưỡng {gold_th:,}: Đã mở rương vàng #{g_box_id}.")
-                        else:
-                            self.after(0, self._append_bld_log, f"⚠️ [{cname}] Mở rương vàng #{g_box_id} thất bại (mã {ret}).")
-
-                    if need_tn:
-                        tn_box_str = self.res_tn_box_combo.get() if hasattr(self, "res_tn_box_combo") else "24"
-                        try:
-                            tn_box_id = int(tn_box_str.split(":")[0].strip())
-                        except (ValueError, IndexError):
-                            tn_box_id = 24
-                        r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(tn_box_id), "_": ""}) or {}
-                        ret = r_box.get("ret", 0)
-                        if ret == 0:
-                            self.after(
-                                0,
-                                self._append_bld_log,
-                                f"📦 [{cname}] Khoáng sản dưới ngưỡng: Đã mở rương TN #{tn_box_id} (Kho {max_storage:,}).",
-                            )
-                        else:
-                            self.after(0, self._append_bld_log, f"⚠️ [{cname}] Mở rương TN #{tn_box_id} thất bại (mã {ret}).")
-
+                        self.after(0, self._append_bld_log, "⚠️ Giám sát tài nguyên tạm dừng: Máy chủ yêu cầu giải Captcha (mã 110).")
+                        self.after(0, lambda: self.res_monitor_btn.configure(text="Tài Nguyên", style="Danger.TButton"))
+                    except Exception:
+                        pass
+                    return
                 except (RuntimeError, tk.TclError):
                     break
                 except Exception as e:

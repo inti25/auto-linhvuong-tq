@@ -1715,6 +1715,9 @@ def test_dashboard_resource_config_and_cities_profile_sync(tmp_path):
         dash.res_iron_pct_var.set("65")
         dash.res_stone_pct_var.set("55")
         dash.res_food_pct_var.set("80")
+        dash.res_prefer_market_var.set(True)
+        dash.res_auto_sell_var.set(True)
+        dash.res_sell_pct_var.set("95")
         if hasattr(dash, "res_gold_box_combo") and len(dash.res_gold_box_combo["values"]) > 2:
             dash.res_gold_box_combo.current(2)
         if hasattr(dash, "res_tn_box_combo") and len(dash.res_tn_box_combo["values"]) > 1:
@@ -1738,6 +1741,9 @@ def test_dashboard_resource_config_and_cities_profile_sync(tmp_path):
         assert "resource" in profile, "Profile thiếu section 'resource'"
         assert profile["resource"]["gold_threshold"] == "50000000"
         assert profile["resource"]["wood_pct"] == "60"
+        assert profile["resource"]["prefer_market_buy"] is True
+        assert profile["resource"]["auto_sell_resource"] is True
+        assert profile["resource"]["sell_threshold_pct"] == "95"
         assert set(profile["resource"]["resource_cities"]) == {15230, 15237}
 
         # 3. Reset giao diện về mặc định
@@ -1746,6 +1752,9 @@ def test_dashboard_resource_config_and_cities_profile_sync(tmp_path):
         dash.res_iron_pct_var.set("70")
         dash.res_stone_pct_var.set("70")
         dash.res_food_pct_var.set("70")
+        dash.res_prefer_market_var.set(False)
+        dash.res_auto_sell_var.set(False)
+        dash.res_sell_pct_var.set("90")
         dash._selected_resource_cities.clear()
         for cid in (15230, 15237):
             if dash.bld_bases_tree.exists(str(cid)):
@@ -1764,6 +1773,9 @@ def test_dashboard_resource_config_and_cities_profile_sync(tmp_path):
         assert dash.res_iron_pct_var.get() == "65"
         assert dash.res_stone_pct_var.get() == "55"
         assert dash.res_food_pct_var.get() == "80"
+        assert dash.res_prefer_market_var.get() is True
+        assert dash.res_auto_sell_var.get() is True
+        assert dash.res_sell_pct_var.get() == "95"
         assert 15230 in dash._selected_resource_cities
         assert 15237 in dash._selected_resource_cities
         assert dash.bld_bases_tree.item("15230", "values")[1] == "☑"

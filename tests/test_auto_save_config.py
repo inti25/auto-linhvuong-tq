@@ -128,6 +128,9 @@ def test_auto_save_flushes_pending_changes_on_destroy(tmp_path, monkeypatch):
     dash._loaded(_dummy_roster())
 
     dash.res_gold_thresh_var.set("999999")
+    dash.res_prefer_market_var.set(True)
+    dash.res_auto_sell_var.set(True)
+    dash.res_sell_pct_var.set("93")
     dash.craft_amount_var.set("4321")
     dash.craft_enable_var.set(True)
     assert dash._auto_save_dirty is True
@@ -139,6 +142,9 @@ def test_auto_save_flushes_pending_changes_on_destroy(tmp_path, monkeypatch):
     assert profile_file.exists()
     loaded = ProfileStore.load(profile_file)
     assert loaded.resource.gold_threshold == "999999"
+    assert loaded.resource.prefer_market_buy is True
+    assert loaded.resource.auto_sell_resource is True
+    assert loaded.resource.sell_threshold_pct == "93"
     assert loaded.crafting.cities["15230"].amount == "4321"
     assert loaded.crafting.cities["15230"].enabled is True
 

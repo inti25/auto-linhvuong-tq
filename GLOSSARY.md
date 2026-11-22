@@ -332,8 +332,24 @@ Thành trì được người chơi chỉ định (đánh dấu `NC` trên danh 
 _Avoid_: Research city, thành học viện
 
 **Ngưỡng Tài Nguyên**:
-Mức Vàng tối thiểu và tỷ lệ phần trăm khoáng sản (Gỗ, Sắt, Đá, Thực) cài đặt làm mốc để bot tự động kiểm tra định kỳ và cắn mở rương tài nguyên khi số dư thực tế tụt xuống dưới ngưỡng.
+Mức Vàng tối thiểu và tỷ lệ phần trăm khoáng sản (Gỗ, Sắt, Đá, Thực) cài đặt làm mốc để bot tự động kiểm tra định kỳ để bù bằng **Ưu Tiên Mua Chợ** hoặc cắn mở rương tài nguyên khi tụt dưới ngưỡng, và **Treo Đơn Bán** khi vượt **Ngưỡng Bán Tài Nguyên**.
 _Avoid_: Resource threshold, mức khoáng sản
+
+**Đản**:
+Đơn vị giao dịch tài nguyên trên Chợ hoặc Tập Thị, quy đổi cố định 1 đản bằng 1.000 tài nguyên (Thực, Gỗ, Đá, Sắt).
+_Avoid_: Lô, gói, đơn vị chợ, dan
+
+**Treo Đơn Bán**:
+Hành động đăng bán tài nguyên dư lên sàn Chợ hoặc Tập Thị; tài nguyên bị trừ khỏi kho ngay khi treo, không thể hủy đơn mà chỉ có thể sửa giá trong biên độ giá máy chủ cho phép, và thu Vàng sau khi có người mua.
+_Avoid_: Bán trực tiếp, bán NPC, xả kho tức thì
+
+**Ưu Tiên Mua Chợ**:
+Chế độ trong Giám sát Tài Nguyên ưu tiên mua trực tiếp loại tài nguyên thiếu từ sàn Chợ tại các Thành có Chợ hoặc Tập Thị trước khi fallback mở rương, và bỏ qua bước mua chợ (mở rương mặc định) ở các Căn Cứ không có Chợ.
+_Avoid_: Chỉ mua chợ, bỏ qua thành không chợ
+
+**Ngưỡng Bán Tài Nguyên**:
+Tỷ lệ phần trăm sức chứa kho (mặc định 90%) làm mốc kích hoạt tự động Treo Đơn Bán phần tài nguyên dôi dư tại Thành có Chợ, đưa tồn kho về mức an toàn thấp hơn ngưỡng bán 10% nhưng không thấp hơn ngưỡng mua tương ứng.
+_Avoid_: Trần kho, mức xả đồ, sell cap
 
 **Cấp Hiện Tại** (Cấp HT):
 Cấp độ thực tế của công trình kiến trúc hoặc công nghệ kỹ thuật Viện Đại Học đang hiện hữu trên máy chủ game tại căn cứ được chọn. Đối với nhóm công trình đa ô đất khi thu gọn, Cấp HT thể hiện dải cấp độ từ ô thấp nhất đến ô cao nhất (`min - max`).
