@@ -72,6 +72,7 @@ class GoiDan:
         provisioner: Optional[ArmyProvisioner] = None,
         auto_swap_tactician: bool = False,
         min_tactician_stamina: float = 30.0,
+        return_threshold: int = 0,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -101,6 +102,7 @@ class GoiDan:
         self.provisioner = provisioner or ArmyProvisioner(ctx.gateway, sleep_fn=sleep_fn)
         self.auto_swap_tactician = bool(auto_swap_tactician)
         self.min_tactician_stamina = max(0.0, min(100.0, float(min_tactician_stamina)))
+        self.return_threshold = max(0, int(return_threshold))
 
         # Tự động suy ra mode từ target_type nếu mode chưa được chỉ định
         if mode:
@@ -450,6 +452,48 @@ class GoiDan:
             config=self.combat_config,
         )
 
+    def _check_safety_thresholds(
+        self,
+        roster: Any,
+        added_troops: Optional[dict[int, int]] = None,
+    ) -> Optional[str]:
+        """Kiểm tra thể lực & quân số sau khi đã ưu tiên biên chế và luyện sĩ khí."""
+        if self.return_threshold <= 0 or not self.city_id or roster is None:
+            return None
+
+        gens = {g.id: g for g in roster.generals_of(self.city_id)}
+        added_map = added_troops or {}
+
+        for gid in self.generals:
+            g = gens.get(gid)
+            if g and g.stamina_max > 0:
+                stamina_pct = (g.stamina / g.stamina_max) * 100.0
+                if stamina_pct < self.return_threshold:
+                    if self.ctx.notify:
+                        self.ctx.notify(
+                            f"⏳ [Thể lực] Võ tướng {g.name} thể lực ({g.stamina}/{g.stamina_max} = {stamina_pct:.0f}%) "
+                            f"dưới ngưỡng an toàn ({self.return_threshold}%), chờ hồi phục..."
+                        )
+                    return "waiting_stamina"
+
+        if self.target_army and self.target_army.total > 0:
+            for gid in self.generals:
+                g = gens.get(gid)
+                if not g:
+                    continue
+                army = roster.army_of(gid)
+                cur_total = (army.total if army else 0) + added_map.get(gid, 0)
+                army_pct = (cur_total / self.target_army.total) * 100.0
+                if army_pct < self.return_threshold:
+                    if self.ctx.notify:
+                        self.ctx.notify(
+                            f"⏳ [Quân lực] Võ tướng {g.name} quân số ({cur_total}/{self.target_army.total} = {army_pct:.0f}%) "
+                            f"dưới ngưỡng an toàn ({self.return_threshold}%), chờ bổ sung..."
+                        )
+                    return "waiting_troops"
+
+        return None
+
     def run_once(self) -> str:
         # 0. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle
         if self.check_idle and self.city_id:
@@ -470,7 +514,10 @@ class GoiDan:
             self.target_army is not None
             and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
         )
-        if self.city_id and (needs_army_prep or self.auto_swap_tactician):
+        needs_threshold_check = bool(self.return_threshold > 0 and self.city_id)
+        roster = None
+        added_troops: dict[int, int] = {}
+        if self.city_id and (needs_army_prep or self.auto_swap_tactician or needs_threshold_check):
             try:
                 roster = fetch_roster(
                     self.ctx.gateway,
@@ -503,7 +550,14 @@ class GoiDan:
                 troops_added = False
                 for gid in self.generals:
                     self.provisioner.heal_general(self.city_id, gid)
-                    if self.auto_recruit and self.target_army and self.target_army.total > 0 and roster:
+                    g = city_gens.get(gid)
+                    if (
+                        self.auto_recruit
+                        and self.target_army
+                        and self.target_army.total > 0
+                        and roster
+                        and not (g and g.upgrading_time > 0)
+                    ):
                         cur_army = roster.army_of(gid)
                         adj_res = self.provisioner.adjust_troops(
                             base_id=self.city_id,
@@ -513,7 +567,11 @@ class GoiDan:
                             auto_recruit=True,
                             on_log=self.ctx.notify,
                         )
-                        if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                        added_for_gid = sum(
+                            diff for _, diff, succ, _ in (adj_res or []) if succ and diff > 0
+                        )
+                        if added_for_gid > 0:
+                            added_troops[gid] = added_for_gid
                             troops_added = True
 
                 # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
@@ -530,6 +588,11 @@ class GoiDan:
                     )
                     if not ready:
                         return "waiting_morale"
+
+        # 1.5. Kiểm tra ngưỡng an toàn thể lực / quân lực SAU khi biên chế và luyện sĩ khí
+        threshold_wait = self._check_safety_thresholds(roster, added_troops)
+        if threshold_wait is not None:
+            return threshold_wait
 
         # 2. Chỉ đánh trực tiếp nếu đã có mục tiêu nằm sát thành; nếu ở xa phải gọi/kéo về trước
         target = self._find_existing_near_target()

@@ -122,7 +122,7 @@ class BinhManAutoRunner(BaseTaskRunner):
                 res = task.run_once()
                 prefix = f"[{base_label}] " if len(self.tasks) > 1 else ""
                 self.log(f"{prefix}Lượt {cycle}: Kết quả -> {res}")
-                if res not in ("no_target", "generals_busy", "camp_frozen", "waiting_morale", "target_claimed_by_other", "waiting_stamina"):
+                if res not in ("no_target", "generals_busy", "camp_frozen", "waiting_morale", "target_claimed_by_other", "waiting_stamina", "waiting_troops"):
                     has_action = True
             except CaptchaRequired:
                 self.logger.warning(f"Server yêu cầu Captcha tại [{base_label}]! Dừng nhiệm vụ Bình Man.")

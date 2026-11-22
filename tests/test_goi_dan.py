@@ -1290,6 +1290,84 @@ def test_goi_man_auto_swap_tactician_and_fallback_when_no_replacement():
     assert any("không có Văn quan đủ thể lực" in m for m in alerts2)
 
 
+def test_goi_dan_vong_linh_prioritizes_provisioning_and_morale_before_stamina_wait():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(2, 2)
+    c32 = {
+        "ret": 0,
+        "list": [[123, "City", 2, 2, [[50, "Gen 50", "", 2, 0, 0, 10, 80, 15, 100, 0]]]],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [[123, "City", [[50, "Gen 50", 0, "", 0, 0, 15000, 0, 0, 80, 0, 500]]]],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": []}},
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "Common.ashx?id=27": {"ret": 0, "list": [[123, "City", 10000]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=69": lambda: server.map_views.update({mid: {"npc_tent": [man(2, 2, 999, VONG_LINH)]}}) or {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = GoiDan(
+        ctx,
+        generals=[50],
+        origin=(2, 2),
+        radius=5,
+        mode="vong_linh",
+        city_id=123,
+        target_army=TargetArmy(cavalry=20000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        return_threshold=30,
+        sleep_fn=lambda s: None,
+    )
+
+    # Lượt 1: Thể lực 15/100 < 30% -> vẫn trị thương, bù +5000 kỵ và nâng sĩ khí trước
+    out1 = task.run_once()
+    assert out1 == "waiting_morale"
+    assert any(k == "OPT.ashx?id=31" for k, _ in server.calls)
+    opt6_1 = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(opt6_1) == 1
+    assert opt6_1[0]["lAmount"] == "5000"
+    opt47_1 = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_1) == 1
+    assert opt47_1[0]["lAddPoint"] == "10"
+    assert not any(k in ("OPT.ashx?id=69", "OPT.ashx?id=53") for k, _ in server.calls)
+
+    # Lượt 2: Quân đủ 20000, sĩ khí đủ 95, thể lực vẫn 20/100 < 30% -> chờ thể lực, chưa gọi Vong Linh hay xuất quân
+    server.calls.clear()
+    alerts.clear()
+    c32["list"][0][4][0][7] = 95
+    c32["list"][0][4][0][8] = 20
+    c76["list"][0][2][0][6] = 20000
+    c76["list"][0][2][0][9] = 95
+    c76["list"][0][2][0][10] = 0
+
+    out2 = task.run_once()
+    assert out2 == "waiting_stamina"
+    assert any("Thể lực" in a for a in alerts)
+    assert not any(k in ("OPT.ashx?id=69", "OPT.ashx?id=53") for k, _ in server.calls)
+
+    # Lượt 3: Thể lực hồi lên 35/100 >= 30% -> gọi Vong Linh & xuất kích
+    server.calls.clear()
+    c32["list"][0][4][0][8] = 35
+    out3 = task.run_once()
+    assert out3 == "called_and_attacked"
+    assert any(k == "OPT.ashx?id=69" for k, _ in server.calls)
+    assert any(k == "OPT.ashx?id=53" for k, _ in server.calls)
+
+
 
 
 

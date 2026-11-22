@@ -1196,3 +1196,378 @@ def test_binh_man_mode1_camp_swaps_only_within_camp_and_continues_when_no_replac
     assert [d for k, d in server.calls if k == "OPT.ashx?id=5"] == []
     assert [d for k, d in server.calls if k == "OPT.ashx?id=50"] == []
     assert any("không có Văn quan đủ thể lực" in m for m in alerts)
+
+
+def test_binh_man_mode_city_provisions_and_trains_morale_while_waiting_stamina():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    c32 = {
+        "ret": 0,
+        "list": [[1001, "Thành", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 80, 0, 500]]]],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
+        handlers={
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "Common.ashx?id=27": {"ret": 0, "list": [[1001, "Thành", 10000]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, alerts = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        return_threshold=30,
+        target_army=TargetArmy(cavalry=20000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    # Lượt 1: Thể lực 20/100 < 30% -> vẫn ưu tiên trị thương, bù +5000 kỵ và nâng sĩ khí trước
+    out1 = task.run_once()
+    assert out1 == "waiting_morale"
+    assert any(k == "OPT.ashx?id=31" for k, _ in server.calls)
+    opt6_1 = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(opt6_1) == 1
+    assert opt6_1[0]["lAmount"] == "5000"
+    opt47_1 = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_1) == 1
+    assert opt47_1[0]["lGeneralID"] == "15"
+    assert opt47_1[0]["lAddPoint"] == "10"
+    assert not any(k == "OPT.ashx?id=53" for k, _ in server.calls)
+
+    # Lượt 2: Quân đủ 20000, sĩ khí đạt 95, thể lực vẫn 25/100 < 30% -> chờ hồi thể lực
+    server.calls.clear()
+    alerts.clear()
+    c32["list"][0][4][0][7] = 95
+    c32["list"][0][4][0][8] = 25
+    c76["list"][0][2][0][6] = 20000
+    c76["list"][0][2][0][9] = 95
+    c76["list"][0][2][0][10] = 0
+
+    out2 = task.run_once()
+    assert out2 == "waiting_stamina"
+    assert any("Thể lực" in a for a in alerts)
+    assert not any(k in ("OPT.ashx?id=6", "OPT.ashx?id=47", "OPT.ashx?id=53") for k, _ in server.calls)
+
+    # Lượt 3: Thể lực hồi lên 35/100 >= 30% -> xuất kích
+    server.calls.clear()
+    c32["list"][0][4][0][8] = 35
+    out3 = task.run_once()
+    assert out3 == "attacked"
+    assert len([d for k, d in server.calls if k == "OPT.ashx?id=53"]) == 1
+
+
+def test_binh_man_mode_city_trains_morale_when_troop_refill_dilutes_morale_under_low_stamina():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    c32 = {
+        "ret": 0,
+        "list": [[1001, "Thành", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 0]]]],
+    }
+    c76_responses = [
+        {"ret": 0, "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 100, 0, 500]]]]},
+        {"ret": 0, "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 85, 0, 500]]]]},
+    ]
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
+        handlers={
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76_responses,
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        return_threshold=30,
+        target_army=TargetArmy(cavalry=20000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "waiting_morale"
+    opt6_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert len(opt6_calls) == 1
+    assert opt6_calls[0]["lAmount"] == "5000"
+    assert len([k for k, _ in server.calls if k == "Common.ashx?id=76"]) == 2
+    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_calls) == 1
+    assert opt47_calls[0]["lAddPoint"] == "10"
+    assert not any(k == "OPT.ashx?id=53" for k, _ in server.calls)
+
+
+def test_binh_man_mode_city_zero_target_army_trains_morale_without_legacy_infantry_spam():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [[1001, "Thành", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
+            },
+            "Common.ashx?id=76": {
+                "ret": 0,
+                "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 80, 0, 500]]]],
+            },
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[15],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        return_threshold=30,
+        target_army=TargetArmy(0, 0, 0),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "waiting_morale"
+    assert len([d for k, d in server.calls if k == "OPT.ashx?id=47"]) == 1
+    assert not any(k in ("OPT.ashx?id=41", "OPT.ashx?id=6", "OPT.ashx?id=53") for k, _ in server.calls)
+
+
+def test_binh_man_mode_camp_low_stamina_trains_morale_at_camp_without_ping_pong_retreat():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    c32 = {
+        "ret": 0,
+        "list": [[-501, "Trại", 10, 10, [[20, "Quan Vũ", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [[-501, "Trại", [[20, "Quan Vũ", 0, "", 0, 0, 20000, 0, 0, 80, 0, 500]]]],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
+        handlers={
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "OPT.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[20],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=1,
+        camp_id=-501,
+        parent_city_id=1001,
+        return_threshold=30,
+        target_army=TargetArmy(cavalry=20000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    out1 = task.run_once()
+    assert out1 == "waiting_morale"
+    assert not any(k == "OPT.ashx?id=50" for k, _ in server.calls)
+    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_calls) == 1
+    assert opt47_calls[0]["tid"] == "-501"
+    assert not any(k == "OPT.ashx?id=53" for k, _ in server.calls)
+
+    # Lượt 2: Sĩ khí đã đủ 95, thể lực vẫn 20/100 -> chờ thể lực tại Trại, không rút về Thành mẹ
+    server.calls.clear()
+    c32["list"][0][4][0][7] = 95
+    c76["list"][0][2][0][9] = 95
+    out2 = task.run_once()
+    assert out2 == "waiting_stamina"
+    assert not any(k in ("OPT.ashx?id=50", "OPT.ashx?id=53") for k, _ in server.calls)
+
+
+def test_binh_man_mode_camp_low_army_retreats_first_then_trains_morale_under_low_stamina():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    c32 = {
+        "ret": 0,
+        "list": [[-501, "Trại", 10, 10, [[20, "Quan Vũ", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [[-501, "Trại", [[20, "Quan Vũ", 0, "", 0, 0, 4000, 0, 0, 80, 0, 500]]]],
+    }
+
+    def _opt6():
+        payload = server.calls[-1][1]
+        if payload.get("tid") == "-501":
+            return {"ret": 53}
+        return {"ret": 0}
+
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
+        handlers={
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "OPT.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": _opt6,
+            "OPT.ashx?id=47": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[20],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=1,
+        camp_id=-501,
+        parent_city_id=1001,
+        return_threshold=30,
+        target_army=TargetArmy(cavalry=20000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        sleep_fn=lambda s: None,
+    )
+
+    # Lượt 1: Quân số 4000/20000 = 20% < 30% và trại hết quân đồn trú -> rút về thành mẹ bổ sung rồi quay lại trại
+    out1 = task.run_once()
+    assert out1 == "retreated_below_threshold"
+    opt50_1 = [d for k, d in server.calls if k == "OPT.ashx?id=50"]
+    assert [(d["lCityID"], d["lDestID"]) for d in opt50_1] == [("-501", "1001"), ("1001", "-501")]
+    opt6_parent = [d for k, d in server.calls if k == "OPT.ashx?id=6" and d["tid"] == "1001"]
+    assert len(opt6_parent) == 1
+    assert opt6_parent[0]["lAmount"] == "16000"
+
+    # Lượt 2: Đã đủ 20000 quân tại trại, sĩ khí 70, thể lực vẫn 21/100 < 30% -> luyện sĩ khí tại trại, không rút nữa
+    server.calls.clear()
+    c32["list"][0][4][0][8] = 21
+    c76["list"][0][2][0][6] = 20000
+    c76["list"][0][2][0][9] = 70
+    out2 = task.run_once()
+    assert out2 == "waiting_morale"
+    assert not any(k == "OPT.ashx?id=50" for k, _ in server.calls)
+    opt47_2 = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
+    assert len(opt47_2) == 1
+    assert opt47_2[0]["tid"] == "-501"
+
+
+def test_binh_man_active_battle_tracked_even_when_stamina_below_threshold():
+    from linhvuong.troops import TargetArmy
+
+    server = FakeServer(
+        handlers={
+            "Common.ashx?id=32": {
+                "ret": 0,
+                "list": [
+                    [21936, "ThienCo", 280, 237, [[99057, "TP3", "", 2, 0, 16, 31, 100, 20, 100, 0]]],
+                ],
+            },
+            "Common.ashx?id=40": {
+                "ret": 0,
+                "come": [],
+                "goto": [],
+                "battle": [[1002, 1002, "倭国部队", 268, 251, 5]],
+            },
+            "Common.ashx?id=4": {
+                "ret": 0,
+                "battle_id": 39304906,
+                "next_left": 12,
+                "atside": 1,
+                "city": [1002, "倭国部队", 268, 251],
+                "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TP3", 0, 8919, 0, 0, 100, 99057]],
+                "enemy": [],
+            },
+            "OPT.ashx?id=24": [
+                {
+                    "ret": 0,
+                    "site": "倭国部队",
+                    "mapid": 1002,
+                    "bout": 1,
+                    "bout_left": 12,
+                    "attack_total": 1,
+                    "defend_total": 1,
+                    "troops": [
+                        [1, "quilia", 738816, "TP3", 99057, "", 21936, 0, 1, 100, 0, 0, 8919, 8919, 0, 0, 0, 98396, "QV42", 1],
+                        [11, "", 0, "倭国部队", 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", 16],
+                    ],
+                },
+                {"ret": 13, "troops": []},
+            ],
+            "OPT.ashx?id=54": {"ret": 0},
+            "OPT.ashx?id=57": {"ret": 0},
+            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=41": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+        }
+    )
+    server.cookies = {"uid": "738816"}
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[99057],
+        origin=(280, 237),
+        radius=20,
+        man_types=[1],
+        mode=2,
+        city_id=21936,
+        return_threshold=30,
+        target_army=TargetArmy(cavalry=20000),
+        check_idle=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "battle_tracked"
+    assert not any(k in ("OPT.ashx?id=6", "OPT.ashx?id=31", "OPT.ashx?id=41") for k, _ in server.calls)
