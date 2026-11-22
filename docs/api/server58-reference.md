@@ -421,6 +421,7 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `Common.ashx?id=14` | `lGeneralID=4880, lCityID=10129` | `{"ret":0,"head_img":4006,"type":2,"job":0,"status":0,"level":1,"loyalty":80,...}` |
 | `Common.ashx?id=15` | `lType=2, tid=10129` | `{"ret":0,"generals":[[4880,"吴沛祖","",0,2,0,1,80,110,110,11,11,13,0,4006]]}` |
 | `Common.ashx?id=16` | `tid=10129` | `{"ret":0,"list":[[308,"雷霆战甲",4,447380],[208,"破风弓",2,519180],[108,"百胜长刀",1,521659],[351,"龙飞战甲",4,14294]]}` |
+| `Common.ashx?id=38` (Sổ lệnh Chợ) | `stab=1\|2, type=1\|2\|3\|4, tid=10129` (`stab=1`: top 10 đơn bán rẻ nhất; `stab=2`: đơn đang treo bán của thành `tid`; `type`: `1=Thực, 2=Gỗ, 3=Đá, 4=Sắt`) | Trả boolean `false` khi trống; `stab=1`: `{"infos":[{"seqno":"80","seller":"10544","count":"32968","price":"500"},...]}`; `stab=2`: `{"infos":[{"seqno":"89","city":"11082","count":"5","price":"500","type":"4","time":"..."}]}` |
 | `Common.ashx?id=40` | `tid=10129` | `{"ret":0,"come":[],"goto":[],"battle":[]}` |
 | `Common.ashx?id=126` | `lStatID=1` | `{"ret":0,"list":[[2949,357,0,"宋宪"]]}` |
 | `Common.ashx?id=140` | `lAction=0/1/2, lParam=0/2` | `action=1`: `{"ret":0,"left":86400,"bonus":"遇名士司马徽...</br>获得：破匣剪×1"}` / `action=2`: `{"ret":0,"left":0,"bonus":""}` |
@@ -428,12 +429,16 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `Common.ashx?id=142` | `{}` | `{"ret":0,"curr":[0,0,0,0],"list":[]}` |
 | `OPT.ashx?id=4` | `lType=1, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=6` | `lGeneralID=4880, lSoldierType=1, lAmount=10, tid=10129` | `{"ret":42}` *(thiếu trang bị mặc định của tướng)* |
+| `OPT.ashx?id=9` (Mua tài nguyên Chợ) | `tid, buyinprice, count, buyincount, seqno, seller, countprice` *(đơn giá)*, `type3` (`1..4`) | `{"ret":0}` thành công; `26` đơn đã hết/bị mua; `73` đơn hàng đang giao dịch (`RET_ORDER_BUSY`, không phải Captcha); `232` thành chưa có Chợ |
+| `OPT.ashx?id=29` (Giá TB Chợ hôm qua) | `type=1\|2\|3\|4` | Số nguyên thô (`64` Thực, `480` Gỗ, `499` Đá, `521` Sắt, hoặc `-1` nếu chưa có) |
 | `OPT.ashx?id=33` | `lGeneralID=21639, tid=10129` | `{"ret":0}` *(cấp ID mới `4880`)* |
 | `OPT.ashx?id=38` / `89` | `pos=10, gid=101, count=1, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=41` | `lAmount=50, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=43` (Đổi tên tướng) | `lCityID=10129, lGeneralID=4880, szNewName=DT_01` | `{"ret":0}`; mã `15` nếu tên rỗng hoặc vượt giới hạn (`< 18`, ký tự không phải ASCII tính 2) |
 | `OPT.ashx?id=44` / `12` / `180` | `techid=1, tid=10129` | `{"ret":0}` |
 | `OPT.ashx?id=46` / `47` / `58` | `lGeneralID=4880, ...` | `{"ret":0}` |
+| `OPT.ashx?id=49` (Treo bán Chợ) | `tid, type1` (`1..4`), `sellcount1` *(đản = 1.000)*, `sellprice1`, `countprice1` *(tổng giá = `sellcount1 * sellprice1`)* | `{"ret":0}` thành công; `74` giá ngoài biên độ; `232` thành chưa có Chợ; `249` đạt giới hạn số đơn treo bán tối đa |
+| `OPT.ashx?id=68` (Hủy đơn bán Chợ) | `tid, seqno` | `{"ret":0}` |
 | `OPT.ashx?id=56` (Lưu quân giới tướng) | `lGeneralID, lInfantryEID1..3, lCavalryEID1..3, lBowmanEID1..3, lMangonelEID` (cần đủ 10 ô; id `46` thực chất là Ban thưởng `lCityID, lGeneralID, lMoney`) | `{"ret":0}`; `42` thiếu quân giới khi tướng đã có lính, `71` thiếu quân giới chính ô 1 khi đã có lính, `20` sai căn cứ, `40` tướng bận. Ô 1: Bộ=Giáp(4), Kỵ=Ngựa(8), Cung=Cung(2); ô 2–3 nhận mọi loại trừ Xe(16). Chỉ ô 1 cần > 0 khi ô 2/3 > 0. |
 | `OPT.ashx?id=57` (Trận hình & tỷ lệ) | `lGeneralID, lRatioAttack, lRatioPK, lRatioStra (tổng 100), lBattleArray, lWithdrawLoss, lWithdrawMorale` | `{"ret":0}` |
 | `OPT.ashx?id=55` | `tid=10129` | `{"ret":0}` |
@@ -458,12 +463,17 @@ Tài liệu kỹ thuật tham chiếu cho kiến trúc **Linh Vương Server 58+
 | `1` | Tham số sai, ô bận/chưa mở hoặc endpoint cũ đã bị vô hiệu hóa | Các `/GateWay/*` bị chuyển sang `/api/*`, `OPT.ashx?id=178` |
 | `20` | Võ tướng không tồn tại / sai ID (`"人物ID不存在"`) | `Common.ashx?id=12,13,14`, `OPT.ashx?id=67`, `OPT.ashx?id=178` |
 | `21` | `"装备ID不存在"` | `Optimization.ashx?action=equipment` (`kind=2`) |
+| `26` | Đơn rao bán trên Chợ không còn tồn tại (đã bị mua hoặc hủy) | `OPT.ashx?id=9` (Mua tài nguyên Chợ) |
 | `27` | `"联盟编号不存在"` (Tài khoản chưa gia nhập Liên Minh) | `OPT.ashx?id=188` (Cường hóa Pha Lê 9→15) |
 | `38` | `"没有可分配技能点"` (Không đủ Điểm Tiềm Năng) | `OPT.ashx?id=67` |
 | `42` | Tướng chưa đủ vũ khí/điều kiện biên chế hoặc cooldown | `OPT.ashx?id=6`, `Common.ashx?id=55` |
+| `73` | Captcha (trên tác vụ chung/rương) hoặc `"正在交易"` đơn hàng Chợ đang giao dịch (`RET_ORDER_BUSY`) | Chung (`Common.ashx?id=48`, ...); riêng `OPT.ashx?id=9` chỉ `110` là Captcha |
+| `74` | Giá treo bán Chợ vượt ngoài biên độ cho phép | `OPT.ashx?id=49` |
 | `77` | `"人物属性点分配过于悬殊"` (Thuộc tính gốc vượt tổng 2 thuộc tính gốc còn lại) | `OPT.ashx?id=67` |
 | `86` | Đã nhận thưởng chuyên cần hôm nay | `OPT.ashx?id=63` |
 | `90` | `"道具已经用完"` (Hết đạo cụ) | `OPT.ashx?id=69` (`type=33`) |
+| `232` | Thành chưa xây Chợ / Tập Thị (`gid=11/64`) | `OPT.ashx?id=9`, `OPT.ashx?id=49` |
+| `249` | Đạt giới hạn số đơn treo bán tối đa trên Chợ | `OPT.ashx?id=49` |
 | `299` | `"装备锻造没有成功"` (Cường hóa thất bại ở chặng 1→9) | `OPT.ashx?id=154` |
 | `301` | `"该装备仅限女性名(蛮)将使用"` (Trang bị chỉ dành cho nữ danh tướng hoặc tướng Man) | `OPT.ashx?id=58` (mặc trang bị) |
 | `315` | Tướng đã đạt cấp độ tối đa | `OPT.ashx?id=178` |

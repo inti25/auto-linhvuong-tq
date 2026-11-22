@@ -126,6 +126,9 @@ class ResourceProfile:
     gold_box_idx: int = 2
     tn_box_idx: int = 4
     auto_open_box: bool = False
+    prefer_market_buy: bool = False
+    auto_sell_resource: bool = False
+    sell_threshold_pct: str = "90"
     resource_cities: list[int] = field(default_factory=list)
 
     @classmethod
@@ -150,6 +153,9 @@ class ResourceProfile:
             gold_box_idx=int(data.get("gold_box_idx", 2)),
             tn_box_idx=int(data.get("tn_box_idx", 4)),
             auto_open_box=bool(data.get("auto_open_box", False)),
+            prefer_market_buy=bool(data.get("prefer_market_buy", False)),
+            auto_sell_resource=bool(data.get("auto_sell_resource", False)),
+            sell_threshold_pct=str(data.get("sell_threshold_pct", "90")),
             resource_cities=sorted(res_cities),
         )
 

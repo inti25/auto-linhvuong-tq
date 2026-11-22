@@ -65,11 +65,17 @@ def test_auto_save_triggered_on_var_edit(tmp_path):
 
         dash.tp_min_morale_var.set("88")
         dash.bm_auto_recruit_var.set(False)
+        dash.res_prefer_market_var.set(True)
+        dash.res_auto_sell_var.set(True)
+        dash.res_sell_pct_var.set("93")
         assert _pump_until(dash, lambda: profile_path.exists())
 
         saved = json.loads(profile_path.read_text(encoding="utf-8"))
         assert saved["thao_phat"]["min_morale"] == "88"
         assert saved["binh_man"]["auto_recruit"] is False
+        assert saved["resource"]["prefer_market_buy"] is True
+        assert saved["resource"]["auto_sell_resource"] is True
+        assert saved["resource"]["sell_threshold_pct"] == "93"
     finally:
         dash.destroy()
 

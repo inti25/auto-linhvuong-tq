@@ -360,8 +360,16 @@ Thành trì được người chơi chỉ định (đánh dấu `NC` trên danh 
 _Avoid_: Research city, thành học viện
 
 **Ngưỡng Tài Nguyên**:
-Mức Vàng tối thiểu và tỷ lệ phần trăm khoáng sản (Gỗ, Sắt, Đá, Thực) cài đặt làm mốc để bot tự động kiểm tra định kỳ và cắn mở rương tài nguyên khi số dư thực tế tụt xuống dưới ngưỡng.
+Mức Vàng tối thiểu và tỷ lệ phần trăm khoáng sản (Gỗ, Sắt, Đá, Thực) cài đặt làm mốc để bot tự động kiểm tra định kỳ, ưu tiên mua qua Chợ hoặc cắn mở rương tài nguyên khi số dư thực tế tụt xuống dưới ngưỡng, và tự động bán bớt khi vượt ngưỡng bán cấu hình.
 _Avoid_: Resource threshold, mức khoáng sản
+
+**Chợ / Tập Thị**:
+Công trình giao dịch tài nguyên trong thành chính (Chợ hoặc Tập Thị) cho phép mua và bán Gỗ, Sắt, Đá, Thực theo đơn vị Đản (mỗi Đản = 1.000 tài nguyên). Thành không có Chợ/Tập Thị hoặc Doanh Trại không thực hiện giao dịch chợ.
+_Avoid_: Market building, resource shop
+
+**Ngưỡng Bán Tài Nguyên**:
+Tỷ lệ phần trăm sức chứa kho dùng làm mốc kích hoạt bán bớt tài nguyên dư thừa qua Chợ/Tập Thị (mặc định 90%) về mức mục tiêu an toàn.
+_Avoid_: Sell threshold, overflow sell
 
 **Cấp Hiện Tại** (Cấp HT):
 Cấp độ thực tế của công trình kiến trúc hoặc công nghệ kỹ thuật Viện Đại Học đang hiện hữu trên máy chủ game tại căn cứ được chọn. Đối với nhóm công trình đa ô đất khi thu gọn, Cấp HT thể hiện dải cấp độ từ ô thấp nhất đến ô cao nhất (`min - max`).

@@ -540,6 +540,32 @@ class BuildingMixin:
         self.res_tn_box_combo.pack(side="left", fill="x", expand=True, padx=4)
         self.bld_box_combo = self.res_tn_box_combo
 
+        tk.Checkbutton(
+            f_res_thresh,
+            text="Ưu tiên mua ở chợ (Thành có Chợ)",
+            variable=self.res_prefer_market_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(anchor="w", padx=6, pady=(2, 1))
+
+        r_sell = tk.Frame(f_res_thresh, bg=BG)
+        r_sell.pack(fill="x", padx=6, pady=(1, 2))
+        tk.Checkbutton(
+            r_sell,
+            text="Bán tài nguyên nếu quá",
+            variable=self.res_auto_sell_var,
+            bg=BG,
+            fg=FG,
+            selectcolor=CARD,
+            activebackground=BG,
+            font=("Segoe UI", 9),
+        ).pack(side="left")
+        ttk.Entry(r_sell, textvariable=self.res_sell_pct_var, width=4).pack(side="left", padx=4)
+        tk.Label(r_sell, text="%", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left")
+
         ttk.Button(
             f_res_thresh, text="Áp Dụng Thiết Lập", style="Success.TButton", command=self._apply_resource_settings
         ).pack(pady=4)

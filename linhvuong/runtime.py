@@ -57,7 +57,7 @@ from .enhance import (
     run_destroy_batch,
     run_enhance_batch,
 )
-from .gateway import GatewayClient, gateway_city_context
+from .gateway import GatewayClient
 from .generals import (
     EQUIP_MODE_ASSIGN,
     EQUIP_MODE_UNEQUIP,
@@ -81,6 +81,13 @@ from .generals import (
 )
 from .locks import TargetLocks
 from .logger import setup_logger
+from .market import (
+    BOX_OPTION_IDS,
+    CityMarketCache,
+    ResourceMonitorSettings,
+    parse_sell_threshold_pct,
+    process_city_resource_cycle,
+)
 from .notifications import (
     NotificationConfig,
     clear_general_visit_alerts,
@@ -115,7 +122,6 @@ from .tasks.building import (
     parse_boost_remaining_time,
     run_batch_open_chest,
     select_general_visit_city,
-    switch_city_verified,
 )
 from .tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
 from .tasks.di_trai import DiTrai
@@ -166,7 +172,7 @@ RESUMABLE_TASKS = (
 AUTO_START_TASK_LABELS = (
     ("building", "🏛️ Xây dựng"),
     ("research", "🔬 Nghiên cứu"),
-    ("resource_monitor", "📦 Tự mở rương TN/Vàng"),
+    ("resource_monitor", "📦 Tài Nguyên"),
     ("thaophat", "⚔️ Thảo phạt"),
     ("binhman", "🏕️ Bình man"),
     ("goidan", "🧛 Gọi man"),
@@ -1408,8 +1414,15 @@ class AccountSession:
         self._res_monitor_running = True
         stop_ev = threading.Event()
         self._res_monitor_stop = stop_ev
-        self.append_log("building", f"▶️ Bắt đầu tự mở rương TN/Vàng theo ngưỡng cho {len(res_cids)} thành...")
-        box_ids = [1, 6, 11, 16, 24, 35]
+        self.append_log("building", f"▶️ Bắt đầu giám sát Tài Nguyên (Chợ / mở rương theo ngưỡng) cho {len(res_cids)} thành...")
+        market_cache = CityMarketCache()
+        warned_conflicts: set[tuple[int, str]] = set()
+
+        def _parse_gold_th(raw_val: Any) -> int:
+            raw_s = str(raw_val).replace(",", "").strip()
+            if "." in raw_s and all(len(part) == 3 for part in raw_s.split(".")[1:]):
+                raw_s = raw_s.replace(".", "")
+            return max(0, _safe_int(raw_s, 100000000))
 
         def _loop():
             try:
@@ -1418,109 +1431,44 @@ class AccountSession:
                     cur_valid_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
                     raw_cids = list(r_cfg.resource_cities) or res_cids
                     cids = [cid for cid in raw_cids if cur_valid_ids is None or cid in cur_valid_ids]
+                    g_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.gold_box_idx)))
+                    tn_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.tn_box_idx)))
+                    settings = ResourceMonitorSettings(
+                        gold_threshold=_parse_gold_th(r_cfg.gold_threshold),
+                        buy_pcts={
+                            "wood": max(0.0, _safe_float(r_cfg.wood_pct, 70.0)),
+                            "iron": max(0.0, _safe_float(r_cfg.iron_pct, 70.0)),
+                            "stone": max(0.0, _safe_float(r_cfg.stone_pct, 70.0)),
+                            "food": max(0.0, _safe_float(r_cfg.food_pct, 70.0)),
+                        },
+                        gold_box_id=BOX_OPTION_IDS[g_idx],
+                        tn_box_id=BOX_OPTION_IDS[tn_idx],
+                        prefer_market_buy=bool(getattr(r_cfg, "prefer_market_buy", False)),
+                        auto_sell_resource=bool(getattr(r_cfg, "auto_sell_resource", False)),
+                        sell_threshold_pct=parse_sell_threshold_pct(getattr(r_cfg, "sell_threshold_pct", "90")),
+                    )
                     for cid in cids:
                         if not self._res_monitor_running or stop_ev.is_set():
                             break
                         try:
                             base = self.roster.base_by_id(cid)
                             cname = base.name if base else f"Thành {cid}"
-                            res_data = self.gateway.resource_info(cid)
-                            city_data = self.gateway.city_info(cid)
-
-                            city_ret = _safe_int(city_data.get("ret", -1), -1) if isinstance(city_data, dict) else -1
-                            res_ret = _safe_int(res_data.get("ret", -1), -1) if isinstance(res_data, dict) else -1
-                            if city_ret in (110, 73) or res_ret in (110, 73):
-                                self._handle_captcha("Kiểm tra tài nguyên khi tự mở rương gặp Captcha (mã 110).")
-                                stop_ev.set()
-                                break
-                            if city_ret == 4 or res_ret == 4:
+                            summary = process_city_resource_cycle(
+                                self.gateway,
+                                cid,
+                                cname,
+                                settings,
+                                market_cache,
+                                notify=lambda msg: self.append_log("building", msg),
+                                warned_conflicts=warned_conflicts,
+                            )
+                            if summary.get("city_missing"):
                                 self._trigger_roster_resync_async(cid)
                                 continue
-
-                            city_ok = (
-                                isinstance(city_data, dict)
-                                and city_ret == 0
-                                and any(k in city_data for k in ("m_lmoney_balance", "money", "gold"))
-                            )
-                            max_storage = (
-                                _safe_int(
-                                    res_data.get(
-                                        "m_lmax_storage",
-                                        res_data.get("max_storage", res_data.get("storage", 0)),
-                                    ),
-                                    0,
-                                )
-                                if isinstance(res_data, dict)
-                                else 0
-                            )
-                            res_ok = (
-                                isinstance(res_data, dict)
-                                and res_ret == 0
-                                and any(k in res_data for k in ("m_lmax_storage", "max_storage", "storage"))
-                                and max_storage > 0
-                            )
-
-                            need_gold = False
-                            money = 0
-                            gold_th = _safe_int(r_cfg.gold_threshold, 100000000)
-                            if city_ok:
-                                money = _safe_int(
-                                    city_data.get("m_lmoney_balance", city_data.get("money", city_data.get("gold", 0))),
-                                    0,
-                                )
-                                need_gold = money < gold_th
-
-                            need_tn = False
-                            if res_ok:
-                                wood = _safe_int(res_data.get("m_lwood_balance", res_data.get("wood", 0)), 0)
-                                iron = _safe_int(res_data.get("m_liron_balance", res_data.get("iron", 0)), 0)
-                                stone = _safe_int(res_data.get("m_lstone_balance", res_data.get("stone", 0)), 0)
-                                food = _safe_int(res_data.get("m_lfood_balance", res_data.get("food", 0)), 0)
-                                w_pct = max(0.0, _safe_float(r_cfg.wood_pct, 70.0) / 100.0)
-                                i_pct = max(0.0, _safe_float(r_cfg.iron_pct, 70.0) / 100.0)
-                                s_pct = max(0.0, _safe_float(r_cfg.stone_pct, 70.0) / 100.0)
-                                f_pct = max(0.0, _safe_float(r_cfg.food_pct, 70.0) / 100.0)
-                                need_tn = (
-                                    wood < max_storage * w_pct
-                                    or iron < max_storage * i_pct
-                                    or stone < max_storage * s_pct
-                                    or food < max_storage * f_pct
-                                )
-
-                            if not (need_gold or need_tn):
-                                continue
-
-                            def _open_box(box_id: int, icon: str, kind_label: str, reason: str) -> bool:
-                                r_box = self.gateway.call("Common.ashx", 48, {"lBoxID": str(box_id), "_": ""}) or {}
-                                ret = _safe_int(r_box.get("ret", -1), -1) if isinstance(r_box, dict) else -1
-                                if ret in (110, 73):
-                                    self._handle_captcha(f"Tự mở {kind_label} #{box_id} gặp Captcha (mã {ret}).")
-                                    stop_ev.set()
-                                    return False
-                                if ret == 0:
-                                    self.append_log("building", f"{icon} [{cname}] {reason}: Đã mở {kind_label} #{box_id}.")
-                                else:
-                                    self.append_log("building", f"⚠️ [{cname}] Mở {kind_label} #{box_id} lỗi (ret={r_box.get('ret')}).")
-                                return True
-
-                            with gateway_city_context(self.gateway):
-                                ok_sw, sw_ret, sw_msg = switch_city_verified(self.gateway, cid)
-                                if sw_ret in (110, 73):
-                                    self._handle_captcha(sw_msg or "Chuyển thành khi mở rương gặp Captcha (mã 110).")
-                                    stop_ev.set()
-                                    break
-                                if not ok_sw:
-                                    self.append_log("building", f"⚠️ [{cname}] {sw_msg}; bỏ qua mở rương.")
-                                    continue
-
-                                if need_gold:
-                                    g_idx = max(0, min(len(box_ids) - 1, int(r_cfg.gold_box_idx)))
-                                    if not _open_box(box_ids[g_idx], "💰", "rương vàng", f"Vàng={money:,} < {gold_th:,}"):
-                                        break
-                                if need_tn and not stop_ev.is_set():
-                                    tn_idx = max(0, min(len(box_ids) - 1, int(r_cfg.tn_box_idx)))
-                                    if not _open_box(box_ids[tn_idx], "📦", "rương TN", "Khoáng sản dưới ngưỡng"):
-                                        break
+                        except CaptchaRequired:
+                            self._handle_captcha("Kiểm tra/giao dịch tài nguyên gặp Captcha (mã 110).")
+                            stop_ev.set()
+                            break
                         except Exception as exc:
                             self.append_log("building", f"❌ Lỗi giám sát TN thành {cid}: {exc}")
                     if stop_ev.wait(30.0):

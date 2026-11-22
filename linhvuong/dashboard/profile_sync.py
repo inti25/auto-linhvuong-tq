@@ -105,6 +105,9 @@ class ProfileSyncMixin:
             "res_iron_pct_var",
             "res_stone_pct_var",
             "res_food_pct_var",
+            "res_prefer_market_var",
+            "res_auto_sell_var",
+            "res_sell_pct_var",
             # Research
             "res_art_var",
             "res_even_var",

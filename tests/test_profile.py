@@ -550,6 +550,24 @@ def test_training_profile_defaults_dedup_order_and_roundtrip():
     assert roundtrip.training.van_general_ids == [202, 201]
 
 
+def test_resource_profile_market_fields_defaults_and_roundtrip():
+    # Tương thích ngược với hồ sơ cũ chưa có trường Chợ
+    legacy = Profile.from_dict({"resource": {"gold_threshold": "5000", "wood_pct": "65"}})
+    assert legacy.resource.prefer_market_buy is False
+    assert legacy.resource.auto_sell_resource is False
+    assert legacy.resource.sell_threshold_pct == "90"
+
+    prof = Profile()
+    prof.resource.prefer_market_buy = True
+    prof.resource.auto_sell_resource = True
+    prof.resource.sell_threshold_pct = "92"
+
+    loaded = Profile.from_dict(prof.to_dict())
+    assert loaded.resource.prefer_market_buy is True
+    assert loaded.resource.auto_sell_resource is True
+    assert loaded.resource.sell_threshold_pct == "92"
+
+
 
 
 

@@ -367,7 +367,7 @@
   const DEFAULT_AUTOSTART_OPTIONS = [
     { id: "building", label: "🏛️ Xây dựng" },
     { id: "research", label: "🔬 Nghiên cứu" },
-    { id: "resource_monitor", label: "🌾 An dân / Tài nguyên" },
+    { id: "resource_monitor", label: "📦 Tài Nguyên" },
     { id: "thaophat", label: "⚔️ Thảo phạt" },
     { id: "binhman", label: "🏕️ Bình man" },
     { id: "goidan", label: "🧛 Gọi man" },
@@ -757,7 +757,7 @@
     };
     bindBtn("btn-tgl-bld", t.building?.running, "⏹️ Dừng Xây", "▶️ Xây");
     bindBtn("btn-tgl-res", t.research?.running, "⏹️ Dừng NC", "▶️ Nghiên Cứu");
-    bindBtn("btn-tgl-resmon", t.resource_monitor?.running, "⏹️ Dừng mở rương TN/Vàng", "▶️ Tự mở rương TN/Vàng");
+    bindBtn("btn-tgl-resmon", t.resource_monitor?.running, "⏹️ Dừng Tài Nguyên", "▶️ Tài Nguyên");
     bindBtn("btn-tgl-tp", t.thaophat?.running, "⏹️ Dừng Thảo Phạt", "▶️ Bắt đầu Thảo Phạt");
     bindBtn("btn-tgl-bm", t.binhman?.running, "⏹️ Dừng Bình Man", "▶️ Bắt đầu Bình Man");
     bindBtn("btn-tgl-gd", t.goidan?.running, "⏹️ Dừng Gọi Man", "▶️ Bắt đầu Gọi Man");
@@ -1040,7 +1040,7 @@
             <div class="form-row">
               <button id="btn-tgl-bld" class="btn-success btn-sm">▶️ Xây</button>
               <button id="btn-tgl-res" class="btn-success btn-sm">▶️ Nghiên Cứu</button>
-              <button id="btn-tgl-resmon" class="btn-success btn-sm">▶️ Tự mở rương TN/Vàng</button>
+              <button id="btn-tgl-resmon" class="btn-success btn-sm">▶️ Tài Nguyên</button>
             </div>
             <div class="form-row" style="margin-bottom:0;">
               <button id="btn-bld-all-on" class="btn-sm">☑ Chọn hết thành</button>
@@ -1181,6 +1181,8 @@
               </div>
               <label>Rương Vàng</label><select id="rsrc-gbox">${boxNames.map((n, i) => `<option value="${i}" ${Number(rsrc.gold_box_idx) === i ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
               <label>Rương TN</label><select id="rsrc-tnbox">${boxNames.map((n, i) => `<option value="${i}" ${Number(rsrc.tn_box_idx) === i ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+              <label>Ưu tiên Chợ</label><label style="margin:0;"><input id="rsrc-prefer-market" type="checkbox" ${rsrc.prefer_market_buy ? "checked" : ""}/> Ưu tiên mua ở chợ (Thành có Chợ)</label>
+              <label>Bán dư tài nguyên</label><div class="form-row" style="margin:0;"><label style="margin:0;"><input id="rsrc-auto-sell" type="checkbox" ${rsrc.auto_sell_resource ? "checked" : ""}/> Bán tài nguyên nếu quá</label><input id="rsrc-sell-pct" type="number" min="1" max="100" value="${esc(rsrc.sell_threshold_pct ?? "90")}" style="width:54px;"/><span>%</span></div>
             </div>
             <div class="form-row">
               <label><input id="aux-daily" type="checkbox" ${logi.auto_daily_reward ? "checked" : ""}/> Thưởng ngày</label>
@@ -1527,6 +1529,9 @@
         gold_box_idx: Number($("rsrc-gbox").value),
         tn_box_idx: Number($("rsrc-tnbox").value),
         auto_open_box: $("rsrc-open-bld").checked,
+        prefer_market_buy: Boolean($("rsrc-prefer-market")?.checked),
+        auto_sell_resource: Boolean($("rsrc-auto-sell")?.checked),
+        sell_threshold_pct: $("rsrc-sell-pct")?.value ?? "90",
       },
       logistics: {
         auto_daily_reward: $("aux-daily").checked,
@@ -1545,9 +1550,11 @@
       },
       ditrai: { dest_x: $("dt-x").value, dest_y: $("dt-y").value },
     });
-    ["rsrc-gold", "rsrc-wood", "rsrc-iron", "rsrc-stone", "rsrc-food", "rsrc-gbox", "rsrc-tnbox",
+    ["rsrc-gold", "rsrc-wood", "rsrc-iron", "rsrc-stone", "rsrc-food", "rsrc-gbox", "rsrc-tnbox", "rsrc-prefer-market", "rsrc-auto-sell", "rsrc-sell-pct",
       "aux-daily", "aux-explore", "aux-whip", "aux-coin", "aux-turns", "logi-amt", "dt-x", "dt-y", "xfer-int", "aux-tribute", "aux-tribute-gid", "aux-general-visit", "aux-training"].forEach((id) => {
-        $(id).onchange = () => {
+        const el = $(id);
+        if (!el) return;
+        el.onchange = () => {
           if (id === "aux-whip" && $("aux-whip").checked) $("aux-coin").checked = false;
           if (id === "aux-coin" && $("aux-coin").checked) $("aux-whip").checked = false;
           saveResCfg();

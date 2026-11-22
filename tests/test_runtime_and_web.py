@@ -801,7 +801,8 @@ function makeEl(tag, id = "", className = "") {
           "btn-bld-all-chk","btn-bld-none-chk","bld-batch-lvl","btn-bld-set-all","btn-bld-demolish",
           "res-art","res-even","res-interval","btn-res-all","btn-res-none","res-batch-lvl",
           "btn-res-set-all","rsrc-gold","rsrc-wood","rsrc-iron","rsrc-stone","rsrc-food",
-          "rsrc-gbox","rsrc-tnbox","aux-daily","aux-explore","aux-whip","aux-coin","aux-turns",
+          "rsrc-gbox","rsrc-tnbox","rsrc-prefer-market","rsrc-auto-sell","rsrc-sell-pct",
+          "aux-daily","aux-explore","aux-whip","aux-coin","aux-turns",
           "logi-amt","dt-x","dt-y","btn-run-explore","btn-chest-start","btn-chest-stop",
           "btn-logi-xfer","btn-logi-comfort","btn-logi-daily","btn-dt-start","btn-dt-stop","btn-clr-int-log",
           "aux-boost-lbl","aux-explore-lbl","dt-status-lbl","chest-progress-fill","chest-progress-lbl",
@@ -2137,4 +2138,94 @@ def test_runtime_and_web_general_training_endpoints_aux_and_captcha(tmp_path, mo
     # Kiểm tra các phần tử UI đào tạo tướng trên Web Dashboard (app.js)
     app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("btn-open-training", "btn-open-training-aux", "aux-training", "/training/status", "/training/run", "openTrainingModal"):
+        assert token in app_js
+
+
+def test_resource_monitor_s58_market_buy_sell_and_web_profile_roundtrip(tmp_path, monkeypatch):
+    import requests
+    import threading
+    from pathlib import Path
+    from linhvuong.runtime import AccountSession
+
+    _mock_offline(monkeypatch)
+
+    # 1. AccountSession.start_resource_monitor thực thi bán dư & ưu tiên mua Chợ qua S58 REST + Market passthrough
+    sess = AccountSession("mktmon @ S58", requests.Session(), 58, "mktmon", data_dir=tmp_path)
+    sess.roster = _fake_roster()
+    sess.profile.resource.resource_cities = [1001]
+    sess.profile.resource.gold_threshold = "1000"
+    sess.profile.resource.wood_pct = "70"
+    sess.profile.resource.iron_pct = "70"
+    sess.profile.resource.stone_pct = "70"
+    sess.profile.resource.food_pct = "70"
+    sess.profile.resource.prefer_market_buy = True
+    sess.profile.resource.auto_sell_resource = True
+    sess.profile.resource.sell_threshold_pct = "90"
+
+    calls = []
+    done_ev = threading.Event()
+
+    sess.gateway.resource_info = lambda cid: {  # type: ignore[method-assign]
+        "ret": 0,
+        "m_lwood_balance": 5_000_000,
+        "m_liron_balance": 8_000_000,
+        "m_lstone_balance": 8_000_000,
+        "m_lfood_balance": 9_500_000,
+        "m_lmax_storage": 10_000_000,
+    }
+    sess.gateway.city_info = lambda cid: {"ret": 0, "m_lmoney_balance": 50_000_000}  # type: ignore[method-assign]
+    sess.gateway.building_list = lambda cid: {"ret": 0, "items": [{"m_lpos": 24, "m_lgid": 11, "m_llevel": 20}]}  # type: ignore[method-assign]
+
+    def _call(ep, api_id, payload=None):
+        p = dict(payload or {})
+        calls.append((ep, api_id, p))
+        if ep == "Common.ashx" and api_id == 38:
+            if p.get("type") == "2":
+                return {"infos": [{"seqno": "88", "seller": "9", "count": "3000", "price": "480"}]}
+            return {"infos": [{"seqno": "77", "seller": "8", "count": "50", "price": "238"}]}
+        if ep == "OPT.ashx" and api_id == 29:
+            return 239
+        if ep == "OPT.ashx" and api_id == 9:
+            done_ev.set()
+            return {"ret": 0}
+        return {"ret": 0}
+
+    sess.gateway.call = _call  # type: ignore[method-assign]
+    sess.start_resource_monitor()
+    assert done_ev.wait(timeout=2.0)
+    sess.stop_resource_monitor()
+    if sess._res_monitor_thread:
+        sess._res_monitor_thread.join(timeout=1.5)
+
+    assert any(ep == "OPT.ashx" and aid == 49 and p.get("sellcount1") == "1500" for ep, aid, p in calls)
+    assert any(ep == "OPT.ashx" and aid == 9 and p.get("count") == "2000" for ep, aid, p in calls)
+    assert not any(ep == "Common.ashx" and aid == 48 for ep, aid, _ in calls)
+    sess.destroy()
+
+    # 2. Web API PUT /profile lưu & trả về đầy đủ 3 trường chợ mới, kiểm tra app.js chứa ID & nhãn mới
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="pw")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "pw"}).status_code == 200
+        assert client.post("/api/accounts/login", json={"server_id": 58, "username": "webmkt", "password": "pw"}).status_code == 200
+        r_put = client.put(
+            "/api/accounts/webmkt%20%40%20S58/profile",
+            json={
+                "resource": {
+                    "prefer_market_buy": True,
+                    "auto_sell_resource": True,
+                    "sell_threshold_pct": "88",
+                }
+            },
+        )
+        assert r_put.status_code == 200
+        rsrc = r_put.json()["profile"]["resource"]
+        assert rsrc["prefer_market_buy"] is True
+        assert rsrc["auto_sell_resource"] is True
+        assert rsrc["sell_threshold_pct"] == "88"
+    wm.graceful_shutdown()
+
+    app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("rsrc-prefer-market", "rsrc-auto-sell", "rsrc-sell-pct", "btn-tgl-resmon", "▶️ Tài Nguyên", "📦 Tài Nguyên"):
         assert token in app_js
