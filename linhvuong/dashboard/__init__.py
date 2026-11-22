@@ -81,6 +81,7 @@ from .shared import (
     MultiSelectDropdown,
     _LegacyComboAdapter,
 )
+from .add_points_dialog import AddPointsDialogMixin
 from .tactician_dialog import TacticianDialogMixin
 from .thaophat import ThaoPhatMixin
 from .training_dialog import TrainingDialogMixin
@@ -93,6 +94,7 @@ class Dashboard(
     OverviewMixin,
     TacticianDialogMixin,
     EquipDialogMixin,
+    AddPointsDialogMixin,
     TrainingDialogMixin,
     CraftingMixin,
     BuildingMixin,
@@ -904,6 +906,8 @@ class Dashboard(
             self._on_equip_roster_updated()
         if hasattr(self, "_refresh_training_dialog_all"):
             self._refresh_training_dialog_all()
+        if hasattr(self, "_on_add_points_roster_updated"):
+            self._on_add_points_roster_updated()
 
         today_str = time.strftime("%Y-%m-%d")
         if getattr(self, "aux_daily_reward_var", None) and self.aux_daily_reward_var.get():

@@ -4036,6 +4036,64 @@ def test_dashboard_training_dialog_profile_sync_and_selection(tmp_path):
         dash.destroy()
 
 
+def test_add_points_dialog_filters_and_locks_inputs_on_add_all():
+    """Hộp thoại Cộng Điểm hiển thị chỉ số + Điểm Tiềm Năng và khóa ô nhập khi bật Cộng hết điểm."""
+    dash = safe_dashboard()
+    try:
+        r = dummy_roster()
+        c1 = r.cities[0]
+        camp1 = r.camps[0]
+        g_vo = General(
+            id=417506, name="TrieuVan", role="vo", level=10, morale=100,
+            stamina=95, stamina_max=100, stat1=140, stat2=80, stat3=120, skill_point=15,
+        )
+        g_van = General(
+            id=417513, name="GiaCatLuong", role="van", level=12, morale=100,
+            stamina=100, stamina_max=100, stat1=60, stat2=210, stat3=190, skill_point=0,
+        )
+        g_camp = General(
+            id=417520, name="QuanVu", role="vo", level=11, morale=100,
+            stamina=90, stamina_max=100, stat1=200, stat2=90, stat3=150, skill_point=25,
+        )
+        dash.roster = Roster(cities=[c1], camps=[camp1], _generals={15230: [g_vo, g_van], -1085: [g_camp]})
+        dash.gateway = None
+
+        dash._open_add_points_dialog()
+        rows = dash.ap_tree.get_children()
+        assert set(rows) == {"417506", "417513", "417520"}
+        assert tuple(str(v) for v in dash.ap_tree.item("417506", "values")[4:8]) == ("140", "80", "120", "15")
+
+        # Mặc định bỏ tick Cộng hết điểm, chế độ Cộng 1 & 3 -> 2 ô nhập mở
+        assert dash.ap_add_all_var.get() is False
+        assert str(dash.ap_points_entry.cget("state")) == "normal"
+        assert str(dash.ap_times_entry.cget("state")) == "normal"
+
+        # Chọn Max 1 -> khóa Số lần mỗi loại
+        dash.ap_mode_var.set("Max 1 (Sức Mạnh / Mị Lực)")
+        dash._on_ap_config_changed()
+        assert str(dash.ap_points_entry.cget("state")) == "normal"
+        assert str(dash.ap_times_entry.cget("state")) == "disabled"
+
+        # Bật Cộng hết điểm -> khóa cả Điểm/lần và Số lần
+        dash.ap_add_all_var.set(True)
+        dash._on_ap_config_changed()
+        assert str(dash.ap_points_entry.cget("state")) == "disabled"
+        assert str(dash.ap_times_entry.cget("state")) == "disabled"
+
+        # Lọc chỉ hiện tướng còn điểm > 0
+        dash.ap_only_avail_var.set(True)
+        dash._refresh_add_points_tree()
+        assert set(dash.ap_tree.get_children()) == {"417506", "417520"}
+
+        # Chọn tướng còn điểm
+        dash._ap_select_with_points()
+        assert dash._ap_selected_ids == {417506, 417520}
+
+        dash._add_points_dialog.destroy()
+    finally:
+        dash.destroy()
+
+
 
 
 

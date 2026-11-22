@@ -72,6 +72,10 @@ class General:
     special_status: int = 0  # 0: bình thường, 1: Thái thú, 2/3: Mưu sĩ
     tactician_id: int = 0  # ID Mưu sĩ đang theo (chỉ áp dụng cho Võ tướng)
     tactician_name: str = ""  # Tên Mưu sĩ đang theo
+    stat1: int = 0
+    stat2: int = 0
+    stat3: int = 0
+    skill_point: int = 0  # Điểm Tiềm Năng còn lại chưa phân bổ
 
     @property
     def is_idle(self) -> bool:
@@ -348,6 +352,10 @@ def fetch_roster(
                     special_status=int(g[4]) if len(g) > 4 else 0,
                     tactician_id=tac_id,
                     tactician_name=tac_name,
+                    stat1=int(g[10]) if len(g) > 10 else 0,
+                    stat2=int(g[11]) if len(g) > 11 else 0,
+                    stat3=int(g[12]) if len(g) > 12 else 0,
+                    skill_point=int(g[14]) if len(g) > 14 else 0,
                 )
             )
 

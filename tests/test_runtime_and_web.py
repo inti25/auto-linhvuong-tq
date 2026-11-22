@@ -1039,6 +1039,7 @@ def test_web_armament_rename_equip_and_logistics_endpoints(tmp_path, monkeypatch
         meta = client.get("/api/meta").json()
         assert meta["rename_max_width"] == 17
         assert len(meta["armament_scopes"]) == 4
+        assert len(meta["add_point_modes"]) == 6
 
         # Cống quận từ chối Doanh trại (city_id <= 0) và building_gid không hợp lệ
         assert client.post(
@@ -1083,6 +1084,24 @@ def test_web_armament_rename_equip_and_logistics_endpoints(tmp_path, monkeypatch
 
         assert client.post("/api/accounts/armuser%20%40%20S53/armament/stop").status_code == 200
         assert client.post("/api/accounts/armuser%20%40%20S53/rename/stop").status_code == 200
+
+        r_ap = client.post(
+            "/api/accounts/armuser%20%40%20S53/add-points/run",
+            json={"general_ids": [1], "mode": "pair_1_3", "points_per_add": 10, "times": 1, "add_all": False},
+        )
+        assert r_ap.status_code == 200
+        assert client.post("/api/accounts/armuser%20%40%20S53/add-points/stop").status_code == 200
+
+        r_ap_bad = client.post(
+            "/api/accounts/armuser%20%40%20S53/add-points/run",
+            json={"general_ids": [], "mode": "pair_1_3"},
+        )
+        assert r_ap_bad.status_code == 400
+
+        from pathlib import Path
+        app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+        for token in ("btn-open-add-points", "openAddPointsModal", "/add-points/run", "/add-points/stop"):
+            assert token in app_js
 
         assert any(w["id"] == 452 for w in meta["transfer_weapons"])
 

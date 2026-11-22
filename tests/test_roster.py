@@ -221,3 +221,45 @@ def test_fetch_roster_resolves_tacticians_for_zero_troop_martial_generals():
     assert [d["lGeneralID"] for d in c14_calls] == ["6331"]
 
 
+def test_fetch_roster_parses_stat123_and_skill_point_with_short_row_fallback():
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _StatSession:
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            if key == "Common.ashx?id=29":
+                return _Resp({"ret": 0, "city": [[15230, "NB"]]})
+            if key == "City.ashx?id=7":
+                return _Resp({"ret": 0, "infos": []})
+            if key == "Common.ashx?id=32" and data.get("type") == "1":
+                return _Resp({
+                    "ret": 0,
+                    "list": [[15230, "NB", 193, 202, [
+                        [514181, "NB07", "", 1, 3, 0, 103, 100, 1130, 1130, 89, 120, 43, 1030, 80],
+                        [514180, "VanCu", "", 1, 0, 0, 10, 100, 100, 100],
+                    ]]],
+                })
+            if key == "Common.ashx?id=32" and data.get("type") == "2":
+                return _Resp({
+                    "ret": 0,
+                    "list": [[15230, "NB", 193, 202, [
+                        [514167, "Vo07", "", 2, 0, 0, 104, 100, 1140, 1140, 112, 17, 109, 1040, 75],
+                    ]]],
+                })
+            return _Resp({"ret": 0, "list": []})
+
+    gw = GatewayClient(57, _StatSession(), sleep=lambda s: None)
+    r = fetch_roster(gw)
+    by_id = {g.id: g for g in r.generals_of(15230)}
+    assert (by_id[514181].stat1, by_id[514181].stat2, by_id[514181].stat3, by_id[514181].skill_point) == (89, 120, 43, 80)
+    assert (by_id[514167].stat1, by_id[514167].stat2, by_id[514167].stat3, by_id[514167].skill_point) == (112, 17, 109, 75)
+    assert (by_id[514180].stat1, by_id[514180].stat2, by_id[514180].stat3, by_id[514180].skill_point) == (0, 0, 0, 0)
+
+

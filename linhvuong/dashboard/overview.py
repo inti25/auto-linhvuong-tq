@@ -64,6 +64,13 @@ class OverviewMixin:
             command=self._open_equip_dialog,
         )
         self.equip_btn.pack(side="left", padx=3)
+        self.add_points_btn = ttk.Button(
+            profile_frame,
+            text="✨ Cộng Điểm",
+            style="Action.TButton",
+            command=self._open_add_points_dialog,
+        )
+        self.add_points_btn.pack(side="left", padx=3)
         self.training_btn = ttk.Button(
             profile_frame,
             text="🎓 Đào Tạo Tướng",

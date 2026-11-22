@@ -247,6 +247,7 @@
       if (typeof renderEquipModalBody === "function" && $("eq-tbody")) renderEquipModalBody();
       if (typeof renderArmamentModalBody === "function" && $("arm-tbody")) renderArmamentModalBody();
       if (typeof renderRenameModalBody === "function" && $("ren-tbody")) renderRenameModalBody();
+      if (typeof renderAddPointsModalBody === "function" && $("ap-tbody")) renderAddPointsModalBody();
       if (typeof renderTrainingModalBody === "function" && $("trn-tbody")) renderTrainingModalBody();
     } else if (event === "techs_updated") {
       state.snapshot.tech_levels = payload.levels || {};
@@ -602,6 +603,7 @@
       equip: "log-equip",
       armament: "log-armament",
       rename: "log-rename",
+      add_points: "log-add-points",
       enhance: "log-enhance",
       training: "log-training",
     };
@@ -707,6 +709,8 @@
     if (armLbl) armLbl.textContent = aux.armament_status || "Sẵn sàng";
     const renLbl = $("ren-status-lbl");
     if (renLbl) renLbl.textContent = `${aux.rename_status || "Sẵn sàng"}${aux.rename_progress?.total ? ` (${aux.rename_progress.done}/${aux.rename_progress.total})` : ""}`;
+    const apLbl = $("ap-status-lbl");
+    if (apLbl) apLbl.textContent = `${aux.add_points_status || "Sẵn sàng"}${aux.add_points_progress?.total ? ` (${aux.add_points_progress.done}/${aux.add_points_progress.total})` : ""}`;
     const eqLbl = $("eq-status-lbl");
     if (eqLbl) eqLbl.textContent = aux.equip_status || "Sẵn sàng";
     const trnLbl = $("train-status-lbl");
@@ -2132,6 +2136,7 @@
           <button id="btn-open-equip" class="btn-sm">🛡️ Trang Bị Tướng</button>
           <button id="btn-open-armament" class="btn-sm">⚔️ Quân Giới Tướng</button>
           <button id="btn-open-rename" class="btn-sm">✏️ Đổi Tên Tướng</button>
+          <button id="btn-open-add-points" class="btn-sm">✨ Cộng Điểm</button>
           <button id="btn-open-training" class="btn-sm">🎓 Đào Tạo Tướng</button>
         </div>
       </div>
@@ -2248,6 +2253,7 @@
     $("btn-open-equip").onclick = openEquipModal;
     $("btn-open-armament").onclick = openArmamentModal;
     $("btn-open-rename").onclick = openRenameModal;
+    $("btn-open-add-points").onclick = openAddPointsModal;
     $("btn-open-training").onclick = openTrainingModal;
 
     $("mo-city").onchange = () => { state.moraleCityFilter = $("mo-city").value; renderActiveTab(); };
@@ -3171,6 +3177,7 @@
   let renderEquipModalBody = null;
   let renderArmamentModalBody = null;
   let renderRenameModalBody = null;
+  let renderAddPointsModalBody = null;
   let renderTrainingModalBody = null;
   let renderTrainingModalSlots = null;
 
@@ -3547,6 +3554,160 @@
     };
     $("btn-ren-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/rename/stop`, { method: "POST" });
     renderRenameModalBody();
+  }
+
+  function openAddPointsModal() {
+    const bases = state.snapshot.roster.bases || [];
+    const modes = state.meta?.add_point_modes || [
+      { id: "pair_1_3", label: "Cộng 1 & 3 (SM/Mị & TL/Nội)", is_max: false },
+      { id: "pair_1_2", label: "Cộng 1 & 2 (SM/Mị & NN/Mưu)", is_max: false },
+      { id: "pair_2_3", label: "Cộng 2 & 3 (NN/Mưu & TL/Nội)", is_max: false },
+      { id: "max_1", label: "Max 1 (Sức Mạnh / Mị Lực)", is_max: true },
+      { id: "max_2", label: "Max 2 (Nhanh Nhẹn / Mưu Trí)", is_max: true },
+      { id: "max_3", label: "Max 3 (Thống Lĩnh / Nội Chính)", is_max: true },
+    ];
+    const minStep = state.meta?.add_points_min_step || 1;
+    const maxStep = state.meta?.add_points_max_step || 500;
+    const selectedIds = new Set();
+    const initCity = state.selectedOverviewCityId && bases.some((b) => b.id === state.selectedOverviewCityId) ? String(state.selectedOverviewCityId) : "all";
+
+    openModal(
+      "✨ Cộng Điểm Văn Quan & Võ Tướng",
+      `<div class="card" style="padding:10px;margin-bottom:8px;">
+         <div class="form-row">
+           <label>Loại cộng <select id="ap-mode">${modes.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("")}</select></label>
+           <label><input id="ap-add-all" type="checkbox"/> Cộng hết điểm (+10 → +3 → +1)</label>
+           <label>Điểm/lần <input id="ap-points" type="number" min="${minStep}" max="${maxStep}" value="10" style="width:72px;"/></label>
+           <label>Số lần mỗi loại <input id="ap-times" type="number" min="1" value="1" style="width:65px;"/></label>
+         </div>
+         <div id="ap-hint" style="font-size:11.5px;color:var(--accent);"></div>
+       </div>
+       <div class="form-row">
+         <label>Thành / Trại <select id="ap-city"><option value="all">🌟 Tất cả các thành</option>${bases.map((b) => `<option value="${b.id}" ${String(b.id) === initCity ? "selected" : ""}>${esc(b.display_name || b.name)}</option>`).join("")}</select></label>
+         <label>Phân hệ <select id="ap-role"><option value="all">Tất cả (Võ & Văn)</option><option value="vo">Võ tướng</option><option value="van">Văn quan</option></select></label>
+         <label>Tìm tên <input id="ap-search" type="text" placeholder="Lọc theo tên..." style="width:130px;"/></label>
+         <label><input id="ap-only-avail" type="checkbox"/> Chỉ hiện còn điểm &gt; 0</label>
+         <button id="btn-ap-reload" class="btn-sm" style="margin-left:auto;">🔄 Làm mới</button>
+       </div>
+       <div class="form-row">
+         <button id="btn-ap-all" class="btn-sm">☑ Tất cả</button>
+         <button id="btn-ap-none" class="btn-sm">☐ Bỏ chọn</button>
+         <button id="btn-ap-vo" class="btn-sm">⚔️ Chọn Võ</button>
+         <button id="btn-ap-van" class="btn-sm">📜 Chọn Văn</button>
+         <button id="btn-ap-avail" class="btn-sm">✨ Chọn Còn Điểm</button>
+       </div>
+       <div id="ap-summary" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+       <div class="table-wrap" style="max-height:240px;">
+         <table><thead><tr><th><input id="ap-all-chk" type="checkbox"/></th><th>Tên tướng</th><th>Chức vụ</th><th>Thành / Trại</th><th>Cấp</th><th>SM / Mị</th><th>NN / Mưu</th><th>TL / Nội</th><th>Tiềm năng</th><th>Trạng thái</th></tr></thead>
+         <tbody id="ap-tbody"></tbody></table>
+       </div>
+       <div id="ap-status-lbl" style="font-size:12px;color:var(--accent);margin-top:6px;">${esc(state.snapshot.aux?.add_points_status || "Sẵn sàng")}</div>
+       <div id="log-add-points" class="log-box" style="height:105px;margin-top:6px;">${esc((state.snapshot.logs.add_points || []).join("\n"))}</div>`,
+      `<button id="btn-ap-run" class="btn-success btn-sm">✨ Thực Hiện Cộng Điểm</button>
+       <button id="btn-ap-stop" class="btn-danger btn-sm">⏹ Dừng</button>`
+    );
+
+    const isMaxMode = (modeId) => {
+      const m = modes.find((x) => x.id === modeId);
+      return m ? !!m.is_max : String(modeId || "").startsWith("max_");
+    };
+    const updateApConfigUi = () => {
+      const mode = $("ap-mode")?.value || "pair_1_3";
+      const addAll = !!$("ap-add-all")?.checked;
+      const isMax = isMaxMode(mode);
+      if ($("ap-points")) $("ap-points").disabled = addAll;
+      if ($("ap-times")) $("ap-times").disabled = addAll || isMax;
+      if ($("ap-hint")) {
+        if (addAll) {
+          $("ap-hint").textContent = isMax
+            ? "Cộng hết điểm: tự động cộng +10 liên tiếp rồi hạ +3 và +1 cho đến khi hết Điểm Tiềm Năng hoặc chạm trần (ret=77)."
+            : "Cộng hết điểm theo cặp: cộng xen kẽ 2 chỉ số theo bậc +10 → +3 → +1; nếu 1 chỉ số chạm trần (ret=77) sẽ tiếp tục thử chỉ số kia.";
+        } else {
+          const pts = Number($("ap-points")?.value || 0);
+          const times = Number($("ap-times")?.value || 0);
+          if (!Number.isInteger(pts) || pts < minStep || pts > maxStep) {
+            $("ap-hint").textContent = `⚠️ Điểm/lần phải là số nguyên từ ${minStep} đến ${maxStep}.`;
+          } else if (isMax) {
+            $("ap-hint").textContent = `Dự kiến mỗi tướng: lặp +${pts} điểm/lần vào chỉ số đã chọn đến khi không đủ +${pts} hoặc chạm trần.`;
+          } else if (!Number.isInteger(times) || times < 1) {
+            $("ap-hint").textContent = "⚠️ Số lần mỗi loại phải là số nguyên ≥ 1.";
+          } else {
+            $("ap-hint").textContent = `Dự kiến mỗi tướng: +${pts} điểm × 2 chỉ số × ${times} lần = tối đa ${pts * 2 * times} điểm.`;
+          }
+        }
+      }
+    };
+
+    const visibleGens = () => {
+      const c = $("ap-city")?.value || "all";
+      const r = $("ap-role")?.value || "all";
+      const q = ($("ap-search")?.value || "").trim().toLowerCase();
+      const onlyAvail = !!$("ap-only-avail")?.checked;
+      const seen = new Set();
+      return (state.snapshot.roster.generals || []).filter((g) => {
+        if (seen.has(g.id) || !seen.add(g.id)) return false;
+        if (c !== "all" && String(g.city_id) !== c) return false;
+        if (r !== "all" && g.role !== r) return false;
+        if (onlyAvail && Number(g.skill_point || 0) <= 0) return false;
+        if (q && !String(g.name || "").toLowerCase().includes(q)) return false;
+        return true;
+      }).sort((a, b) => (Number(b.skill_point || 0) - Number(a.skill_point || 0)) || (b.level - a.level) || (a.id - b.id));
+    };
+
+    renderAddPointsModalBody = () => {
+      updateApConfigUi();
+      const rows = visibleGens();
+      const curBases = state.snapshot.roster.bases || [];
+      const tbody = $("ap-tbody");
+      if (!tbody) return;
+      let totalSp = 0;
+      tbody.innerHTML = rows.map((g) => {
+        const sp = Number(g.skill_point || 0);
+        totalSp += Math.max(0, sp);
+        const bname = curBases.find((b) => b.id === g.city_id)?.name || g.city_id;
+        const roleTxt = g.is_mayor ? "Thái thú" : (g.role === "van" ? "Văn quan" : "Võ tướng");
+        return `<tr><td><input type="checkbox" class="ap-chk" data-gid="${g.id}" ${selectedIds.has(g.id) ? "checked" : ""}/></td><td>${esc(g.name)}</td><td>${esc(roleTxt)}</td><td>${esc(bname)}</td><td>${g.level}</td><td style="text-align:right;">${g.stat1 ?? 0}</td><td style="text-align:right;">${g.stat2 ?? 0}</td><td style="text-align:right;">${g.stat3 ?? 0}</td><td style="text-align:right;font-weight:700;color:${sp > 0 ? "var(--accent)" : "var(--muted)"};">${sp}</td><td>${esc(g.status_text || "Rảnh")}</td></tr>`;
+      }).join("");
+      tbody.querySelectorAll(".ap-chk").forEach((c) => (c.onchange = () => {
+        const gid = Number(c.dataset.gid);
+        if (c.checked) selectedIds.add(gid); else selectedIds.delete(gid);
+        renderAddPointsModalBody();
+      }));
+      const selVis = rows.filter((g) => selectedIds.has(g.id)).length;
+      if ($("ap-summary")) $("ap-summary").textContent = `Tướng hiển thị: ${rows.length} (Tổng Điểm Tiềm Năng: ${totalSp.toLocaleString()}) • Đang chọn: ${selVis}`;
+      if ($("ap-all-chk")) $("ap-all-chk").checked = rows.length > 0 && selVis === rows.length;
+    };
+
+    $("ap-mode").onchange = updateApConfigUi;
+    $("ap-add-all").onchange = updateApConfigUi;
+    $("ap-points").oninput = updateApConfigUi;
+    $("ap-times").oninput = updateApConfigUi;
+    $("ap-city").onchange = renderAddPointsModalBody;
+    $("ap-role").onchange = renderAddPointsModalBody;
+    $("ap-search").oninput = renderAddPointsModalBody;
+    $("ap-only-avail").onchange = renderAddPointsModalBody;
+    $("ap-all-chk").onchange = () => { const ch = $("ap-all-chk").checked; visibleGens().forEach((g) => (ch ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderAddPointsModalBody(); };
+    $("btn-ap-all").onclick = () => { visibleGens().forEach((g) => selectedIds.add(g.id)); renderAddPointsModalBody(); };
+    $("btn-ap-none").onclick = () => { visibleGens().forEach((g) => selectedIds.delete(g.id)); renderAddPointsModalBody(); };
+    $("btn-ap-vo").onclick = () => { visibleGens().forEach((g) => (g.role === "vo" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderAddPointsModalBody(); };
+    $("btn-ap-van").onclick = () => { visibleGens().forEach((g) => (g.role === "van" ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderAddPointsModalBody(); };
+    $("btn-ap-avail").onclick = () => { visibleGens().forEach((g) => (Number(g.skill_point || 0) > 0 ? selectedIds.add(g.id) : selectedIds.delete(g.id))); renderAddPointsModalBody(); };
+    $("btn-ap-reload").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/roster/reload`, { method: "POST" }).then(() => showToast("Làm mới", "Đã đồng bộ danh sách tướng."));
+    $("btn-ap-run").onclick = () => {
+      const rows = visibleGens();
+      const generalIds = rows.filter((g) => selectedIds.has(g.id)).map((g) => g.id);
+      if (!generalIds.length) return showToast("Cộng điểm", "Vui lòng chọn ít nhất 1 tướng.", "warn");
+      const mode = $("ap-mode")?.value || "pair_1_3";
+      const addAll = !!$("ap-add-all")?.checked;
+      const pointsPerAdd = Number($("ap-points")?.value || 10);
+      const times = Number($("ap-times")?.value || 1);
+      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/add-points/run`, {
+        method: "POST",
+        body: { general_ids: generalIds, mode, points_per_add: pointsPerAdd, times, add_all: addAll },
+      }).then(() => showToast("Cộng điểm", "Đang thực thi cộng điểm tướng trong nền...")).catch((e) => showToast("Lỗi", e.message, "error"));
+    };
+    $("btn-ap-stop").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/add-points/stop`, { method: "POST" });
+    renderAddPointsModalBody();
   }
 
   function openTrainingModal() {

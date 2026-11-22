@@ -41,6 +41,14 @@ _Avoid_: Độ trung thành, loyalty (khi nói tiếng Việt)
 Hành động dùng Vàng khôi phục Lòng trung thành của Văn quan hoặc Võ tướng lên mức tối đa (100).
 _Avoid_: Thưởng vàng, tăng trung thành, reward
 
+**Điểm Tiềm Năng**:
+Điểm thuộc tính chưa phân bổ của **Văn quan** hoặc **Võ tướng** nhận được khi thăng cấp.
+_Avoid_: skill point, free points, điểm tự do
+
+**Cộng Điểm Tướng**:
+Hành động phân bổ **Điểm Tiềm Năng** vào 3 chỉ số cơ bản của **Võ tướng** (Sức Mạnh, Nhanh Nhẹn, Thống Lĩnh) hoặc **Văn quan** (Mị Lực, Mưu Trí, Nội Chính).
+_Avoid_: add points, nâng điểm, tăng thuộc tính
+
 **Di trại**:
 Hành động dời Doanh trại dã ngoại từng bước trên bản đồ tọa độ về hướng mục tiêu trước khi xuất kích hoặc theo tọa độ chỉ định.
 _Avoid_: Dời trại, di chuyển trại, relocate

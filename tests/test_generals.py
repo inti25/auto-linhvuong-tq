@@ -927,3 +927,109 @@ def test_auto_swap_low_stamina_tacticians_rollback_and_captcha():
     gw_cap = FakeGateway(lambda _ep, _oid, _body: {"ret": 110})
     with pytest.raises(CaptchaRequired):
         auto_swap_low_stamina_tacticians(gw_cap, roster, 100, [1], min_stamina_pct=30.0)
+
+
+def test_add_points_generals_pair_fixed_and_ret77_continuation():
+    from linhvuong.generals import ADD_POINT_MODE_PAIR_1_3, add_points_generals
+
+    # Mô phỏng tướng có skill_point=50; thuộc tính 1 đang bằng trần (200 == 50 + 150)
+    # Lượt 1: +10 vào 1 -> ret=77; +10 vào 3 -> thành công (160) -> nới trần cho 1!
+    # Lượt 2: +10 vào 1 -> thành công; +10 vào 3 -> thành công
+    state = {"sp": 50, "s1": 200, "s2": 50, "s3": 150}
+
+    def _handler(_ep, _op_id, body):
+        attr = int(body["lAttribType"])
+        amt = int(body["lAdd"])
+        if amt > state["sp"]:
+            return {"ret": 38}
+        if attr == 1 and state["s1"] + amt > state["s2"] + state["s3"]:
+            return {"ret": 77}
+        if attr == 3 and state["s3"] + amt > state["s1"] + state["s2"]:
+            return {"ret": 77}
+        state["sp"] -= amt
+        state[f"s{attr}"] += amt
+        return {"ret": 0}
+
+    g = General(id=10, name="QuanVũ", role="vo", level=50, morale=100, stamina=100, stamina_max=100, skill_point=50)
+    roster = Roster(cities=[_make_city(10129, "1")], _generals={10129: [g]})
+    gw = FakeGateway(_handler)
+
+    summary = add_points_generals(gw, roster, [10], mode=ADD_POINT_MODE_PAIR_1_3, points_per_add=10, times=2)
+    assert summary.generals_succeeded == 1
+    assert summary.total_points_added == 30
+    assert summary.requests_sent == 4
+    assert summary.requests_succeeded == 3
+    assert state == {"sp": 20, "s1": 210, "s2": 50, "s3": 170}
+
+
+def test_add_points_generals_add_all_steps_down_10_3_1_max_and_pair():
+    from linhvuong.generals import ADD_POINT_MODE_MAX_1, ADD_POINT_MODE_PAIR_1_3, add_points_generals
+
+    # 1) Max 1 với 24 điểm: +10, +10, (thử +10 -> ret=38), +3, (thử +3 -> ret=38), +1, (thử +1 -> ret=38)
+    sp_max = {"sp": 24, "s1": 100, "s2": 100, "s3": 100}
+
+    def _max_handler(_ep, _op_id, body):
+        amt = int(body["lAdd"])
+        if amt > sp_max["sp"]:
+            return {"ret": 38}
+        sp_max["sp"] -= amt
+        sp_max["s1"] += amt
+        return {"ret": 0}
+
+    g_max = General(id=11, name="TriệuVân", role="vo", level=50, morale=100, stamina=100, stamina_max=100, skill_point=24)
+    r_max = Roster(cities=[_make_city(10129, "1")], _generals={10129: [g_max]})
+    gw_max = FakeGateway(_max_handler)
+    s_max = add_points_generals(gw_max, r_max, [11], mode=ADD_POINT_MODE_MAX_1, add_all=True)
+    assert s_max.total_points_added == 24
+    assert sp_max["sp"] == 0
+    assert [int(b["lAdd"]) for _, _, b in gw_max.calls] == [10, 10, 10, 3, 3, 1, 1]
+
+    # 2) Pair 1 & 3 với 27 điểm: +10 (1), +10 (3), thử +10 (1) -> ret=38 => hạ +3 (1), +3 (3), thử +3 (1) -> ret=38 => hạ +1 (1), thử +1 (3) -> ret=38
+    sp_pair = {"sp": 27, "s1": 100, "s2": 100, "s3": 100}
+
+    def _pair_handler(_ep, _op_id, body):
+        attr = int(body["lAttribType"])
+        amt = int(body["lAdd"])
+        if amt > sp_pair["sp"]:
+            return {"ret": 38}
+        sp_pair["sp"] -= amt
+        sp_pair[f"s{attr}"] += amt
+        return {"ret": 0}
+
+    g_pair = General(id=12, name="GiaCát", role="van", level=50, morale=100, stamina=100, stamina_max=100, skill_point=27)
+    r_pair = Roster(cities=[_make_city(10129, "1")], _generals={10129: [g_pair]})
+    gw_pair = FakeGateway(_pair_handler)
+    s_pair = add_points_generals(gw_pair, r_pair, [12], mode=ADD_POINT_MODE_PAIR_1_3, add_all=True)
+    assert s_pair.total_points_added == 27
+    assert sp_pair == {"sp": 0, "s1": 114, "s2": 100, "s3": 113}
+
+
+def test_add_points_generals_allows_busy_skips_zero_points_and_supports_stop():
+    import threading
+    from linhvuong.generals import ADD_POINT_MODE_MAX_1, add_points_generals
+
+    g_busy = General(id=1, name="Busy", role="vo", level=10, morale=100, stamina=100, stamina_max=100, status=16, skill_point=20)
+    g_zero = General(id=2, name="Zero", role="van", level=10, morale=100, stamina=100, stamina_max=100, status=0, skill_point=0)
+    g_ok = General(id=3, name="Ready", role="vo", level=10, morale=100, stamina=100, stamina_max=100, status=0, skill_point=30)
+    roster = Roster(cities=[_make_city(10129, "1")], _generals={10129: [g_busy, g_zero, g_ok]})
+
+    stop_ev = threading.Event()
+    calls = []
+
+    def _handler(_ep, _op_id, body):
+        calls.append(int(body["lGeneralID"]))
+        if len(calls) == 1:
+            return {"ret": 0}
+        if len(calls) == 2:
+            # Lần 2 của g_busy gặp hết điểm -> sang g_ok
+            return {"ret": 38}
+        stop_ev.set()
+        return {"ret": 0}
+
+    gw = FakeGateway(_handler)
+    s = add_points_generals(gw, roster, [1, 2, 3, 999], mode=ADD_POINT_MODE_MAX_1, points_per_add=10, stop_event=stop_ev)
+    assert s.skipped_no_points == 1
+    assert s.total_points_added == 20
+    assert s.generals_succeeded == 2
+    assert calls == [1, 1, 3]
+    assert s.stopped is True

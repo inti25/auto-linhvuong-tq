@@ -59,10 +59,13 @@ from .enhance import (
 )
 from .gateway import GatewayClient
 from .generals import (
+    ADD_POINT_MODE_PAIR_1_3,
+    ADD_POINT_MODES,
     EQUIP_MODE_ASSIGN,
     EQUIP_MODE_UNEQUIP,
     EQUIP_TYPES,
     RENAME_MAX_WIDTH,
+    add_points_generals,
     auto_swap_low_stamina_tacticians,
     build_rename_plan,
     collect_reward_targets,
@@ -70,6 +73,7 @@ from .generals import (
     configure_tacticians,
     fetch_equipment_inventory,
     general_name_width,
+    is_max_add_mode,
     parse_stamina_threshold,
     rename_generals,
     reward_all_generals,
@@ -201,6 +205,7 @@ LOG_CHANNELS = (
     "chest",
     "armament",
     "rename",
+    "add_points",
     "enhance",
     "training",
 )
@@ -260,6 +265,10 @@ def serialize_roster(roster: Optional[Roster]) -> dict:
                 "is_mayor": bool(getattr(g, "is_mayor", False)),
                 "is_tactician": bool(getattr(g, "is_tactician", False)),
                 "upgrading_time": getattr(g, "upgrading_time", 0),
+                "stat1": getattr(g, "stat1", 0),
+                "stat2": getattr(g, "stat2", 0),
+                "stat3": getattr(g, "stat3", 0),
+                "skill_point": getattr(g, "skill_point", 0),
                 "army": {
                     "infantry": army.infantry if army else 0,
                     "cavalry": army.cavalry if army else 0,
@@ -531,6 +540,11 @@ class AccountSession:
         self._ren_stop = threading.Event()
         self._ren_status = "Sẵn sàng"
         self._ren_progress = {"done": 0, "total": 0}
+
+        self._add_pts_running = False
+        self._add_pts_stop = threading.Event()
+        self._add_pts_status = "Sẵn sàng"
+        self._add_pts_progress = {"done": 0, "total": 0}
 
         self._training_running = False
         self._training_status = "Sẵn sàng"
@@ -877,6 +891,9 @@ class AccountSession:
             "rename_running": self._ren_running,
             "rename_status": self._ren_status,
             "rename_progress": dict(self._ren_progress),
+            "add_points_running": self._add_pts_running,
+            "add_points_status": self._add_pts_status,
+            "add_points_progress": dict(self._add_pts_progress),
             "training_running": self._training_running,
             "training_status": self._training_status,
             "training": self._serialize_training_status(),
@@ -3239,6 +3256,75 @@ class AccountSession:
         self._ren_stop.set()
 
     # -------------------------------------------------------------------------
+    # CỘNG ĐIỂM VĂN QUAN & VÕ TƯỚNG (OPT.ashx?id=67)
+    # -------------------------------------------------------------------------
+    def run_add_points(
+        self,
+        general_ids: list[int],
+        mode: str = ADD_POINT_MODE_PAIR_1_3,
+        points_per_add: int = 10,
+        times: int = 1,
+        add_all: bool = False,
+    ) -> None:
+        if self._add_pts_running:
+            raise RuntimeError("Đang cộng điểm tướng.")
+        ids = [int(i) for i in general_ids]
+        if not ids:
+            raise ValueError("Vui lòng chọn ít nhất 1 tướng để cộng điểm.")
+        if mode not in ADD_POINT_MODES:
+            raise ValueError(f"Chế độ cộng điểm không hợp lệ: {mode}")
+        pts = int(points_per_add)
+        iters = int(times)
+        if not add_all:
+            if pts < 1 or pts > 500:
+                raise ValueError("Số điểm mỗi lần phải từ 1 đến 500.")
+            if not is_max_add_mode(mode) and iters < 1:
+                raise ValueError("Số lần mỗi loại phải lớn hơn hoặc bằng 1.")
+
+        self._add_pts_running = True
+        self._add_pts_stop.clear()
+        self._add_pts_status = "Đang cộng điểm..."
+        self._add_pts_progress = {"done": 0, "total": len(ids)}
+        self._emit("aux_updated", self.get_aux_status())
+
+        def _on_prog(done: int, total: int) -> None:
+            self._add_pts_progress = {"done": done, "total": total}
+            self._emit("aux_updated", self.get_aux_status())
+
+        def _worker():
+            try:
+                fresh = fetch_roster(self.gateway)
+                s = add_points_generals(
+                    self.gateway,
+                    fresh,
+                    ids,
+                    mode=mode,
+                    points_per_add=pts,
+                    times=iters,
+                    add_all=bool(add_all),
+                    stop_event=self._add_pts_stop,
+                    on_log=lambda m: self.append_log("add_points", m),
+                    on_progress=_on_prog,
+                )
+                self._add_pts_status = (
+                    f"Hoàn tất: +{s.total_points_added} điểm ({s.generals_succeeded} tướng), "
+                    f"hết điểm {s.skipped_no_points}, lỗi {s.failed}"
+                )
+                if s.total_points_added > 0:
+                    self.reload_roster()
+            except Exception as exc:
+                self._add_pts_status = f"❌ Lỗi: {exc}"
+                self.append_log("add_points", f"❌ Lỗi cộng điểm: {exc}")
+            finally:
+                self._add_pts_running = False
+                self._emit("aux_updated", self.get_aux_status())
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def stop_add_points(self) -> None:
+        self._add_pts_stop.set()
+
+    # -------------------------------------------------------------------------
     # CAPTCHA / PROXY / RELOGIN / AUTO-RESUME / SHUTDOWN
     # -------------------------------------------------------------------------
     def resume_after_captcha(self) -> None:
@@ -3325,6 +3411,7 @@ class AccountSession:
         self._army_xfer_stop.set()
         self._arm_stop.set()
         self._ren_stop.set()
+        self._add_pts_stop.set()
         self._morale_stop.set()
         self._ditrai_stop.set()
         self._battle_stop.set()
