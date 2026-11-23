@@ -117,76 +117,95 @@ class TaskRunnerThread(threading.Thread):
                 self._log(f"⏹️ Nhiệm vụ '{self.task_id}' đã dừng.")
             return
 
-        while not self.stop_event.is_set():
-            cycle += 1
+        try:
+            while not self.stop_event.is_set():
+                cycle += 1
 
-            # Kiểm tra trạng thái tạm dừng do Captcha
-            if self.paused_for_captcha.is_set():
-                time.sleep(0.5)
-                continue
+                # Kiểm tra trạng thái tạm dừng do Captcha
+                if self.paused_for_captcha.is_set():
+                    time.sleep(0.5)
+                    continue
 
-            try:
-                if hasattr(self.task, "run_step"):
-                    res = self.task.run_step()
-                elif hasattr(self.task, "run_once"):
-                    res = self.task.run_once()
-                elif isinstance(self.task, (list, tuple)):
-                    all_completed = True
-                    missing_subs = []
-                    for sub in list(self.task):
-                        if self.stop_event.is_set():
-                            break
-                        if hasattr(sub, "run_step"):
-                            sub_res = sub.run_step()
-                        elif hasattr(sub, "run_once"):
-                            sub_res = sub.run_once()
-                        else:
-                            sub_res = "ok"
-                        if sub_res == "city_not_found":
-                            missing_subs.append(sub)
-                            continue
-                        if sub_res != "all_buildings_completed":
-                            all_completed = False
+                try:
+                    if hasattr(self.task, "run_step"):
+                        res = self.task.run_step()
+                    elif hasattr(self.task, "run_once"):
+                        res = self.task.run_once()
+                    elif isinstance(self.task, (list, tuple)):
+                        all_completed = True
+                        missing_subs = []
+                        for sub in list(self.task):
+                            if self.stop_event.is_set():
+                                break
+                            if hasattr(sub, "run_step"):
+                                sub_res = sub.run_step()
+                            elif hasattr(sub, "run_once"):
+                                sub_res = sub.run_once()
+                            else:
+                                sub_res = "ok"
+                            if sub_res == "city_not_found":
+                                missing_subs.append(sub)
+                                continue
+                            if sub_res != "all_buildings_completed":
+                                all_completed = False
 
-                    if missing_subs and isinstance(self.task, list):
-                        self.task[:] = [s for s in self.task if s not in missing_subs]
-                        if not self.task:
-                            self._log("⚠️ Không còn căn cứ hợp lệ nào trong hàng đợi tác vụ.")
+                        if missing_subs and isinstance(self.task, list):
+                            self.task[:] = [s for s in self.task if s not in missing_subs]
+                            if not self.task:
+                                self._log("⚠️ Không còn căn cứ hợp lệ nào trong hàng đợi tác vụ.")
+                                self._set_status(TaskStatus.COMPLETED)
+                                break
+
+                        if all_completed and self.task:
+                            self._log("🎉 Toàn bộ công trình quy hoạch của tất cả các căn cứ đã hoàn tất!")
                             self._set_status(TaskStatus.COMPLETED)
                             break
+                        res = "ok"
+                    elif callable(self.task):
+                        res = str(self.task())
+                    else:
+                        res = "ok"
 
-                    if all_completed and self.task:
-                        self._log("🎉 Toàn bộ công trình quy hoạch của tất cả các căn cứ đã hoàn tất!")
+                    if res in ("all_buildings_completed", "nien_thu_jade_obtained", "completed"):
+                        self._log(
+                            "🎉 Đã nhận 玉兔呈祥 — Hoàn tất Auto Niên Thú!"
+                            if res == "nien_thu_jade_obtained"
+                            else "🎉 Toàn bộ công trình quy hoạch đã hoàn tất!"
+                        )
                         self._set_status(TaskStatus.COMPLETED)
                         break
-                    res = "ok"
-                elif callable(self.task):
-                    res = str(self.task())
-                else:
-                    res = "ok"
 
-                if res in ("all_buildings_completed", "nien_thu_jade_obtained", "completed"):
-                    self._log(
-                        "🎉 Đã nhận 玉兔呈祥 — Hoàn tất Auto Niên Thú!"
-                        if res == "nien_thu_jade_obtained"
-                        else "🎉 Toàn bộ công trình quy hoạch đã hoàn tất!"
-                    )
-                    self._set_status(TaskStatus.COMPLETED)
+                    if res in ("call_failed:90", "call_failed:236", "caller_login_failed", "caller_captcha"):
+                        fatal_msgs = {
+                            "call_failed:90": "❌ Hết đạo cụ gọi mục tiêu (mã lỗi 90). Dừng tác vụ.",
+                            "call_failed:236": "⚠️ Máy chủ chưa mở sự kiện (mã lỗi 236). Dừng tác vụ.",
+                            "caller_login_failed": "❌ Tài Khoản Gọi Hộ đăng nhập thất bại. Dừng tác vụ.",
+                            "caller_captcha": "⚠️ Tài Khoản Gọi Hộ gặp Captcha. Dừng tác vụ để kiểm tra.",
+                        }
+                        self._log(fatal_msgs[res])
+                        self._set_status(TaskStatus.STOPPED)
+                        break
+
+                except CaptchaRequired:
+                    logger.warning(f"Server yêu cầu Captcha trong nhiệm vụ '{self.task_id}'!")
+                    self._log("⚠️ Server yêu cầu Captcha! Tạm dừng tác vụ chờ giải mã.")
+                    self._set_status(TaskStatus.PAUSED_CAPTCHA)
+                    self.paused_for_captcha.set()
+                    continue
+                except Exception as e:
+                    logger.exception(f"Lỗi ngoại lệ trong nhiệm vụ '{self.task_id}': {e}")
+                    self._log(f"❌ Lỗi ngoại lệ: {e}")
+                    self._set_status(TaskStatus.ERROR)
+
+                if self.wait_cycle(self.interval, self.jitter):
                     break
-
-            except CaptchaRequired:
-                logger.warning(f"Server yêu cầu Captcha trong nhiệm vụ '{self.task_id}'!")
-                self._log("⚠️ Server yêu cầu Captcha! Tạm dừng tác vụ chờ giải mã.")
-                self._set_status(TaskStatus.PAUSED_CAPTCHA)
-                self.paused_for_captcha.set()
-                continue
-            except Exception as e:
-                logger.exception(f"Lỗi ngoại lệ trong nhiệm vụ '{self.task_id}': {e}")
-                self._log(f"❌ Lỗi ngoại lệ: {e}")
-                self._set_status(TaskStatus.ERROR)
-
-            if self.wait_cycle(self.interval, self.jitter):
-                break
+        finally:
+            close_fn = getattr(self.task, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
 
         if self.status != TaskStatus.COMPLETED:
             self._set_status(TaskStatus.STOPPED)

@@ -8,12 +8,15 @@ from typing import Optional
 
 from ..battle import ATTACK_ACTION_COMBO_OPTIONS
 from ..generals import auto_swap_low_stamina_tacticians, parse_stamina_threshold
+from ..helper_caller import HelperCallerSession, canonical_account_key
 from ..locks import TargetLocks
+from ..paths import get_data_dir
 from ..roster import fetch_roster as _default_fetch_roster
 from ..scan import Scanner
+from ..security import CredentialVault, VaultError, resolve_or_create_vault_key
 from ..tasks.base import CaptchaRequired, TaskContext
 from ..tasks.binh_man import MAN_TARGET_OPTIONS
-from ..tasks.goi_dan import GoiDan
+from ..tasks.goi_dan import VONG_LINH, GoiDan
 from ..tasks.morale import MoraleTrainer as _DefaultMoraleTrainer
 from ..tasks.thao_phat import ERROR_MESSAGES, TargetArmy
 from ..troops import ArmyProvisioner
@@ -71,6 +74,8 @@ class GoiDanMixin:
             "min_tactician_stamina": self.gd_min_tactician_stamina_var.get() if hasattr(self, "gd_min_tactician_stamina_var") else "30",
             "attack_action_mode": self.gd_action_mode_var.get() if hasattr(self, "gd_action_mode_var") else "adaptive",
             "action_combo_idx": self.gd_action_mode_combo.current() if hasattr(self, "gd_action_mode_combo") else 0,
+            "caller_enabled": bool(self.gd_caller_enabled_var.get()) if hasattr(self, "gd_caller_enabled_var") else False,
+            "caller_username": (self.gd_caller_user_var.get() or "").strip() if hasattr(self, "gd_caller_user_var") else "",
         }
 
     def _apply_goi_dan_profile_dict(self, gd_data: dict) -> None:
@@ -118,6 +123,10 @@ class GoiDanMixin:
             self.gd_auto_swap_tactician_var.set(bool(gd_data["auto_swap_tactician"]))
         if hasattr(self, "gd_min_tactician_stamina_var") and "min_tactician_stamina" in gd_data:
             self.gd_min_tactician_stamina_var.set(str(gd_data["min_tactician_stamina"]))
+        if hasattr(self, "gd_caller_enabled_var") and "caller_enabled" in gd_data:
+            self.gd_caller_enabled_var.set(bool(gd_data["caller_enabled"]))
+        if hasattr(self, "gd_caller_user_var") and "caller_username" in gd_data:
+            self.gd_caller_user_var.set(str(gd_data.get("caller_username") or ""))
         apply_action_mode_widgets(
             getattr(self, "gd_action_mode_var", None),
             getattr(self, "gd_action_mode_combo", None),
@@ -243,9 +252,40 @@ class GoiDanMixin:
         self.gd_action_mode_combo.grid(row=5, column=1, columnspan=3, sticky="w", padx=4, pady=4)
         self.gd_action_mode_combo.bind("<<ComboboxSelected>>", self._on_gd_action_mode_changed)
 
+        # Row 6: Tài Khoản Gọi Hộ (Man Thường Cấp 1–10)
+        self.gd_caller_enabled_var = tk.BooleanVar(value=False)
+        self.gd_caller_user_var = tk.StringVar(value="")
+        self.gd_caller_pass_var = tk.StringVar(value="")
+        self.gd_caller_save_vault_var = tk.BooleanVar(value=False)
+        caller_f = tk.Frame(top, bg=BG)
+        caller_f.grid(row=6, column=0, columnspan=4, sticky="w", padx=4, pady=4)
+        ttk.Checkbutton(
+            caller_f,
+            text="Tài khoản gọi hộ:",
+            variable=self.gd_caller_enabled_var,
+            style="TCheckbutton",
+        ).pack(side="left", padx=(0, 6))
+        tk.Label(caller_f, text="TK:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 2))
+        ttk.Entry(caller_f, textvariable=self.gd_caller_user_var, width=14).pack(side="left", padx=(0, 6))
+        tk.Label(caller_f, text="MK:", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 2))
+        ttk.Entry(caller_f, textvariable=self.gd_caller_pass_var, width=12, show="•").pack(side="left", padx=(0, 6))
+        ttk.Checkbutton(
+            caller_f,
+            text="Lưu Két",
+            variable=self.gd_caller_save_vault_var,
+            style="TCheckbutton",
+        ).pack(side="left", padx=(0, 6))
+        self.gd_caller_test_btn = ttk.Button(
+            caller_f,
+            text="🔑 Kiểm tra",
+            style="Secondary.TButton",
+            command=self._test_gd_caller_login,
+        )
+        self.gd_caller_test_btn.pack(side="left")
+
         # Điều khiển
         ctrl_frame = tk.Frame(top, bg=BG)
-        ctrl_frame.grid(row=0, column=4, rowspan=6, padx=16)
+        ctrl_frame.grid(row=0, column=4, rowspan=7, padx=16)
         self.gd_start_btn = ttk.Button(ctrl_frame, text="▶️ Bắt đầu Gọi Man", style="Success.TButton", command=self._toggle_goidan)
         self.gd_start_btn.pack(side="top", pady=2)
         self.gd_once_btn = ttk.Button(ctrl_frame, text="⚡ Chạy 1 Lượt", style="Action.TButton", command=self._run_goidan_once)
@@ -403,6 +443,101 @@ class GoiDanMixin:
             return self.gd_target_options[sel_idx][0]
         return 301
 
+    def _resolve_gd_vault(self) -> Optional[CredentialVault]:
+        try:
+            ddir = get_data_dir()
+            return CredentialVault(data_dir=ddir, master_key=resolve_or_create_vault_key(ddir))
+        except Exception:
+            return None
+
+    def _build_gd_caller_provider(
+        self,
+        target_types: list[int],
+        *,
+        require_enabled: bool = True,
+    ) -> tuple[Optional[HelperCallerSession], str]:
+        enabled = bool(self.gd_caller_enabled_var.get()) if hasattr(self, "gd_caller_enabled_var") else False
+        if require_enabled and not enabled:
+            return None, ""
+        if require_enabled and any(int(t) == VONG_LINH for t in target_types):
+            raise ValueError(
+                "Chế độ Tài Khoản Gọi Hộ chỉ hỗ trợ Man Thường (Cấp 1–10), không hỗ trợ Vong Linh (301)."
+            )
+        usr = (self.gd_caller_user_var.get() or "").strip() if hasattr(self, "gd_caller_user_var") else ""
+        if not usr:
+            raise ValueError("Vui lòng nhập tên Tài Khoản Gọi Hộ.")
+
+        sid = int(getattr(self, "server_id", 0) or 0)
+        pwd = self.gd_caller_pass_var.get() if hasattr(self, "gd_caller_pass_var") else ""
+        save_vault = bool(self.gd_caller_save_vault_var.get()) if hasattr(self, "gd_caller_save_vault_var") else False
+        vault = self._resolve_gd_vault()
+        key = canonical_account_key(usr, sid) if sid > 0 else ""
+
+        if not pwd and vault and vault.is_unlocked() and key:
+            try:
+                pwd = vault.get_password(key)
+            except VaultError:
+                pwd = ""
+
+        if save_vault and pwd and vault and vault.is_unlocked() and key:
+            existing_entry = None
+            try:
+                existing_entry = vault.get_entry(key)
+            except VaultError:
+                existing_entry = None
+            eff_resume = bool(existing_entry.get("auto_resume", False)) if existing_entry else False
+            vault.set_entry(key, pwd, auto_resume=eff_resume)
+
+        main_usr = str(getattr(self, "username", "") or "").strip()
+
+        def _lookup_self_gw(lookup_sid: int, lookup_usr: str):
+            if main_usr and int(lookup_sid) == sid and main_usr.lower() == lookup_usr.strip().lower():
+                return getattr(self, "gateway", None)
+            return None
+
+        if _lookup_self_gw(sid, usr) is None and not pwd:
+            raise ValueError(
+                f"Chưa có mật khẩu cho Tài Khoản Gọi Hộ '{usr}'. Vui lòng nhập mật khẩu hoặc lưu Két."
+            )
+
+        provider = HelperCallerSession(
+            server_id=sid,
+            username=usr,
+            password=pwd,
+            proxy_raw=getattr(self, "_proxy_raw", "") or "",
+            proxy_user=getattr(self, "_proxy_user", "") or "",
+            proxy_pass=getattr(self, "_proxy_pass", "") or "",
+            proxy_pool=getattr(self, "proxy_pool", None),
+            session_lookup=_lookup_self_gw,
+            notify=lambda m: self.after(0, self._append_gd_log, m),
+        )
+        return provider, usr
+
+    def _test_gd_caller_login(self):
+        msgbox = resolve_dashboard_symbol("messagebox", _default_messagebox)
+        try:
+            provider, usr = self._build_gd_caller_provider([], require_enabled=False)
+        except (ValueError, VaultError) as exc:
+            msgbox.showwarning("Cảnh báo", str(exc))
+            return
+
+        if provider is None:
+            return
+
+        def _worker():
+            try:
+                info = provider.test_connection()
+                msg = (
+                    f"✅ Tài Khoản Gọi Hộ '{usr}' trùng phiên hiện tại — sẵn sàng dùng lại."
+                    if info.get("reused_session")
+                    else f"✅ Kiểm tra đăng nhập Tài Khoản Gọi Hộ '{usr}' thành công!"
+                )
+                self.after(0, self._append_gd_log, msg)
+            except Exception as exc:
+                self.after(0, self._append_gd_log, f"❌ Kiểm tra đăng nhập Tài Khoản Gọi Hộ '{usr}' thất bại: {exc}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _create_goidan_task(self) -> Optional[GoiDan]:
         msgbox = resolve_dashboard_symbol("messagebox", _default_messagebox)
         sel_idx = self.gd_city_combo.current()
@@ -429,6 +564,11 @@ class GoiDanMixin:
             target_types = [self._get_gd_target_type()]
         target_type = target_types[0]
         mode = "vong_linh" if target_type == 301 else "dan"
+        try:
+            caller_provider, caller_usr = self._build_gd_caller_provider(target_types, require_enabled=True)
+        except (ValueError, VaultError) as exc:
+            msgbox.showwarning("Cảnh báo", str(exc))
+            return None
         radius = int(self.gd_radius_var.get() or "5")
         locks = getattr(self, "shared_target_locks", None) or TargetLocks()
         scanner = Scanner(
@@ -498,6 +638,8 @@ class GoiDanMixin:
             min_morale=min_morale,
             auto_swap_tactician=auto_swap_tactician,
             min_tactician_stamina=min_tactician_stamina,
+            caller_provider=caller_provider,
+            caller_username=caller_usr,
         )
 
     def _manual_adjust_gd_troops(self):
@@ -672,7 +814,19 @@ class GoiDanMixin:
         task = self._create_goidan_task()
         if not task:
             return
-        threading.Thread(target=lambda: self.after(0, self._append_gd_log, f"⚡ Kết quả chạy 1 lượt: {task.run_once()}"), daemon=True).start()
+
+        def _worker():
+            try:
+                res = task.run_once()
+                self.after(0, self._append_gd_log, f"⚡ Kết quả chạy 1 lượt: {res}")
+            except CaptchaRequired:
+                self.after(0, self._append_gd_log, "⛔ Gọi Man gặp Captcha (mã 110).")
+            except Exception as exc:
+                self.after(0, self._append_gd_log, f"❌ Lỗi chạy 1 lượt Gọi Man: {exc}")
+            finally:
+                task.close()
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _toggle_goidan(self):
         if not self._gd_runner or not self._gd_runner.is_alive():

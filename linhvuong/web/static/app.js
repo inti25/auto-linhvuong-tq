@@ -40,6 +40,7 @@
     auxSyncedAt: 0,
     auxTimer: null,
     enhanceUi: {},
+    gdCallerPassByKey: {},
   };
 
   const $ = (id) => document.getElementById(id);
@@ -734,7 +735,24 @@
     if (typeof renderTrainingModalSlots === "function" && $("trn-slots-grid")) renderTrainingModalSlots();
     const ntSt = $("nt-status-lbl");
     if (ntSt) ntSt.textContent = ntStatusText();
+    const gdCallerSt = $("gd-caller-status");
+    if (gdCallerSt) {
+      const callerAux = aux.goidan_caller || {};
+      const callerUsr = $("gd-caller-user")?.value ?? state.snapshot?.profile?.goi_dan?.caller_username ?? "";
+      gdCallerSt.textContent = formatGdCallerStatusText(callerAux, callerUsr);
+      gdCallerSt.style.color = callerAux.ready ? "#4ade80" : "var(--muted)";
+    }
     if (typeof updateEnhanceAuxDom === "function") updateEnhanceAuxDom(aux);
+  }
+
+  function formatGdCallerStatusText(callerAux, username) {
+    const usr = String(callerAux?.username || username || "").trim();
+    if (!usr) return "Chưa nhập tài khoản";
+    if (callerAux?.reused_session) return "🔗 Đang dùng phiên sẵn có";
+    if (callerAux?.has_vault_password && callerAux?.has_ram_password) return "🔐 Đã lưu RAM & Két";
+    if (callerAux?.has_vault_password) return "🔐 Đã lưu trong Két";
+    if (callerAux?.has_ram_password) return "✅ Đã nhập trong phiên";
+    return "Chưa có mật khẩu";
   }
 
   function ntStatusText() {
@@ -2011,6 +2029,8 @@
   function renderGoiDanTab(root) {
     const snap = state.snapshot;
     const gd = snap.profile.goi_dan;
+    const callerAux = snap.aux?.goidan_caller || {};
+    const draftPass = state.gdCallerPassByKey[state.currentKey] || "";
     const cities = snap.roster.cities?.length ? snap.roster.cities : (snap.roster.bases || []);
     const cid = gd.city_id || cities[0]?.id || 0;
     const gens = (snap.roster.generals || []).filter((g) => g.city_id === cid && g.role === "vo");
@@ -2039,6 +2059,14 @@
         <div class="form-row">
           <label><input id="gd-swap-tac" type="checkbox" ${gd.auto_swap_tactician ? "checked" : ""}/> Tự động đổi mưu sĩ (thể lực ≥</label>
           <input id="gd-min-tac-stam" type="number" min="0" max="100" value="${esc(gd.min_tactician_stamina ?? "30")}" style="width:55px;"/>%)
+        </div>
+        <div class="form-row">
+          <label><input id="gd-caller-en" type="checkbox" ${gd.caller_enabled ? "checked" : ""}/> Tài khoản gọi hộ</label>
+          <label>TK <input id="gd-caller-user" type="text" value="${esc(gd.caller_username || "")}" placeholder="Username cùng server" style="width:130px;"/></label>
+          <label>MK <input id="gd-caller-pass" type="password" value="${esc(draftPass)}" placeholder="${callerAux.ready ? "(Đã lưu sẵn)" : "Mật khẩu acc phụ"}" style="width:125px;"/></label>
+          <label><input id="gd-caller-vault" type="checkbox" ${callerAux.has_vault_password ? "checked" : ""}/> Lưu Két</label>
+          <button id="btn-gd-caller-test" type="button" class="btn-sm">🔑 Kiểm tra</button>
+          <span id="gd-caller-status" style="font-size:12px;color:${callerAux.ready ? "#4ade80" : "var(--muted)"};">${esc(formatGdCallerStatusText(callerAux, gd.caller_username))}</span>
         </div>
         <div class="form-row" style="margin-bottom:0;">
           <span style="color:var(--muted);">Mục tiêu:</span>
@@ -2081,21 +2109,87 @@
           min_morale: $("gd-minm").value,
           auto_swap_tactician: $("gd-swap-tac").checked,
           min_tactician_stamina: $("gd-min-tac-stam").value,
+          caller_enabled: $("gd-caller-en").checked,
+          caller_username: ($("gd-caller-user").value || "").trim(),
           target_types: types.length ? types : [301],
           target_type: types[0] || 301,
           generals: [...root.querySelectorAll(".gd-gen-chk:checked")].map((x) => Number(x.dataset.gid)),
         },
       });
     };
+    const syncGdCallerCredentials = async ({ sendVault = false } = {}) => {
+      const usr = ($("gd-caller-user")?.value || "").trim();
+      const pwd = $("gd-caller-pass")?.value || "";
+      state.gdCallerPassByKey[state.currentKey] = pwd;
+      const saveVault = !!$("gd-caller-vault")?.checked;
+      if (!usr) return null;
+      if (!pwd && !sendVault) return null;
+      const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tasks/goidan/caller/credentials`, {
+        method: "POST",
+        body: {
+          username: usr,
+          password: pwd,
+          save_to_vault: sendVault || saveVault ? saveVault : null,
+        },
+      });
+      if (res.caller && state.snapshot?.aux) {
+        state.snapshot.aux.goidan_caller = res.caller;
+        renderAuxDomOnly();
+      }
+      return res;
+    };
     $("gd-city").onchange = () => { syncGd(); renderActiveTab(); };
-    ["gd-rad", "gd-int", "gd-act", "gd-inf", "gd-cav", "gd-arc", "gd-rec", "gd-mor", "gd-minm", "gd-swap-tac", "gd-min-tac-stam"].forEach((id) => ($(id).onchange = syncGd));
+    ["gd-rad", "gd-int", "gd-act", "gd-inf", "gd-cav", "gd-arc", "gd-rec", "gd-mor", "gd-minm", "gd-swap-tac", "gd-min-tac-stam", "gd-caller-en", "gd-caller-user"].forEach((id) => ($(id).onchange = syncGd));
+    $("gd-caller-pass").oninput = () => { state.gdCallerPassByKey[state.currentKey] = $("gd-caller-pass").value || ""; };
+    $("gd-caller-pass").onchange = () => {
+      syncGdCallerCredentials({ sendVault: !!$("gd-caller-vault")?.checked }).catch((e) => showToast("Lỗi", e.message, "error"));
+    };
+    $("gd-caller-vault").onchange = () => {
+      syncGdCallerCredentials({ sendVault: true }).catch((e) => showToast("Lỗi", e.message, "error"));
+    };
+    $("btn-gd-caller-test").onclick = async () => {
+      const usr = ($("gd-caller-user").value || "").trim();
+      const pwd = $("gd-caller-pass").value || "";
+      const saveVault = !!$("gd-caller-vault").checked;
+      try {
+        await saveProfileImmediate(state.snapshot.profile);
+        const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tasks/goidan/caller/test`, {
+          method: "POST",
+          body: { username: usr, password: pwd, save_to_vault: saveVault ? true : null },
+        });
+        if (res.status && state.snapshot?.aux) {
+          state.snapshot.aux.goidan_caller = res.status;
+          renderAuxDomOnly();
+        }
+        showToast("Thành công", res.reused_session ? `Đang dùng lại phiên '${res.username}'.` : `Đăng nhập '${res.username}' thành công!`, "success");
+      } catch (e) {
+        showToast("Kiểm tra thất bại", e.message, "error");
+      }
+    };
     $("btn-gd-gen-all").onclick = () => { root.querySelectorAll(".gd-gen-chk").forEach((c) => (c.checked = true)); syncGd(); };
     $("btn-gd-gen-none").onclick = () => { root.querySelectorAll(".gd-gen-chk").forEach((c) => (c.checked = false)); syncGd(); };
     root.querySelectorAll(".gd-mtype, .gd-gen-chk").forEach((c) => (c.onchange = syncGd));
-    $("btn-tgl-gd").onclick = () => toggleTask("goidan");
+    $("btn-tgl-gd").onclick = async () => {
+      if (!state.snapshot?.summary?.tasks?.goidan?.running && $("gd-caller-en")?.checked && ($("gd-caller-pass")?.value || $("gd-caller-vault")?.checked)) {
+        try {
+          await syncGdCallerCredentials({ sendVault: !!$("gd-caller-vault")?.checked });
+        } catch (e) {
+          showToast("Lỗi", e.message, "error");
+          return;
+        }
+      }
+      await toggleTask("goidan");
+    };
     $("btn-gd-once").onclick = async () => {
-      await saveProfileImmediate(state.snapshot.profile);
-      api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tasks/goidan/once`, { method: "POST" }).catch((e) => showToast("Lỗi", e.message, "error"));
+      try {
+        if ($("gd-caller-en")?.checked && ($("gd-caller-pass")?.value || $("gd-caller-vault")?.checked)) {
+          await syncGdCallerCredentials({ sendVault: !!$("gd-caller-vault")?.checked });
+        }
+        await saveProfileImmediate(state.snapshot.profile);
+        await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/tasks/goidan/once`, { method: "POST" });
+      } catch (e) {
+        showToast("Lỗi", e.message, "error");
+      }
     };
     $("btn-gd-prov").onclick = async () => {
       await saveProfileImmediate(state.snapshot.profile);

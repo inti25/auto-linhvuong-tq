@@ -1128,6 +1128,294 @@ def test_goi_man_auto_swap_tactician_and_fallback_when_no_replacement():
     assert any("giữ nguyên" in a.lower() for a in alerts2)
 
 
+def test_goi_man_helper_caller_pulls_via_alt_gateway_and_main_attacks():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    origin_mid = mid_from_coords(180, 67)
+    far_mid = mid_from_coords(194, 67)
+    empty_mid = mid_from_coords(181, 67)
+
+    main_server = FakeServer(
+        map_views={
+            origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]},
+            far_mid: {"npc_tent": [man(194, 67, 5501, 1)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+
+    def alt_handle_call_69():
+        main_server.map_views[far_mid] = {"npc_tent": []}
+        main_server.map_views[origin_mid] = {
+            "npc_tent": [man(181, 67, 5501, 1)],
+            "infos": [[empty_mid, 1, 0, 0, 0, 0]],
+        }
+        return {"ret": 0}
+
+    alt_server = FakeServer(
+        handlers={
+            "OPT.ashx?id=69": alt_handle_call_69,
+        }
+    )
+    alt_gw = GatewayClient(58, alt_server, sleep=lambda _s: None)
+    ctx, alerts = ctx_for(main_server)
+
+    task = GoiMan(
+        ctx,
+        generals=[6330],
+        origin=(180, 67),
+        radius=5,
+        target_types=[1, 2],
+        city_id=10254,
+        caller_gateway=alt_gw,
+        caller_username="inti00",
+        sleep_fn=lambda _s: None,
+    )
+    out = task.run_once()
+    assert out == "called_and_attacked"
+
+    # Tài khoản chính chỉ chuyển thành & xuất quân, không gọi id=69
+    assert any(k == "/api/city/current" for k, _ in main_server.calls)
+    assert not any(k == "OPT.ashx?id=69" for k, _ in main_server.calls)
+    assert any(k == "OPT.ashx?id=53" and d["target_id"] == "5501" for k, d in main_server.calls)
+
+    # Tài khoản gọi hộ chỉ gọi OPT.ashx?id=69 (type=63), không đổi thành sang thành tài khoản chính
+    assert not any(k == "/api/city/current" for k, _ in alt_server.calls)
+    alt_69 = [d for k, d in alt_server.calls if k == "OPT.ashx?id=69"]
+    assert len(alt_69) == 1
+    assert alt_69[0]["type"] == "63"
+    assert alt_69[0]["param1"] == "5501"
+    assert alt_69[0]["param2"] == str(empty_mid)
+    assert any("[inti00]" in m for m in alerts)
+
+
+def test_goi_man_helper_caller_blocks_vong_linh_301():
+    import pytest
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    main_server = FakeServer()
+    alt_gw = GatewayClient(58, FakeServer(), sleep=lambda _s: None)
+    ctx, _ = ctx_for(main_server)
+
+    with pytest.raises(ValueError, match="Vong Linh"):
+        GoiMan(ctx, generals=[10], origin=(10, 10), target_types=[301], city_id=101, caller_gateway=alt_gw)
+
+    with pytest.raises(ValueError, match="Vong Linh"):
+        GoiMan(ctx, generals=[10], origin=(10, 10), target_types=[1, 301], city_id=101, caller_gateway=alt_gw)
+
+
+def test_goi_man_helper_caller_errors_stop_without_fallback_and_near_man_skips_alt():
+    from linhvuong.helper_caller import HelperCallerLoginError
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    origin_mid = mid_from_coords(20, 20)
+    far_mid = mid_from_coords(34, 20)
+    empty_mid = mid_from_coords(21, 20)
+
+    # 1. Đã có Man sát thành -> tài khoản chính tự đánh không đụng tới tài khoản gọi hộ
+    near_server = FakeServer(
+        map_views={origin_mid: {"npc_tent": [man(21, 20, 4444, 1)], "infos": [[empty_mid, 1, 0, 0, 0, 0]]}},
+        handlers={"OPT.ashx?id=53": {"ret": 0}},
+    )
+    alt_server = FakeServer()
+    alt_gw = GatewayClient(58, alt_server, sleep=lambda _s: None)
+    ctx_near, _ = ctx_for(near_server)
+    assert GoiMan(ctx_near, generals=[10], origin=(20, 20), radius=5, target_types=[1], city_id=123, caller_gateway=alt_gw).run_once() == "attacked"
+    assert alt_server.calls == []
+
+    # 2. Hết đạo cụ (ret=90) -> trả call_failed:90, nhả khóa, không fallback sang main
+    main_server = FakeServer(
+        map_views={
+            origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]},
+            far_mid: {"npc_tent": [man(34, 20, 5555, 1)]},
+        },
+        handlers={"City.ashx?id=50": {"ret": 0}},
+    )
+    alt_90 = FakeServer(handlers={"OPT.ashx?id=69": {"ret": 90}})
+    ctx, alerts = ctx_for(main_server)
+    caller_alerts = []
+    t90 = GoiMan(
+        ctx,
+        generals=[10],
+        origin=(20, 20),
+        radius=5,
+        target_types=[1, 2],
+        city_id=123,
+        caller_gateway=GatewayClient(58, alt_90, sleep=lambda _s: None),
+        caller_username="inti00",
+        on_caller_alert=lambda kind, msg: caller_alerts.append((kind, msg)),
+    )
+    assert t90.run_once() == "call_failed:90"
+    assert not ctx.locks.is_locked(5555)
+    assert not any(k == "OPT.ashx?id=69" for k, _ in main_server.calls)
+    assert any("inti00" in m and "90" in m for m in alerts)
+    assert caller_alerts and caller_alerts[0][0] == "out_of_items"
+
+    # 3. Captcha ở tài khoản gọi hộ -> caller_captcha (không raise CaptchaRequired khóa tài khoản chính)
+    alt_cap = FakeServer(handlers={"OPT.ashx?id=69": {"ret": 110}})
+    caller_alerts.clear()
+    t_cap = GoiMan(
+        ctx,
+        generals=[10],
+        origin=(20, 20),
+        radius=5,
+        target_types=[1],
+        city_id=123,
+        caller_gateway=GatewayClient(58, alt_cap, sleep=lambda _s: None),
+        caller_username="inti00",
+        on_caller_alert=lambda kind, msg: caller_alerts.append((kind, msg)),
+    )
+    assert t_cap.run_once() == "caller_captcha"
+    assert not ctx.locks.is_locked(5555)
+    assert caller_alerts and caller_alerts[0][0] == "captcha"
+
+    # 4. Lỗi đăng nhập tài khoản gọi hộ -> caller_login_failed & nhả khóa
+    class BadProvider:
+        username = "inti00"
+
+        def acquire_gateway(self):
+            raise HelperCallerLoginError("Sai mật khẩu")
+
+    caller_alerts.clear()
+    t_bad = GoiMan(
+        ctx,
+        generals=[10],
+        origin=(20, 20),
+        radius=5,
+        target_types=[1],
+        city_id=123,
+        caller_provider=BadProvider(),
+        caller_username="inti00",
+        on_caller_alert=lambda kind, msg: caller_alerts.append((kind, msg)),
+    )
+    assert t_bad.run_once() == "caller_login_failed"
+    assert not ctx.locks.is_locked(5555)
+    assert caller_alerts and caller_alerts[0][0] == "login_failed"
+
+
+def test_helper_caller_session_lifecycle_and_runner_stop():
+    from linhvuong.dashboard.runners import GoiDanAutoRunner
+    from linhvuong.engine import AutomationEngine
+    from linhvuong.helper_caller import HelperCallerSession
+
+    # 1. Tái sử dụng phiên từ workspace không gọi login_fn và không đóng phiên khi close()
+    reused_gw = GatewayClient(58, FakeServer(), sleep=lambda _s: None)
+    login_calls = []
+    p_reuse = HelperCallerSession(
+        server_id=58,
+        username="inti00",
+        password="",
+        session_lookup=lambda sid, usr: reused_gw if sid == 58 and usr == "inti00" else None,
+        login_fn=lambda *a, **kw: login_calls.append((a, kw)),
+    )
+    assert p_reuse.acquire_gateway() is reused_gw
+    assert p_reuse.reused is True
+    assert login_calls == []
+    p_reuse.close()
+
+    # 2. Mở phiên độc lập kế thừa proxy và đóng sạch requests.Session khi close()
+    p_own = HelperCallerSession(
+        server_id=58,
+        username="inti00",
+        password="secret",
+        proxy_raw="1.2.3.4:8080",
+        login_fn=lambda sess, sid, u, p, proxy=None: login_calls.append((sess, sid, u, p, proxy)),
+    )
+    gw_own = p_own.acquire_gateway()
+    assert gw_own is not None
+    assert p_own.reused is False
+    assert len(login_calls) == 1
+    assert login_calls[0][1:5] == (58, "inti00", "secret", "http://1.2.3.4:8080")
+    assert p_own._session is not None
+    p_own.close()
+    assert p_own._session is None
+    assert p_own._gateway is None
+
+    # 3. AutomationEngine và GoiDanAutoRunner dừng ngay trên caller_captcha và gọi task.close()
+    closed = []
+
+    class DummyTask:
+        mode = "dan"
+
+        def run_once(self):
+            return "caller_captcha"
+
+        def close(self):
+            closed.append("closed")
+
+    eng = AutomationEngine()
+    eng.start("goidan", DummyTask(), interval=30.0, jitter=0.0)
+    eng.get_runner("goidan").join(timeout=2.0)
+    assert not eng.is_running("goidan")
+    assert closed == ["closed"]
+
+    runner = GoiDanAutoRunner(DummyTask(), interval=30.0, log_cb=lambda _m: None, status_cb=lambda _s: None)
+    runner.start()
+    runner.join(timeout=2.0)
+    assert not runner.is_alive()
+    assert closed == ["closed", "closed"]
+
+
+def test_goi_man_helper_caller_fallback_scans_around_helper_city():
+    from linhvuong.tasks.goi_dan import GoiMan
+
+    origin_mid = mid_from_coords(180, 67)
+    empty_mid = mid_from_coords(179, 67)
+    alt_city_mid = mid_from_coords(412, 204)
+    alt_man_mid = mid_from_coords(426, 204)
+
+    main_server = FakeServer(
+        map_views={
+            origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]},
+            alt_city_mid: {"npc_tent": []},
+            alt_man_mid: {"npc_tent": [man(426, 204, 8802, 2)]},
+        },
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+
+    def alt_call_69():
+        main_server.map_views[alt_man_mid] = {"npc_tent": []}
+        main_server.map_views[origin_mid] = {
+            "npc_tent": [man(179, 67, 8802, 2)],
+            "infos": [[empty_mid, 1, 0, 0, 0, 0]],
+        }
+        return {"ret": 0}
+
+    alt_server = FakeServer(
+        handlers={
+            "/api/city/list": {
+                "ret": 0,
+                "data": {"items": [{"m_lid": 11082, "m_szname": "inca", "m_lx_pos": 412, "m_ly_pos": 204}]},
+            },
+            "OPT.ashx?id=69": alt_call_69,
+        }
+    )
+    alt_gw = GatewayClient(58, alt_server, sleep=lambda _s: None)
+    ctx, _ = ctx_for(main_server)
+    task = GoiMan(
+        ctx,
+        generals=[6330],
+        origin=(180, 67),
+        radius=5,
+        target_types=[2],
+        city_id=10254,
+        caller_gateway=alt_gw,
+        caller_username="inti00",
+        sleep_fn=lambda _s: None,
+    )
+    assert task.run_once() == "called_and_attacked"
+    alt_69 = [d for k, d in alt_server.calls if k == "OPT.ashx?id=69"]
+    assert len(alt_69) == 1
+    assert alt_69[0]["param1"] == "8802"
+    assert alt_69[0]["param2"] == str(empty_mid)
+    assert len([k for k, _ in alt_server.calls if k == "/api/city/list"]) == 1
+
+
 
 
 

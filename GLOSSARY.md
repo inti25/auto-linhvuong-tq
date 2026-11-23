@@ -503,6 +503,10 @@ _Avoid_: Lưu mật khẩu thô, auto-login cache, file password
 Tùy chọn theo từng tác vụ **Bình Man** / từng căn cứ và tác vụ **Gọi Man** tự động kiểm tra **Mưu Sĩ** đang biên chế cho các **Võ Tướng** rảnh tại thành/trại trước khi xuất quân (và khi bấm `Biên chế ngay`). Nếu tướng chưa có mưu sĩ hoặc thể lực (%) của mưu sĩ đang biên chế thấp hơn **Ngưỡng Thể Lực Mưu Sĩ** (`min_tactician_stamina`, mặc định `30%`), hệ thống ghép cặp tướng cấp cao nhất với văn quan rảnh cùng `origin_id` có thể lực đạt ngưỡng từ cấp cao xuống thấp; nếu không có văn quan thay thế đạt ngưỡng thì giữ nguyên mưu sĩ hiện tại để tránh mất chỉ số.
 _Avoid_: Đổi chéo thành/trại, tháo mưu sĩ khi không có người thay
 
+**Tài Khoản Gọi Hộ** (`Helper Caller Account`):
+Tài khoản Linh Vương cùng máy chủ được cấu hình tùy chọn trong chế độ **Gọi Man** để thay tài khoản chính tiêu thụ đạo cụ kéo **Man Thường** (Cấp 1–10) về ô đất trống sát thành đã chọn của tài khoản chính; tài khoản chính sau đó xuất quân tiêu diệt, hồi phục quân số và sĩ khí rồi tiếp tục vòng lặp. Không áp dụng cho **Vong Linh** vì bùa Vong Linh chỉ triệu hồi quanh thành của chính tài khoản kích hoạt.
+_Avoid_: account phụ, acc phụ, alt account, helper account
+
 
 ## Danh Mục Công Trình (Nhà)
 

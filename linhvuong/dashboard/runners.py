@@ -64,30 +64,46 @@ class GoiDanAutoRunner(BaseTaskRunner):
         self.status_cb("Đang chạy...")
         self.log(f"🚀 Bắt đầu nhiệm vụ Gọi Dân (chế độ: {self.task.mode})...")
         cycle = 0
-        while not self.stop_event.is_set():
-            cycle += 1
-            try:
-                res = self.task.run_once()
-                self.log(f"Lượt {cycle}: Kết quả -> {res}")
-                if res == "call_failed:236":
-                    self.log("⚠️ Máy chủ chưa mở sự kiện Gọi Vong Linh (mã lỗi 236: 当前没有相关活动). Tạm dừng nhiệm vụ Gọi Man.")
-                    self.status_cb("Sự kiện chưa mở")
+        try:
+            while not self.stop_event.is_set():
+                cycle += 1
+                try:
+                    res = self.task.run_once()
+                    self.log(f"Lượt {cycle}: Kết quả -> {res}")
+                    if res == "call_failed:236":
+                        self.log("⚠️ Máy chủ chưa mở sự kiện Gọi Vong Linh (mã lỗi 236: 当前没有相关活动). Tạm dừng nhiệm vụ Gọi Man.")
+                        self.status_cb("Sự kiện chưa mở")
+                        break
+                    elif res == "call_failed:90":
+                        self.log("❌ Hết đạo cụ gọi mục tiêu trong túi đồ (mã lỗi 90). Tạm dừng nhiệm vụ Gọi Man.")
+                        self.status_cb("Hết đạo cụ")
+                        break
+                    elif res == "caller_login_failed":
+                        self.log("❌ Tài Khoản Gọi Hộ đăng nhập thất bại. Tạm dừng nhiệm vụ Gọi Man.")
+                        self.status_cb("Lỗi acc gọi hộ")
+                        break
+                    elif res == "caller_captcha":
+                        self.log("⚠️ Tài Khoản Gọi Hộ gặp Captcha. Tạm dừng nhiệm vụ Gọi Man.")
+                        self.status_cb("Acc gọi hộ cần Captcha")
+                        break
+                except CaptchaRequired:
+                    self.logger.warning("Server yêu cầu Captcha! Dừng nhiệm vụ Gọi Dân.")
+                    self.log("⚠️ Server yêu cầu Captcha! Dừng nhiệm vụ để giải thủ công.")
+                    self.status_cb("Cần giải Captcha")
                     break
-                elif res == "call_failed:90":
-                    self.log("❌ Hết đạo cụ gọi mục tiêu trong túi đồ (mã lỗi 90). Tạm dừng nhiệm vụ Gọi Man.")
-                    self.status_cb("Hết đạo cụ")
-                    break
-            except CaptchaRequired:
-                self.logger.warning("Server yêu cầu Captcha! Dừng nhiệm vụ Gọi Dân.")
-                self.log("⚠️ Server yêu cầu Captcha! Dừng nhiệm vụ để giải thủ công.")
-                self.status_cb("Cần giải Captcha")
-                break
-            except Exception as e:
-                self.logger.exception(f"Lỗi ngoại lệ trong nhiệm vụ Gọi Dân: {e}")
-                self.log(f"❌ Lỗi ngoại lệ: {e}")
+                except Exception as e:
+                    self.logger.exception(f"Lỗi ngoại lệ trong nhiệm vụ Gọi Dân: {e}")
+                    self.log(f"❌ Lỗi ngoại lệ: {e}")
 
-            if self.wait_cycle(self.interval):
-                break
+                if self.wait_cycle(self.interval):
+                    break
+        finally:
+            close_fn = getattr(self.task, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
         self.status_cb("Đã dừng")
         self.log("⏹️ Nhiệm vụ Gọi Dân đã dừng.")
 

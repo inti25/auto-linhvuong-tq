@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 from ..battle import BattleEngine, BattleReport, BattleState, CombatConfig
 from ..coords import coords_from_mid, mid_from_coords
 from ..generals import auto_swap_low_stamina_tacticians
+from ..helper_caller import HelperCallerLoginError
 from ..locks import LockReason
 from ..roster import Army, fetch_roster
 from ..scan import Target
@@ -72,6 +73,10 @@ class GoiDan:
         provisioner: Optional[ArmyProvisioner] = None,
         auto_swap_tactician: bool = False,
         min_tactician_stamina: float = 30.0,
+        caller_gateway: Optional[Any] = None,
+        caller_provider: Optional[Any] = None,
+        caller_username: str = "",
+        on_caller_alert: Optional[Callable[[str, str], None]] = None,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -101,6 +106,11 @@ class GoiDan:
         self.provisioner = provisioner or ArmyProvisioner(ctx.gateway, sleep_fn=sleep_fn)
         self.auto_swap_tactician = bool(auto_swap_tactician)
         self.min_tactician_stamina = max(0.0, min(100.0, float(min_tactician_stamina)))
+        self.caller_gateway = caller_gateway
+        self.caller_provider = caller_provider
+        self.caller_username = (caller_username or "").strip()
+        self.on_caller_alert = on_caller_alert
+        self._helper_origins: Optional[list[tuple[int, int]]] = None
 
         # Tự động suy ra mode từ target_type nếu mode chưa được chỉ định
         if mode:
@@ -109,6 +119,40 @@ class GoiDan:
             self.mode = "vong_linh"
         else:
             self.mode = "dan"
+
+        self.validate_caller_config()
+
+    def has_helper_caller(self) -> bool:
+        return self.caller_gateway is not None or self.caller_provider is not None
+
+    def validate_caller_config(self) -> None:
+        if self.has_helper_caller() and any(self._is_vong_linh(t) for t in self.target_types):
+            raise ValueError(
+                "Chế độ Tài Khoản Gọi Hộ chỉ hỗ trợ Man Thường (Cấp 1–10), không hỗ trợ Vong Linh (301)."
+            )
+
+    def close(self) -> None:
+        if self.caller_provider is not None:
+            close_fn = getattr(self.caller_provider, "close", None)
+            if callable(close_fn):
+                try:
+                    close_fn()
+                except Exception:
+                    pass
+
+    def _resolve_caller_gateway(self) -> tuple[Any, bool, str]:
+        if self.caller_gateway is not None:
+            label = self.caller_username or "Tài khoản gọi hộ"
+            return self.caller_gateway, True, label
+        if self.caller_provider is not None:
+            gw = self.caller_provider.acquire_gateway()
+            label = (
+                self.caller_username
+                or getattr(self.caller_provider, "username", "")
+                or "Tài khoản gọi hộ"
+            )
+            return gw, True, label
+        return self.ctx.gateway, False, ""
 
     def _is_vong_linh(self, t_type: int) -> bool:
         return t_type == VONG_LINH or (self.mode == "vong_linh" and len(self.target_types) == 1)
@@ -137,12 +181,19 @@ class GoiDan:
         """Tìm các ô đất trống (tile_type=1, owner=0, chưa có Man/thành) sát thành nhất."""
         return self.ctx.scanner.find_empty_mids_near(*self.origin, max_dist=max_dist)
 
-    def _find_nearest_uncached(self, scan_radius: int, target_types: list[int]) -> Optional[Target]:
+    def _find_nearest_uncached(
+        self,
+        scan_radius: int,
+        target_types: list[int],
+        origin: Optional[tuple[int, int]] = None,
+    ) -> Optional[Target]:
         """Quét không dùng cache tại bán kính chỉ định (tương thích stub kiểm thử)."""
         owner_id = int(self.city_id or 0)
+        ox, oy = origin if origin is not None else self.origin
         try:
             return self.ctx.scanner.find_nearest(
-                *self.origin,
+                ox,
+                oy,
                 scan_radius,
                 target_types,
                 skip_capital_radius=self.skip_capital_radius,
@@ -151,19 +202,56 @@ class GoiDan:
             )
         except TypeError:
             return self.ctx.scanner.find_nearest(
-                *self.origin,
+                ox,
+                oy,
                 scan_radius,
                 target_types,
                 skip_capital_radius=self.skip_capital_radius,
                 owner_id=owner_id,
             )
 
+    def _get_helper_city_origins(self) -> list[tuple[int, int]]:
+        """Lấy và cache tọa độ thành đầu tiên của Tài Khoản Gọi Hộ để quét Man dự phòng."""
+        if self._helper_origins is not None:
+            return self._helper_origins
+        origins: list[tuple[int, int]] = []
+        caller_gw, is_helper, _ = self._resolve_caller_gateway()
+        if not is_helper or not callable(getattr(caller_gw, "city_list", None)):
+            self._helper_origins = origins
+            return origins
+        try:
+            resp = caller_gw.city_list() or {}
+        except Exception:
+            self._helper_origins = origins
+            return origins
+        data_block = resp.get("data") if isinstance(resp.get("data"), dict) else resp
+        items = data_block.get("items", []) if isinstance(data_block, dict) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                cid = int(item.get("m_lid", 0) or 0)
+                px = int(item.get("m_lx_pos", 0) or 0)
+                py = int(item.get("m_ly_pos", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if cid > 0 and (px, py) != (0, 0) and (px, py) != self.origin and (px, py) not in origins:
+                origins.append((px, py))
+                break
+        self._helper_origins = origins
+        return origins
+
     def _find_pullable_man(self, curr_type: int) -> Optional[Target]:
-        """Quét mở rộng tối thiểu tới 25..50 ô (hoặc self.radius nếu lớn hơn) để tìm Man kéo về sát thành."""
+        """Quét mở rộng tối thiểu tới 25..50 ô (hoặc self.radius nếu lớn hơn) và fallback quanh thành Tài Khoản Gọi Hộ."""
         for scan_radius in sorted({25, 50, max(25, self.radius)}):
             target = self._find_nearest_uncached(scan_radius, [curr_type])
             if target is not None:
                 return target
+        if self.has_helper_caller():
+            for h_origin in self._get_helper_city_origins():
+                target = self._find_nearest_uncached(50, [curr_type], origin=h_origin)
+                if target is not None:
+                    return target
         return None
 
     def _scan_with_retry(self, curr_type: int, scan_radius: Optional[int] = None) -> Optional[Target]:
@@ -188,31 +276,49 @@ class GoiDan:
         if callable(invalidate):
             invalidate()
 
-    def _notify_call_error(self, ret_call: int, curr_type: int, target_id: Optional[int] = None) -> None:
-        if not self.ctx.notify:
-            return
+    def _notify_call_error(
+        self,
+        ret_call: int,
+        curr_type: int,
+        target_id: Optional[int] = None,
+        caller_label: str = "",
+    ) -> str:
         is_vl = self._is_vong_linh(curr_type)
         tid_label = f" ID {target_id}" if target_id is not None else ""
+        caller_prefix = f"[{caller_label}] " if caller_label else ""
         if ret_call == 236:
             msg = (
                 "⚠️ Gọi Vong Linh thất bại: Máy chủ chưa mở sự kiện Vong Linh (mã lỗi 236: 当前没有相关活动)."
                 if is_vl
-                else f"⚠️ Gọi mục tiêu {curr_type} thất bại: Sự kiện chưa mở (mã lỗi 236)."
+                else f"⚠️ {caller_prefix}Gọi mục tiêu {curr_type} thất bại: Sự kiện chưa mở (mã lỗi 236)."
             )
         elif ret_call == 90:
             msg = (
                 "❌ Hết Bùa Vong Linh (追风铁令) trong túi đồ (mã lỗi 90)!"
                 if is_vl
-                else f"❌ Hết đạo cụ gọi mục tiêu {curr_type} trong túi đồ (mã lỗi 90)!"
+                else (
+                    f"❌ Tài Khoản Gọi Hộ '{caller_label}' đã hết đạo cụ gọi mục tiêu {curr_type} trong túi đồ (mã lỗi 90)!"
+                    if caller_label
+                    else f"❌ Hết đạo cụ gọi mục tiêu {curr_type} trong túi đồ (mã lỗi 90)!"
+                )
             )
         else:
             templates = {
-                208: f"⚠️ Đạo quân Thất Man{tid_label} (loại {curr_type}) không tồn tại hoặc đã bị tiêu diệt (mã lỗi: 208).",
-                209: f"⚠️ Đạo quân Thất Man{tid_label} (loại {curr_type}) đang đóng băng di chuyển hoặc đang giao chiến, không thể kéo về thành (mã lỗi: 209).",
-                39: f"⚠️ Vị trí quanh thành đang bị chiếm dụng (mã lỗi 39) khi gọi mục tiêu {curr_type}.",
+                208: f"⚠️ {caller_prefix}Đạo quân Thất Man{tid_label} (loại {curr_type}) không tồn tại hoặc đã bị tiêu diệt (mã lỗi: 208).",
+                209: f"⚠️ {caller_prefix}Đạo quân Thất Man{tid_label} (loại {curr_type}) đang đóng băng di chuyển hoặc đang giao chiến, không thể kéo về thành (mã lỗi: 209).",
+                39: f"⚠️ {caller_prefix}Vị trí quanh thành đang bị chiếm dụng (mã lỗi 39) khi gọi mục tiêu {curr_type}.",
             }
-            msg = templates.get(ret_call, f"⚠️ Gọi mục tiêu {curr_type} thất bại (mã lỗi: {ret_call}).")
-        self.ctx.notify(msg)
+            msg = templates.get(ret_call, f"⚠️ {caller_prefix}Gọi mục tiêu {curr_type} thất bại (mã lỗi: {ret_call}).")
+        if self.ctx.notify:
+            self.ctx.notify(msg)
+        return msg
+
+    def _emit_caller_alert(self, alert_type: str, msg: str) -> None:
+        if self.on_caller_alert:
+            try:
+                self.on_caller_alert(alert_type, msg)
+            except Exception:
+                pass
 
     def _finish_call_and_locate(
         self,
@@ -222,6 +328,7 @@ class GoiDan:
         resp_call: dict,
         verify_radius: Optional[int] = None,
         source_target: Optional[Target] = None,
+        caller_label: str = "",
     ) -> tuple[Optional[Target], Optional[str]]:
         """Xác nhận vị trí mục tiêu quanh thành, làm mới cache bản đồ khi cần và cập nhật vòng xoay."""
         if "new_target_id" in resp_call:
@@ -253,8 +360,9 @@ class GoiDan:
         self._current_type_idx = (idx + 1) % total_types
         self.target_type = curr_type
         if source_target is not None and self.ctx.notify:
+            prefix = f"[{caller_label}] " if caller_label else ""
             self.ctx.notify(
-                f"📣 Đã kéo mục tiêu {curr_type} (ID {target.target_id}) từ ({source_target.x}, {source_target.y}) về sát thành ({target.x}, {target.y})."
+                f"📣 {prefix}Đã kéo mục tiêu {curr_type} (ID {target.target_id}) từ ({source_target.x}, {source_target.y}) về sát thành ({target.x}, {target.y})."
             )
         return target, None
 
@@ -275,7 +383,15 @@ class GoiDan:
 
     def _pull_man_to_city(self, idx: int, curr_type: int, total_types: int) -> tuple[Optional[Target], Optional[str]]:
         """Dùng Man Tộc Lệnh (type=63) kéo đạo quân Thất Man đang có về ô trống sát thành và xác nhận vị trí."""
-        source_target = self._find_pullable_man(curr_type)
+        try:
+            source_target = self._find_pullable_man(curr_type)
+        except HelperCallerLoginError as exc:
+            msg = f"❌ Tài Khoản Gọi Hộ đăng nhập thất bại: {exc}"
+            if self.ctx.notify:
+                self.ctx.notify(msg)
+            self._emit_caller_alert("login_failed", msg)
+            return None, "caller_login_failed"
+
         if source_target is None:
             if self.ctx.notify:
                 self.ctx.notify(f"⚠️ Không tìm thấy đạo quân loại {curr_type} trên bản đồ để kéo về sát thành.")
@@ -288,25 +404,48 @@ class GoiDan:
                 self.ctx.notify(f"⚠️ Không tìm thấy ô đất trống sát thành để kéo mục tiêu {curr_type} (ID {source_target.target_id}).")
             return None, "call_failed:39"
 
+        try:
+            caller_gw, is_helper, caller_label = self._resolve_caller_gateway()
+        except HelperCallerLoginError as exc:
+            self._release_lock(source_target.target_id)
+            msg = f"❌ Tài Khoản Gọi Hộ đăng nhập thất bại: {exc}"
+            if self.ctx.notify:
+                self.ctx.notify(msg)
+            self._emit_caller_alert("login_failed", msg)
+            return None, "caller_login_failed"
+
         resp_call: dict = {}
         ret_call = RET_OK
         for dest_mid in empty_mids[:3]:
             call_payload = self._get_pull_man_payload(source_target.target_id, dest_mid)
             try:
-                resp_call = self.ctx.gateway.call("OPT.ashx", 69, call_payload) or {}
+                resp_call = caller_gw.call("OPT.ashx", 69, call_payload) or {}
             except BaseException:
                 self._release_lock(source_target.target_id)
                 raise
             ret_call = resp_call.get("ret", RET_OK)
             if ret_call == 110 or ret_call == RET_CAPTCHA_REQUIRED:
                 self._release_lock(source_target.target_id)
+                if is_helper:
+                    msg = f"⚠️ Tài Khoản Gọi Hộ '{caller_label}' gặp Captcha (mã {ret_call})! Dừng Gọi Man."
+                    if self.ctx.notify:
+                        self.ctx.notify(msg)
+                    self._emit_caller_alert("captcha", msg)
+                    return None, "caller_captcha"
                 raise CaptchaRequired()
             if ret_call != 39:
                 break
 
         if ret_call != RET_OK:
             self._release_lock(source_target.target_id)
-            self._notify_call_error(ret_call, curr_type, target_id=source_target.target_id)
+            msg = self._notify_call_error(
+                ret_call,
+                curr_type,
+                target_id=source_target.target_id,
+                caller_label=caller_label if is_helper else "",
+            )
+            if is_helper and ret_call == 90:
+                self._emit_caller_alert("out_of_items", msg)
             return None, f"call_failed:{ret_call}"
 
         return self._finish_call_and_locate(
@@ -316,11 +455,13 @@ class GoiDan:
             resp_call,
             verify_radius=NEAR_CITY_RADIUS,
             source_target=source_target,
+            caller_label=caller_label if is_helper else "",
         )
 
     def call_target(self) -> tuple[Optional[Target], Optional[str]]:
         """Kích hoạt API gọi Man theo đúng chế độ đã cấu hình, xoay vòng và fallback qua target_types."""
-        # Chuyển focus thành qua /api/city/current
+        self.validate_caller_config()
+        # Chuyển focus thành qua /api/city/current (chỉ trên gateway tài khoản chính)
         if self.city_id:
             resp_move = self.ctx.gateway.set_current_city(self.city_id) or {}
             ret_move = resp_move.get("ret", RET_OK)
@@ -339,6 +480,8 @@ class GoiDan:
 
             if err is None and target is not None:
                 return target, None
+            if err in ("call_failed:90", "call_failed:236", "caller_login_failed", "caller_captcha"):
+                return None, err
             if err and (err != "no_target" or last_err is None):
                 last_err = err
 

@@ -401,6 +401,32 @@ def test_goi_dan_and_binh_man_attack_action_profile_roundtrip():
     assert loaded.binh_man.bases["-999"].action_combo_idx == 2
 
 
+def test_goi_dan_helper_caller_profile_roundtrip_never_persists_password(tmp_path):
+    raw = {
+        "goi_dan": {
+            "city_id": 10254,
+            "target_types": [1, 2],
+            "generals": [6330],
+            "caller_enabled": True,
+            "caller_username": "inti00",
+            "caller_password": "should_never_be_saved",
+        }
+    }
+    prof = Profile.from_dict(raw)
+    assert prof.goi_dan.caller_enabled is True
+    assert prof.goi_dan.caller_username == "inti00"
+
+    saved_path = tmp_path / "auto_profile_quilia_58.json"
+    ProfileStore.save(prof, saved_path)
+    content = saved_path.read_text(encoding="utf-8")
+    assert "should_never_be_saved" not in content
+    assert "caller_password" not in content
+
+    reloaded = ProfileStore.load(saved_path)
+    assert reloaded.goi_dan.caller_enabled is True
+    assert reloaded.goi_dan.caller_username == "inti00"
+
+
 def test_sync_with_bases_prunes_deleted_adds_new_and_updates_names():
     from linhvuong.profile import BaseBinhManConfig, CityCraftConfig
     from linhvuong.roster import City
