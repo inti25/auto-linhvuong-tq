@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ..armament import ALL_SCOPES as ARM_ALL_SCOPES, SCOPE_NAMES as ARM_SCOPE_NAMES
 from ..auth import LoginError
 from ..battle import ATTACK_ACTION_COMBO_OPTIONS, FORMATION_NAMES, STRATAGEMS
+from ..helper_caller import HelperCallerError
 from ..generals import (
     ADD_POINT_MODE_LABELS,
     ADD_POINT_MODE_PAIR_1_3,
@@ -103,6 +104,12 @@ class AutoStartUpdateRequest(BaseModel):
 
 class ProxyTestRequest(BaseModel):
     proxy_url: str
+
+
+class GoiDanCallerRequest(BaseModel):
+    username: str
+    password: str = ""
+    save_to_vault: Optional[bool] = None
 
 
 class WebSocketHub:
@@ -487,7 +494,7 @@ def create_app(
         try:
             fn()
             return {"ok": True, "summary": sess.get_status_snapshot()}
-        except (ValueError, RuntimeError) as exc:
+        except (ValueError, RuntimeError, LoginError, VaultError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/accounts/{account_key}/tasks/{task_name}/stop", dependencies=[Depends(require_admin)])
@@ -545,7 +552,33 @@ def create_app(
         try:
             sess.run_goidan_once()
             return {"ok": True}
-        except ValueError as exc:
+        except (ValueError, RuntimeError, LoginError, VaultError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/tasks/goidan/caller/credentials", dependencies=[Depends(require_admin)])
+    def goidan_caller_credentials(account_key: str, payload: GoiDanCallerRequest) -> dict:
+        sess = _get_session(account_key)
+        try:
+            status_info = sess.set_goidan_caller_credentials(
+                username=payload.username,
+                password=payload.password,
+                save_to_vault=payload.save_to_vault,
+            )
+            return {"ok": True, "caller": status_info}
+        except (ValueError, VaultError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/accounts/{account_key}/tasks/goidan/caller/test", dependencies=[Depends(require_admin)])
+    def goidan_caller_test(account_key: str, payload: GoiDanCallerRequest) -> dict:
+        sess = _get_session(account_key)
+        try:
+            res = sess.test_goidan_caller_login(
+                username=payload.username,
+                password=payload.password,
+                save_to_vault=payload.save_to_vault,
+            )
+            return {"ok": True, **res}
+        except (ValueError, RuntimeError, HelperCallerError, LoginError, VaultError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/accounts/{account_key}/tasks/goidan/provision", dependencies=[Depends(require_admin)])

@@ -135,6 +135,8 @@ class ProfileSyncMixin:
             "gd_auto_swap_tactician_var",
             "gd_min_tactician_stamina_var",
             "gd_action_mode_var",
+            "gd_caller_enabled_var",
+            "gd_caller_user_var",
             # Bình man
             "bm_mode_var",
             "bm_interval_var",

@@ -491,6 +491,10 @@ _Avoid_: Đổi quân sư tự động, auto swap partner
 Hoạt động huấn luyện nhận điểm kinh nghiệm định kỳ cấp tài khoản tại **Điểm Tướng Đài** (`lType=2`, cho **Võ tướng**) và **Tụ Hiền Lâu** (`lType=1`, cho **Văn quan**). Hệ thống kiểm tra trạng thái tối đa 5 ô đào tạo qua `Common.ashx?id=141` (yêu cầu `lCityID > 0`) và gửi lệnh đào tạo qua `OPT.ashx?id=178` cho các tướng theo thứ tự ưu tiên đã chọn; mỗi ô sau khi kích hoạt sẽ vào chu kỳ hồi **24 giờ (86.400 giây)** và không làm tướng bị bận.
 _Avoid_: Train tướng tự động, mở khóa ô bằng Nguyên bảo (`OPT.ashx?id=177`)
 
+**Tài Khoản Gọi Hộ** (`Helper Caller Account`):
+Tài khoản Linh Vương cùng máy chủ được cấu hình tùy chọn trong chế độ **Gọi Man** để thay tài khoản chính tiêu thụ đạo cụ kéo **Man Thường** (Cấp 1–10) về ô đất trống sát thành đã chọn của tài khoản chính; tài khoản chính sau đó xuất quân tiêu diệt, hồi phục quân số và sĩ khí rồi tiếp tục vòng lặp. Không áp dụng cho **Vong Linh** vì bùa Vong Linh chỉ triệu hồi quanh thành của chính tài khoản kích hoạt.
+_Avoid_: account phụ, acc phụ, alt account, helper account
+
 
 ## Danh Mục Công Trình (Nhà)
 

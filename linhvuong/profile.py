@@ -220,6 +220,8 @@ class GoiDanProfile:
     min_tactician_stamina: str = "30"
     attack_action_mode: str = "adaptive"
     action_combo_idx: int = 0
+    caller_enabled: bool = False
+    caller_username: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "GoiDanProfile":
@@ -265,6 +267,8 @@ class GoiDanProfile:
             min_tactician_stamina=str(data.get("min_tactician_stamina", "30")),
             attack_action_mode=str(data.get("attack_action_mode", "adaptive")),
             action_combo_idx=int(data.get("action_combo_idx", 0)),
+            caller_enabled=bool(data.get("caller_enabled", False)),
+            caller_username=str(data.get("caller_username", "") or "").strip(),
         )
 
 

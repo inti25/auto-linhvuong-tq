@@ -121,7 +121,8 @@ from .tasks.building import (
 )
 from .tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
 from .tasks.di_trai import DiTrai
-from .tasks.goi_dan import GoiDan
+from .tasks.goi_dan import VONG_LINH, GoiDan
+from .helper_caller import HelperCallerLoginError, HelperCallerSession, canonical_account_key
 from .tasks.logistics import (
     TRANSFER_WEAPONS_DATA,
     ArmyTransferOrder,
@@ -392,6 +393,7 @@ class AccountSession:
         proxy_pool: Optional[ProxyPool] = None,
         data_dir: Optional[Union[str, Path]] = None,
         event_cb: Optional[Callable[[str, str, dict], None]] = None,
+        workspace: Optional["WorkspaceManager"] = None,
     ):
         self.account_key = account_key
         self.session = session
@@ -405,6 +407,8 @@ class AccountSession:
         self.proxy_pool = proxy_pool
         self.data_dir = get_data_dir(data_dir)
         self._event_cb = event_cb
+        self._workspace = workspace
+        self._goidan_caller_passwords: dict[str, str] = {}
         self._lock = threading.RLock()
 
         try:
@@ -812,6 +816,8 @@ class AccountSession:
             self._training_next_check_at = 0.0
         if "building" in patch or "logistics" in patch or "training" in patch:
             self._aux_wakeup.set()
+        if "goi_dan" in patch or "goi_man" in patch:
+            self._emit("aux_updated", self.get_aux_status())
         return data
 
     def import_profile(self, data: dict) -> dict:
@@ -898,6 +904,7 @@ class AccountSession:
             "training_status": self._training_status,
             "training": self._serialize_training_status(),
             "nien_thu_announcement": self._nien_thu_ann,
+            "goidan_caller": self.get_goidan_caller_status(),
         }
 
     def get_task_states(self) -> dict[str, dict]:
@@ -2226,6 +2233,189 @@ class AccountSession:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _lookup_workspace_gateway(self, server_id: int, username: str) -> Optional[GatewayClient]:
+        usr_norm = (username or "").strip().lower()
+        if not usr_norm or int(server_id) != int(self.server_id):
+            return None
+        if self.username and self.username.strip().lower() == usr_norm:
+            return self.gateway
+        ws = getattr(self, "_workspace", None)
+        if ws is None:
+            return None
+        with ws._lock:
+            for sess in ws.sessions.values():
+                if (
+                    int(getattr(sess, "server_id", 0)) == int(server_id)
+                    and str(getattr(sess, "username", "")).strip().lower() == usr_norm
+                ):
+                    return sess.gateway
+        return None
+
+    def _resolve_goidan_caller_password(self, username: str) -> str:
+        usr = (username or "").strip()
+        if not usr:
+            return ""
+        key = canonical_account_key(usr, self.server_id)
+        pwd = self._goidan_caller_passwords.get(key, "")
+        if pwd:
+            return pwd
+        ws = getattr(self, "_workspace", None)
+        if ws is not None:
+            with ws._lock:
+                for sess in ws.sessions.values():
+                    if (
+                        int(getattr(sess, "server_id", 0)) == int(self.server_id)
+                        and str(getattr(sess, "username", "")).strip().lower() == usr.lower()
+                    ):
+                        sess_pwd = getattr(sess, "_password", "")
+                        if sess_pwd:
+                            return sess_pwd
+            vault = getattr(ws, "vault", None)
+            if vault and vault.is_unlocked():
+                try:
+                    return vault.get_password(key)
+                except VaultError:
+                    return ""
+        return ""
+
+    def get_goidan_caller_status(self, username: Optional[str] = None) -> dict:
+        usr = (
+            username
+            if username is not None
+            else (self.profile.goi_dan.caller_username or "")
+        ).strip()
+        if not usr:
+            return {
+                "username": "",
+                "reused_session": False,
+                "has_ram_password": False,
+                "has_vault_password": False,
+                "ready": False,
+            }
+        key = canonical_account_key(usr, self.server_id)
+        reused = self._lookup_workspace_gateway(self.server_id, usr) is not None
+        has_ram = bool(self._goidan_caller_passwords.get(key))
+        ws = getattr(self, "_workspace", None)
+        vault = getattr(ws, "vault", None) if ws is not None else None
+        has_vault = False
+        if vault and vault.is_unlocked():
+            try:
+                has_vault = bool(vault.get_password(key))
+            except VaultError:
+                has_vault = False
+        return {
+            "username": usr,
+            "reused_session": reused,
+            "has_ram_password": has_ram,
+            "has_vault_password": has_vault,
+            "ready": bool(reused or has_ram or has_vault),
+        }
+
+    def set_goidan_caller_credentials(
+        self,
+        username: str,
+        password: str = "",
+        save_to_vault: Optional[bool] = None,
+    ) -> dict:
+        usr = (username or "").strip()
+        if not usr:
+            raise ValueError("Vui lòng nhập tên Tài Khoản Gọi Hộ.")
+        key = canonical_account_key(usr, self.server_id)
+        if password:
+            self._goidan_caller_passwords[key] = password
+
+        ws = getattr(self, "_workspace", None)
+        vault = getattr(ws, "vault", None) if ws is not None else None
+        if save_to_vault is True:
+            if not vault or not vault.is_unlocked():
+                raise VaultError("Két Mật Khẩu Mã Hóa chưa được mở khóa.")
+            eff_pwd = password or self._resolve_goidan_caller_password(usr)
+            if not eff_pwd:
+                raise ValueError(f"Vui lòng nhập mật khẩu cho Tài Khoản Gọi Hộ '{usr}' để lưu vào Két.")
+            managed_acc = ws.accounts.get(key) if ws is not None else None
+            eff_resume = bool(managed_acc.get("auto_resume", True)) if isinstance(managed_acc, dict) else False
+            vault.set_entry(key, eff_pwd, auto_resume=eff_resume)
+        elif save_to_vault is False and vault and vault.is_unlocked():
+            managed_acc = ws.accounts.get(key) if ws is not None else None
+            if not managed_acc:
+                vault.remove_entry(key)
+
+        status = self.get_goidan_caller_status(usr)
+        self._emit("aux_updated", self.get_aux_status())
+        return status
+
+    def _on_goidan_caller_alert(self, alert_type: str, msg: str) -> None:
+        self._emit(
+            "notification",
+            {
+                "level": "error" if alert_type == "login_failed" else "warning",
+                "title": "Tài Khoản Gọi Hộ Gọi Man",
+                "message": msg,
+            },
+        )
+
+    def _build_goidan_caller_provider(self) -> Optional[HelperCallerSession]:
+        gd = self.profile.goi_dan
+        if not gd.caller_enabled:
+            return None
+        target_types = list(gd.target_types) if gd.target_types else [gd.target_type or VONG_LINH]
+        if any(int(t) == VONG_LINH for t in target_types):
+            raise ValueError(
+                "Chế độ Tài Khoản Gọi Hộ chỉ hỗ trợ Man Thường (Cấp 1–10), không hỗ trợ Vong Linh (301)."
+            )
+        usr = (gd.caller_username or "").strip()
+        if not usr:
+            raise ValueError("Đã bật Tài Khoản Gọi Hộ nhưng chưa nhập tên tài khoản.")
+        existing_gw = self._lookup_workspace_gateway(self.server_id, usr)
+        pwd = self._resolve_goidan_caller_password(usr)
+        if existing_gw is None and not pwd:
+            raise ValueError(
+                f"Chưa có mật khẩu cho Tài Khoản Gọi Hộ '{usr}'. Vui lòng nhập mật khẩu hoặc lưu Két."
+            )
+        return HelperCallerSession(
+            server_id=self.server_id,
+            username=usr,
+            password=pwd,
+            proxy_raw=self.proxy_raw,
+            proxy_user=self.proxy_user,
+            proxy_pass=self.proxy_pass,
+            proxy_pool=self.proxy_pool,
+            session_lookup=self._lookup_workspace_gateway,
+            notify=lambda m: self.append_log("goidan", m),
+        )
+
+    def test_goidan_caller_login(
+        self,
+        username: str,
+        password: str = "",
+        save_to_vault: Optional[bool] = None,
+    ) -> dict:
+        usr = (username or "").strip()
+        if not usr:
+            raise ValueError("Vui lòng nhập tên Tài Khoản Gọi Hộ.")
+        if password or save_to_vault is not None:
+            self.set_goidan_caller_credentials(usr, password=password, save_to_vault=save_to_vault)
+        pwd = self._resolve_goidan_caller_password(usr)
+        provider = HelperCallerSession(
+            server_id=self.server_id,
+            username=usr,
+            password=pwd,
+            proxy_raw=self.proxy_raw,
+            proxy_user=self.proxy_user,
+            proxy_pass=self.proxy_pass,
+            proxy_pool=self.proxy_pool,
+            session_lookup=self._lookup_workspace_gateway,
+            notify=lambda m: self.append_log("goidan", m),
+        )
+        info = provider.test_connection()
+        if info["reused_session"]:
+            self.append_log("goidan", f"✅ Tài Khoản Gọi Hộ '{usr}' đang đăng nhập sẵn — sẵn sàng dùng lại phiên.")
+        else:
+            self.append_log("goidan", f"✅ Kiểm tra đăng nhập Tài Khoản Gọi Hộ '{usr}' thành công!")
+        status = self.get_goidan_caller_status(usr)
+        self._emit("aux_updated", self.get_aux_status())
+        return {**info, "status": status}
+
     def _create_goidan_task(self) -> GoiDan:
         gd = self.profile.goi_dan
         cid = gd.city_id or self._default_city_id()
@@ -2237,6 +2427,7 @@ class AccountSession:
         target_types = list(gd.target_types) if gd.target_types else [gd.target_type or 301]
         first_t = target_types[0]
         mode = "vong_linh" if first_t == 301 else "dan"
+        caller_provider = self._build_goidan_caller_provider()
         scanner = Scanner(
             self.gateway, self.shared_target_locks, delay=0.0, sleep=lambda _s: None,
             map_cache_ttl=4.0, capitals_cache_ttl=300.0,
@@ -2268,6 +2459,9 @@ class AccountSession:
             min_morale=max(0, min(100, _safe_int(gd.min_morale, 95))),
             auto_swap_tactician=bool(getattr(gd, "auto_swap_tactician", False)),
             min_tactician_stamina=parse_stamina_threshold(getattr(gd, "min_tactician_stamina", "30")),
+            caller_provider=caller_provider,
+            caller_username=gd.caller_username,
+            on_caller_alert=self._on_goidan_caller_alert,
         )
 
     def start_goidan(self) -> None:
@@ -2282,10 +2476,19 @@ class AccountSession:
 
     def run_goidan_once(self) -> None:
         task = self._create_goidan_task()
-        threading.Thread(
-            target=lambda: self.append_log("goidan", f"⚡ Kết quả chạy 1 lượt Gọi Man: {task.run_once()}"),
-            daemon=True,
-        ).start()
+
+        def _worker():
+            try:
+                res = task.run_once()
+                self.append_log("goidan", f"⚡ Kết quả chạy 1 lượt Gọi Man: {res}")
+            except CaptchaRequired:
+                self._handle_captcha("Gọi Man gặp Captcha (mã 110).")
+            except Exception as exc:
+                self.append_log("goidan", f"❌ Lỗi chạy 1 lượt Gọi Man: {exc}")
+            finally:
+                task.close()
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def adjust_goidan_troops(self) -> None:
         gd = self.profile.goi_dan
@@ -3796,6 +3999,7 @@ class WorkspaceManager:
             proxy_pool=proxy_pool,
             data_dir=self.data_dir,
             event_cb=self._broadcast,
+            workspace=self,
         )
         with self._lock:
             self.sessions[canonical] = acc_sess

@@ -572,3 +572,29 @@ def test_resource_profile_market_fields_defaults_and_roundtrip():
     assert loaded.resource.auto_sell_resource is True
     assert loaded.resource.sell_threshold_pct == "92"
 
+
+def test_goi_dan_helper_caller_profile_roundtrip_never_persists_password(tmp_path):
+    raw = {
+        "goi_dan": {
+            "city_id": 10254,
+            "target_types": [1, 2],
+            "generals": [6330],
+            "caller_enabled": True,
+            "caller_username": "helper01",
+            "caller_password": "should_never_be_saved",
+        }
+    }
+    prof = Profile.from_dict(raw)
+    assert prof.goi_dan.caller_enabled is True
+    assert prof.goi_dan.caller_username == "helper01"
+
+    saved_path = tmp_path / "auto_profile_main_53.json"
+    ProfileStore.save(prof, saved_path)
+    content = saved_path.read_text(encoding="utf-8")
+    assert "should_never_be_saved" not in content
+    assert "caller_password" not in content
+
+    reloaded = ProfileStore.load(saved_path)
+    assert reloaded.goi_dan.caller_enabled is True
+    assert reloaded.goi_dan.caller_username == "helper01"
+

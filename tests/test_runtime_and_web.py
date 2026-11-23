@@ -2182,3 +2182,93 @@ def test_resource_monitor_market_buy_sell_and_web_profile_roundtrip(tmp_path, mo
     for token in ("rsrc-prefer-market", "rsrc-auto-sell", "rsrc-sell-pct", "btn-tgl-resmon"):
         assert token in app_js
 
+
+def test_runtime_and_web_goidan_helper_caller_vault_reuse_and_validation(tmp_path, monkeypatch):
+    from pathlib import Path
+    import linhvuong.helper_caller as hc_mod
+
+    _mock_offline(monkeypatch)
+    monkeypatch.setattr(hc_mod, "login", lambda *a, **kw: None)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False, vault_key="test-master-key")
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="pw")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "pw"}).status_code == 200
+        assert client.post("/api/accounts/login", json={"server_id": 53, "username": "mainuser", "password": "pw"}).status_code == 200
+        sess = wm.get_session("mainuser @ S53")
+        sess.roster = _fake_roster()
+
+        # 1. Lưu cấu hình Tài Khoản Gọi Hộ với mục tiêu 301 -> /tasks/goidan/start trả 400
+        assert client.put(
+            "/api/accounts/mainuser%20%40%20S53/profile",
+            json={
+                "goi_dan": {
+                    "city_id": 1001,
+                    "generals": [1],
+                    "target_types": [301],
+                    "caller_enabled": True,
+                    "caller_username": "altuser",
+                }
+            },
+        ).status_code == 200
+        r_301 = client.post("/api/accounts/mainuser%20%40%20S53/tasks/goidan/start")
+        assert r_301.status_code == 400
+        assert "Vong Linh" in r_301.json()["detail"]
+
+        # 2. Chuyển sang Man Thường [1, 2] nhưng chưa có mật khẩu/phiên -> start trả 400
+        assert client.put(
+            "/api/accounts/mainuser%20%40%20S53/profile",
+            json={"goi_dan": {"target_types": [1, 2], "target_type": 1}},
+        ).status_code == 200
+        r_nopwd = client.post("/api/accounts/mainuser%20%40%20S53/tasks/goidan/start")
+        assert r_nopwd.status_code == 400
+
+        # 3. Lưu mật khẩu vào RAM + Két (auto_resume=False), đảm bảo profile JSON không chứa password
+        r_cred = client.post(
+            "/api/accounts/mainuser%20%40%20S53/tasks/goidan/caller/credentials",
+            json={"username": "altuser", "password": "alt-secret-pw", "save_to_vault": True},
+        )
+        assert r_cred.status_code == 200
+        caller_info = r_cred.json()["caller"]
+        assert caller_info["has_ram_password"] is True
+        assert caller_info["has_vault_password"] is True
+        assert caller_info["ready"] is True
+        vault_entry = wm.vault.get_entry("altuser @ S53")
+        assert vault_entry is not None
+        assert vault_entry["password"] == "alt-secret-pw"
+        assert vault_entry["auto_resume"] is False
+        assert "alt-secret-pw" not in sess.profile_path.read_text(encoding="utf-8")
+
+        # 4. Kiểm tra /caller/test mở phiên độc lập thành công
+        r_test = client.post(
+            "/api/accounts/mainuser%20%40%20S53/tasks/goidan/caller/test",
+            json={"username": "altuser"},
+        )
+        assert r_test.status_code == 200
+        assert r_test.json()["reused_session"] is False
+
+        # 5. Start thành công với Man 1, 2 & HelperCallerSession được gắn đúng
+        started = {}
+        monkeypatch.setattr(sess.engine, "start", lambda name, runnable, **_kw: started.__setitem__(name, runnable))
+        r_ok = client.post("/api/accounts/mainuser%20%40%20S53/tasks/goidan/start")
+        assert r_ok.status_code == 200
+        assert started["goidan"].has_helper_caller() is True
+        assert started["goidan"].caller_username == "altuser"
+
+        # 6. Nếu altuser đăng nhập sẵn trong WorkspaceManager -> tái sử dụng phiên
+        assert client.post("/api/accounts/login", json={"server_id": 53, "username": "altuser", "password": "pw"}).status_code == 200
+        r_test_reuse = client.post(
+            "/api/accounts/mainuser%20%40%20S53/tasks/goidan/caller/test",
+            json={"username": "altuser"},
+        )
+        assert r_test_reuse.status_code == 200
+        assert r_test_reuse.json()["reused_session"] is True
+        assert started["goidan"].caller_provider.acquire_gateway() is wm.get_session("altuser @ S53").gateway
+
+    wm.graceful_shutdown()
+
+    app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    for token in ("gd-caller-en", "gd-caller-user", "gd-caller-pass", "gd-caller-vault", "btn-gd-caller-test", "gd-caller-status"):
+        assert token in app_js
+
