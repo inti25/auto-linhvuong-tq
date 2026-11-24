@@ -78,6 +78,7 @@ class GoiDan:
         caller_provider: Optional[Any] = None,
         caller_username: str = "",
         on_caller_alert: Optional[Callable[[str, str], None]] = None,
+        even_troops: bool = False,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -112,6 +113,7 @@ class GoiDan:
         self.caller_provider = caller_provider
         self.caller_username = (caller_username or "").strip()
         self.on_caller_alert = on_caller_alert
+        self.even_troops = bool(even_troops)
         self._helper_origins: Optional[list[tuple[int, int]]] = None
 
         # Tự động suy ra mode từ target_type nếu mode chưa được chỉ định
@@ -566,9 +568,12 @@ class GoiDan:
         return None, last_err or "no_target"
 
     def recover_generals(self) -> None:
-        """Thực hiện chu trình hồi phục sau chiến đấu: trị thương và bổ sung tân binh."""
+        """Thực hiện chu trình hồi phục sau chiến đấu: trị thương, san đều quân và bổ sung tân binh."""
         roster = None
-        if self.target_army and self.target_army.total > 0 and self.auto_recruit and self.city_id:
+        if self.city_id and (
+            self.even_troops
+            or (self.target_army and self.target_army.total > 0 and self.auto_recruit)
+        ):
             try:
                 roster = fetch_roster(
                     self.ctx.gateway,
@@ -580,11 +585,28 @@ class GoiDan:
                 roster = None
 
         for gid in self.generals:
-            # 1. Trị thương
             self.provisioner.heal_general(self.city_id, gid)
-            # 2. Bù lính theo TargetArmy hoặc cấu hình legacy
+
+        city_gens = (
+            {g.id: g for g in roster.generals_of(self.city_id) if g.role == "vo"}
+            if roster and self.city_id
+            else {}
+        )
+        current_armies: dict[int, Optional[Army]] = (
+            {gid: roster.army_of(gid) for gid in self.generals} if roster else {}
+        )
+        if self.even_troops and roster is not None and self.city_id:
+            current_armies, _ = self.provisioner.balance_troops(
+                base_id=self.city_id,
+                general_ids=self.generals,
+                current_armies=current_armies,
+                base_gens=city_gens,
+                on_log=self.ctx.notify,
+            )
+
+        for gid in self.generals:
             if self.target_army and self.target_army.total > 0 and self.auto_recruit and self.city_id:
-                cur_army = roster.army_of(gid) if roster else None
+                cur_army = current_armies.get(gid)
                 self.provisioner.adjust_troops(
                     base_id=self.city_id,
                     general_id=gid,
@@ -630,6 +652,7 @@ class GoiDan:
         self,
         roster: Any,
         added_troops: Optional[dict[int, int]] = None,
+        army_overrides: Optional[dict[int, Army]] = None,
     ) -> Optional[str]:
         """Kiểm tra thể lực & quân số sau khi đã ưu tiên biên chế và luyện sĩ khí."""
         if self.return_threshold <= 0 or not self.city_id or roster is None:
@@ -655,7 +678,7 @@ class GoiDan:
                 g = gens.get(gid)
                 if not g:
                     continue
-                army = roster.army_of(gid)
+                army = army_overrides[gid] if (army_overrides and gid in army_overrides) else roster.army_of(gid)
                 cur_total = (army.total if army else 0) + added_map.get(gid, 0)
                 army_pct = (cur_total / self.target_army.total) * 100.0
                 if army_pct < self.return_threshold:
@@ -683,14 +706,19 @@ class GoiDan:
                     self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
                 return "generals_busy"
 
-        # 1. Tự động đổi Mưu sĩ & Chuẩn bị quân lực / Luyện sĩ khí trước khi gọi/xuất quân
+        # 1. Tự động đổi Mưu sĩ & San đều quân / Chuẩn bị quân lực / Luyện sĩ khí trước khi gọi/xuất quân
         needs_army_prep = bool(
-            self.target_army is not None
-            and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
+            self.even_troops
+            or (
+                self.target_army is not None
+                and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
+            )
         )
         needs_threshold_check = bool(self.return_threshold > 0 and self.city_id)
         roster = None
         added_troops: dict[int, int] = {}
+        current_armies: dict[int, Optional[Army]] = {}
+        troops_balanced = False
         if self.city_id and (needs_army_prep or self.auto_swap_tactician or needs_threshold_check):
             try:
                 roster = fetch_roster(
@@ -720,10 +748,24 @@ class GoiDan:
                     else {}
                 )
 
-                # Trị thương & Bổ sung lính
-                troops_added = False
+                # Trị thương, San đều quân & Bổ sung lính
                 for gid in self.generals:
                     self.provisioner.heal_general(self.city_id, gid)
+
+                current_armies = (
+                    {gid: roster.army_of(gid) for gid in self.generals} if roster else {}
+                )
+                if self.even_troops and roster is not None:
+                    current_armies, troops_balanced = self.provisioner.balance_troops(
+                        base_id=self.city_id,
+                        general_ids=self.generals,
+                        current_armies=current_armies,
+                        base_gens=city_gens,
+                        on_log=self.ctx.notify,
+                    )
+
+                troops_added = False
+                for gid in self.generals:
                     g = city_gens.get(gid)
                     if (
                         self.auto_recruit
@@ -732,7 +774,7 @@ class GoiDan:
                         and roster
                         and not (g and g.upgrading_time > 0)
                     ):
-                        cur_army = roster.army_of(gid)
+                        cur_army = current_armies.get(gid)
                         adj_res = self.provisioner.adjust_troops(
                             base_id=self.city_id,
                             general_id=gid,
@@ -758,13 +800,17 @@ class GoiDan:
                         base_gens=city_gens,
                         on_notify=self.ctx.notify,
                         stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
-                        refresh_from_server=troops_added,
+                        refresh_from_server=troops_added or troops_balanced,
                     )
                     if not ready:
                         return "waiting_morale"
 
         # 1.5. Kiểm tra ngưỡng an toàn thể lực / quân lực SAU khi biên chế và luyện sĩ khí
-        threshold_wait = self._check_safety_thresholds(roster, added_troops)
+        threshold_wait = self._check_safety_thresholds(
+            roster,
+            added_troops,
+            army_overrides=current_armies if troops_balanced else None,
+        )
         if threshold_wait is not None:
             return threshold_wait
 

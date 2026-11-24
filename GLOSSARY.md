@@ -201,6 +201,10 @@ _Avoid_: Mức lính mục tiêu, target army, biên chế cố định
 Quy trình chuẩn bị quân lực trước khi xuất kích (Thảo Phạt, Bình Man, Gọi Man): trị thương Võ tướng, chiêu mộ tân binh tại Thành hoặc lấy từ quân đồn trú sẵn có tại Doanh trại để bù theo Định Mức Biên Chế, sau đó Luyện Sĩ Khí đạt ngưỡng tối thiểu.
 _Avoid_: Bổ sung lính, refill lính, auto recruit
 
+**San Đều Quân**:
+Cơ chế tự động cân bằng quân số hiện có theo từng binh chủng (Bộ binh, Kỵ binh, Cung binh) giữa các **Võ tướng xuất kích** đang rảnh rỗi trong cùng một **Căn Cứ** trước khi tiến hành **Biên Chế Quân Tự Động** và **Luyện Sĩ Khí**, sử dụng trực tiếp API điều động quân giữa hai tướng tại Binh trường (`OPT.ashx?id=39`) nhằm bảo toàn sĩ khí thay vì rút quân về kho.
+_Avoid_: chia đều lính, cân bằng quân, rebalance troops
+
 **Quy Hoạch Đa Căn Cứ**:
 Thiết lập hàng đợi công trình độc lập cho từng Thành và Doanh trại, cho phép bot giám sát và tự động nâng cấp đồng thời nhiều căn cứ cùng lúc.
 _Avoid_: Xây đa thành, multi-city queue

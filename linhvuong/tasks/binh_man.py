@@ -90,6 +90,7 @@ class BinhMan:
         base_name: str = "",
         auto_swap_tactician: bool = False,
         min_tactician_stamina: float = 30.0,
+        even_troops: bool = False,
     ):
         self.ctx = ctx
         self.generals = generals
@@ -120,6 +121,7 @@ class BinhMan:
         self.base_name = base_name
         self.auto_swap_tactician = bool(auto_swap_tactician)
         self.min_tactician_stamina = max(0.0, min(100.0, float(min_tactician_stamina)))
+        self.even_troops = bool(even_troops)
         self._camp_frozen_until: float = 0.0
 
         # Tự động suy ra mode nếu không chỉ định: có camp_id là Chế độ 1, không có là Chế độ 2
@@ -282,6 +284,7 @@ class BinhMan:
         self,
         roster: Any,
         added_troops: Optional[dict[int, int]] = None,
+        army_overrides: Optional[dict[int, Army]] = None,
     ) -> Optional[str]:
         """Kiểm tra thể lực & quân số sau khi đã ưu tiên biên chế và luyện sĩ khí."""
         if self.return_threshold <= 0 or not self.origin_id or roster is None:
@@ -307,7 +310,7 @@ class BinhMan:
                 g = gens.get(gid)
                 if not g:
                     continue
-                army = roster.army_of(gid)
+                army = army_overrides[gid] if (army_overrides and gid in army_overrides) else roster.army_of(gid)
                 cur_total = (army.total if army else 0) + added_map.get(gid, 0)
                 army_pct = (cur_total / self.target_army.total) * 100.0
                 if army_pct < self.return_threshold:
@@ -396,19 +399,38 @@ class BinhMan:
         """Trị thương và bổ sung quân tại chỗ trong Thành (Chế độ 2 - Xuất quân từ Thành)."""
         cid = self.city_id or self.parent_city_id or 0
         roster = None
-        if self.target_army and self.target_army.total > 0 and self.auto_recruit and cid:
+        if cid and (
+            self.even_troops
+            or (self.target_army and self.target_army.total > 0 and self.auto_recruit)
+        ):
             try:
                 roster = fetch_roster(self.ctx.gateway, only_base_ids=[cid])
             except Exception:
                 roster = None
 
         for gid in self.generals:
-            # 1. Trị thương
             self.provisioner.heal_general(cid, gid)
 
-            # 2. Bổ sung quân theo TargetArmy hoặc cấu hình legacy
+        city_gens = (
+            {g.id: g for g in roster.generals_of(cid) if g.role == "vo"}
+            if roster and cid
+            else {}
+        )
+        current_armies: dict[int, Optional[Army]] = (
+            {gid: roster.army_of(gid) for gid in self.generals} if roster else {}
+        )
+        if self.even_troops and roster is not None and cid:
+            current_armies, _ = self.provisioner.balance_troops(
+                base_id=cid,
+                general_ids=self.generals,
+                current_armies=current_armies,
+                base_gens=city_gens,
+                on_log=self.ctx.notify,
+            )
+
+        for gid in self.generals:
             if self.target_army and self.target_army.total > 0 and self.auto_recruit:
-                cur_army = roster.army_of(gid) if roster else None
+                cur_army = current_armies.get(gid)
                 self.provisioner.adjust_troops(
                     base_id=cid,
                     general_id=gid,
@@ -460,14 +482,19 @@ class BinhMan:
                     self.ctx.notify("⏳ Võ tướng đang bận hoặc hành quân trên đường, chờ hồi thành...")
                 return "generals_busy"
 
-        # 2. Ưu tiên đổi Mưu sĩ, Biên chế quân & Luyện sĩ khí TRƯỚC khi xét ngưỡng thể lực
+        # 2. Ưu tiên đổi Mưu sĩ, San đều quân, Biên chế quân & Luyện sĩ khí TRƯỚC khi xét ngưỡng thể lực
         needs_army_prep = bool(
-            self.target_army is not None
-            and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
+            self.even_troops
+            or (
+                self.target_army is not None
+                and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
+            )
         )
         needs_threshold_check = bool(self.return_threshold > 0 and self.origin_id)
         roster = None
         added_troops: dict[int, int] = {}
+        current_armies: dict[int, Optional[Army]] = {}
+        troops_balanced = False
 
         if self.origin_id and (needs_army_prep or self.auto_swap_tactician or needs_threshold_check):
             try:
@@ -498,9 +525,23 @@ class BinhMan:
                     else {}
                 )
                 is_city = (self.mode == MODE_CITY)
-                troops_added = False
                 for gid in self.generals:
                     self.provisioner.heal_general(self.origin_id, gid)
+
+                current_armies = (
+                    {gid: roster.army_of(gid) for gid in self.generals} if roster else {}
+                )
+                if self.even_troops and roster is not None:
+                    current_armies, troops_balanced = self.provisioner.balance_troops(
+                        base_id=self.origin_id,
+                        general_ids=self.generals,
+                        current_armies=current_armies,
+                        base_gens=base_gens,
+                        on_log=self.ctx.notify,
+                    )
+
+                troops_added = False
+                for gid in self.generals:
                     g = base_gens.get(gid)
                     if (
                         self.auto_recruit
@@ -509,7 +550,7 @@ class BinhMan:
                         and roster
                         and not (g and g.upgrading_time > 0)
                     ):
-                        cur_army = roster.army_of(gid)
+                        cur_army = current_armies.get(gid)
                         # Thành thì cho phép mua tân binh (auto_recruit=True), Doanh trại chỉ rút đồn trú (auto_recruit=False)
                         adj_res = self.provisioner.adjust_troops(
                             base_id=self.origin_id,
@@ -542,7 +583,7 @@ class BinhMan:
                     for gid in self.generals:
                         if gid not in base_gens:
                             continue
-                        army = roster.army_of(gid)
+                        army = current_armies.get(gid)
                         cur_total = (army.total if army else 0) + added_troops.get(gid, 0)
                         if (cur_total / self.target_army.total) * 100.0 < self.return_threshold:
                             needs_camp_army_retreat = True
@@ -552,7 +593,7 @@ class BinhMan:
                         for gid in self.generals
                         if gid in base_gens
                     ):
-                        self.retreat_to_safety(roster=None if troops_added else roster)
+                        self.retreat_to_safety(roster=None if (troops_added or troops_balanced) else roster)
                         return "retreated_below_threshold"
 
                 if self.auto_morale and base_gens:
@@ -564,13 +605,17 @@ class BinhMan:
                         base_gens=base_gens,
                         on_notify=self.ctx.notify,
                         stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
-                        refresh_from_server=troops_added,
+                        refresh_from_server=troops_added or troops_balanced,
                     )
                     if not ready:
                         return "waiting_morale"
 
         # 3. Kiểm tra ngưỡng an toàn thể lực / quân lực SAU khi biên chế và luyện sĩ khí
-        threshold_wait = self._check_safety_thresholds(roster, added_troops)
+        threshold_wait = self._check_safety_thresholds(
+            roster,
+            added_troops,
+            army_overrides=current_armies if troops_balanced else None,
+        )
         if threshold_wait is not None:
             return threshold_wait
 

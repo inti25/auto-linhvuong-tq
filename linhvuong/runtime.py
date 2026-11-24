@@ -2462,6 +2462,7 @@ class AccountSession:
             caller_provider=caller_provider,
             caller_username=gd.caller_username,
             on_caller_alert=self._on_goidan_caller_alert,
+            even_troops=bool(getattr(gd, "even_troops", False)),
         )
 
     def start_goidan(self) -> None:
@@ -2503,6 +2504,7 @@ class AccountSession:
         min_morale = max(0, min(100, _safe_int(gd.min_morale, 95)))
         auto_swap_tac = bool(getattr(gd, "auto_swap_tactician", False))
         min_tac_stam = parse_stamina_threshold(getattr(gd, "min_tactician_stamina", "30"))
+        even_troops = bool(getattr(gd, "even_troops", False))
 
         def _worker():
             try:
@@ -2511,6 +2513,7 @@ class AccountSession:
                 for gid in gd.generals:
                     prov.heal_general(cid, gid)
                 fresh = fetch_roster(self.gateway, only_base_ids=[cid])
+                city_gens = {g.id: g for g in fresh.generals_of(cid) if g.role == "vo"}
                 if auto_swap_tac:
                     auto_swap_low_stamina_tacticians(
                         gateway=self.gateway,
@@ -2520,11 +2523,21 @@ class AccountSession:
                         min_stamina_pct=min_tac_stam,
                         on_log=lambda m: self.append_log("goidan", m),
                     )
+                current_armies = {gid: fresh.army_of(gid) for gid in gd.generals}
+                troops_balanced = False
+                if even_troops:
+                    current_armies, troops_balanced = prov.balance_troops(
+                        base_id=cid,
+                        general_ids=list(gd.generals),
+                        current_armies=current_armies,
+                        base_gens=city_gens,
+                        on_log=lambda m: self.append_log("goidan", m),
+                    )
                 troops_added = False
                 if target_army.total > 0 and gd.auto_recruit:
                     needed = 0
                     for gid in gd.generals:
-                        a = fresh.army_of(gid)
+                        a = current_armies.get(gid)
                         needed += max(0, target_army.infantry - (a.infantry if a else 0))
                         needed += max(0, target_army.cavalry - (a.cavalry if a else 0))
                         needed += max(0, target_army.archers - (a.archers if a else 0))
@@ -2534,18 +2547,17 @@ class AccountSession:
                             prov.buy_recruits(cid, needed - avail)
                     for gid in gd.generals:
                         res = prov.adjust_troops(
-                            base_id=cid, general_id=gid, current_army=fresh.army_of(gid),
+                            base_id=cid, general_id=gid, current_army=current_armies.get(gid),
                             target_army=target_army, auto_recruit=True,
                             on_log=lambda m: self.append_log("goidan", m),
                         )
                         if any(succ and diff > 0 for _, diff, succ, _ in (res or [])):
                             troops_added = True
                 if gd.auto_morale:
-                    city_gens = {g.id: g for g in fresh.generals_of(cid) if g.role == "vo"}
                     MoraleTrainer(self.gateway).adjust_squad_morale(
                         base_id=cid, general_ids=list(gd.generals), target_morale=min_morale,
                         base_gens=city_gens, on_notify=lambda m: self.append_log("goidan", m),
-                        refresh_from_server=troops_added,
+                        refresh_from_server=troops_added or troops_balanced,
                     )
                 self.append_log("goidan", "🏁 Hoàn tất biên chế Gọi Man!")
                 self.reload_roster()
@@ -2632,6 +2644,7 @@ class AccountSession:
                     base_name=b.name,
                     auto_swap_tactician=bool(getattr(cfg, "auto_swap_tactician", False)),
                     min_tactician_stamina=parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30")),
+                    even_troops=bool(getattr(cfg, "even_troops", False)),
                 )
             )
         if not tasks:
@@ -2703,9 +2716,11 @@ class AccountSession:
                     min_morale = max(0, min(100, _safe_int(cfg.min_morale, 95)))
                     auto_swap_tac = bool(getattr(cfg, "auto_swap_tactician", False))
                     min_tac_stam = parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30"))
+                    even_troops = bool(getattr(cfg, "even_troops", False))
                     for gid in cfg.generals:
                         prov.heal_general(b.id, gid)
                     fresh = fetch_roster(self.gateway, only_base_ids=[b.id], include_civil=auto_swap_tac, include_cities=False)
+                    gens = {g.id: g for g in fresh.generals_of(b.id) if g.role == "vo"}
                     if auto_swap_tac:
                         auto_swap_low_stamina_tacticians(
                             gateway=self.gateway,
@@ -2715,29 +2730,48 @@ class AccountSession:
                             min_stamina_pct=min_tac_stam,
                             on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                         )
+                    current_armies = {gid: fresh.army_of(gid) for gid in cfg.generals}
+                    troops_balanced = False
+                    if even_troops:
+                        current_armies, troops_balanced = prov.balance_troops(
+                            base_id=b.id,
+                            general_ids=list(cfg.generals),
+                            current_armies=current_armies,
+                            base_gens=gens,
+                            on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
+                        )
                     troops_added = False
                     if target_army.total > 0:
                         for gid in cfg.generals:
                             res = prov.adjust_troops(
-                                base_id=b.id, general_id=gid, current_army=fresh.army_of(gid),
+                                base_id=b.id, general_id=gid, current_army=current_armies.get(gid),
                                 target_army=target_army, auto_recruit=(cfg.mode == 2 and cfg.auto_recruit),
                                 on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                             )
                             if any(succ and diff > 0 for _, diff, succ, _ in (res or [])):
                                 troops_added = True
                         if cfg.mode == 1 and cfg.parent_city_id and str(cfg.parent_city_id).isdigit():
+                            post_armies = current_armies
+                            if troops_added:
+                                post_roster = fetch_roster(
+                                    self.gateway,
+                                    only_base_ids=[b.id],
+                                    include_civil=False,
+                                    include_cities=False,
+                                )
+                                post_armies = {gid: post_roster.army_of(gid) for gid in cfg.generals}
                             prov.provision_camp_generals_with_parent_city(
                                 camp_id=b.id, parent_city_id=int(cfg.parent_city_id),
                                 general_ids=list(cfg.generals), target_army=target_army,
+                                current_armies=post_armies,
                                 min_morale=min_morale,
                                 on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                             )
                     if cfg.auto_morale:
-                        gens = {g.id: g for g in fresh.generals_of(b.id) if g.role == "vo"}
                         MoraleTrainer(self.gateway).adjust_squad_morale(
                             base_id=b.id, general_ids=list(cfg.generals), target_morale=min_morale,
                             base_gens=gens, on_notify=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
-                            refresh_from_server=troops_added,
+                            refresh_from_server=troops_added or troops_balanced,
                         )
                 except CaptchaRequired:
                     self._handle_captcha(f"Đổi Mưu sĩ Bình Man [{b.name}] gặp Captcha (mã 110).")

@@ -1683,6 +1683,79 @@ def test_goi_man_helper_caller_fallback_scans_around_helper_city_via_c7_and_c32(
     assert any(k == "OPT.ashx?id=69" and d.get("param1") == "8803" for k, d in alt_server_c32.calls)
 
 
+def test_goi_dan_even_troops_balances_before_recruit_and_refreshes_morale():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(2, 2)
+    c32 = {
+        "ret": 0,
+        "list": [
+            [
+                123,
+                "City",
+                2,
+                2,
+                [
+                    [50, "Gen 50", "", 2, 0, 0, 4, 100, 240, 240, 0],
+                    [51, "Gen 51", "", 2, 0, 0, 4, 100, 240, 240, 0],
+                ],
+            ]
+        ],
+    }
+    c76 = {
+        "ret": 0,
+        "list": [
+            [
+                123,
+                "City",
+                [
+                    [50, "Gen 50", 0, "", 0, 2000, 0, 0, 0, 100, 0, 0],
+                    [51, "Gen 51", 0, "", 0, 1000, 0, 0, 0, 100, 0, 0],
+                ],
+            ]
+        ],
+    }
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(2, 2, 777, VONG_LINH)]}},
+        handlers={
+            "City.ashx?id=50": {"ret": 0},
+            "Common.ashx?id=32": c32,
+            "Common.ashx?id=76": c76,
+            "Common.ashx?id=27": {"ret": 0, "list": [[123, "City", 5000]]},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=39": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = GoiDan(
+        ctx,
+        generals=[50, 51],
+        origin=(2, 2),
+        radius=5,
+        city_id=123,
+        target_army=TargetArmy(infantry=1800),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        even_troops=True,
+        sleep_fn=lambda s: None,
+    )
+    assert task.run_once() == "attacked"
+    eps = [k for k, _ in server.calls]
+    assert eps.index("OPT.ashx?id=39") < eps.index("OPT.ashx?id=6")
+    opt39 = [d for k, d in server.calls if k == "OPT.ashx?id=39"]
+    assert len(opt39) == 1
+    assert opt39[0]["lFromGeneralID"] == "50"
+    assert opt39[0]["lToGeneralID"] == "51"
+    assert opt39[0]["infantry"] == "500"
+    opt6 = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert [(d["lGeneralID"], d["lAmount"]) for d in opt6] == [("50", "300"), ("51", "300")]
+    assert sum(1 for k, _ in server.calls if k == "Common.ashx?id=76") >= 2
+
+
+
 
 
 
