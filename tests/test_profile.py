@@ -594,6 +594,25 @@ def test_resource_profile_market_fields_defaults_and_roundtrip():
     assert loaded.resource.sell_threshold_pct == "92"
 
 
+def test_even_troops_profile_defaults_and_roundtrip():
+    from linhvuong.profile import BaseBinhManConfig, BinhManProfile, GoiDanProfile
+
+    prof = Profile()
+    assert prof.goi_dan.even_troops is False
+    assert prof.binh_man.even_troops is False
+    assert BaseBinhManConfig().even_troops is False
+    assert GoiDanProfile.from_dict({"city_id": 101}).even_troops is False
+    assert BinhManProfile.from_dict({"mode": 2}).even_troops is False
+
+    prof.goi_dan.even_troops = True
+    prof.binh_man.even_troops = True
+    prof.binh_man.bases["101"] = BaseBinhManConfig(name="T1", enabled=True, mode=2, even_troops=True)
+    loaded = Profile.from_dict(prof.to_dict())
+    assert loaded.goi_dan.even_troops is True
+    assert loaded.binh_man.even_troops is True
+    assert loaded.binh_man.bases["101"].even_troops is True
+
+
 
 
 

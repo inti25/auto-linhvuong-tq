@@ -2319,3 +2319,72 @@ def test_runtime_and_web_goidan_helper_caller_vault_reuse_and_validation(tmp_pat
     app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     for token in ("gd-caller-en", "gd-caller-user", "gd-caller-pass", "gd-caller-vault", "btn-gd-caller-test", "gd-caller-status"):
         assert token in app_js
+
+
+def test_runtime_and_web_even_troops_forwarding_and_provision(tmp_path, monkeypatch):
+    from pathlib import Path
+    import time
+    import linhvuong.runtime as rt_mod
+    from linhvuong.profile import BaseBinhManConfig
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=False)
+    auth = WebAdminAuth(data_dir=tmp_path, host="127.0.0.1", env_username="admin", env_password="pw")
+    app = create_app(workspace=wm, auth=auth, host="127.0.0.1", auto_restore=False)
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "pw"}).status_code == 200
+        assert client.post("/api/accounts/login", json={"server_id": 58, "username": "evenuser", "password": "pw"}).status_code == 200
+        sess = wm.get_session("evenuser @ S58")
+        sess.roster = _fake_roster()
+
+        # 1. Task creation forwards even_troops
+        sess.profile.goi_dan.city_id = 1001
+        sess.profile.goi_dan.generals = [1]
+        sess.profile.goi_dan.even_troops = True
+        assert sess._create_goidan_task().even_troops is True
+
+        sess.profile.binh_man.bases["1001"] = BaseBinhManConfig(
+            name="TT", enabled=True, mode=2, generals=[1], even_troops=True
+        )
+        bm_tasks = sess._create_binhman_tasks()
+        assert len(bm_tasks) == 1
+        assert bm_tasks[0].even_troops is True
+
+        # 2. Manual adjust_*_troops gọi balance_troops khi even_troops=True
+        balanced_bases = []
+        monkeypatch.setattr(rt_mod, "fetch_roster", lambda *_a, **_kw: sess.roster)
+        monkeypatch.setattr(sess.gateway, "call", lambda *_a, **_kw: {"ret": 0})
+        monkeypatch.setattr(sess.profile.goi_dan, "auto_morale", False)
+        sess.profile.binh_man.bases["1001"].auto_morale = False
+        orig_balance = rt_mod.ArmyProvisioner.balance_troops
+
+        def _spy_balance(self, base_id, general_ids, current_armies, base_gens=None, on_log=None):
+            balanced_bases.append(base_id)
+            return orig_balance(self, base_id, general_ids, current_armies, base_gens=base_gens, on_log=on_log)
+
+        monkeypatch.setattr(rt_mod.ArmyProvisioner, "balance_troops", _spy_balance)
+        sess.adjust_goidan_troops()
+        sess.adjust_binhman_troops(base_id=1001)
+        deadline = time.monotonic() + 2.0
+        while len(balanced_bases) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert balanced_bases.count(1001) == 2
+
+        # 3. Web PUT /profile persists even_troops for binh_man & goi_dan
+        r_put = client.put(
+            "/api/accounts/evenuser%20%40%20S58/profile",
+            json={
+                "goi_dan": {"even_troops": True},
+                "binh_man": {"even_troops": True, "bases": {"1001": {"even_troops": True, "enabled": True, "mode": 2, "generals": [1]}}},
+            },
+        )
+        assert r_put.status_code == 200
+        p = r_put.json()["profile"]
+        assert p["goi_dan"]["even_troops"] is True
+        assert p["binh_man"]["bases"]["1001"]["even_troops"] is True
+
+    wm.graceful_shutdown()
+    app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "bm-even-troops" in app_js
+    assert "gd-even-troops" in app_js

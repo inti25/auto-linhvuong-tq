@@ -212,6 +212,7 @@ class GoiDanProfile:
     target_archers: str = "0"
     auto_recruit: bool = True
     auto_morale: bool = True
+    even_troops: bool = False
     min_morale: str = "95"
     auto_swap_tactician: bool = False
     min_tactician_stamina: str = "30"
@@ -259,6 +260,7 @@ class GoiDanProfile:
             target_archers=str(data.get("target_archers", "0")),
             auto_recruit=bool(auto_rec),
             auto_morale=bool(data.get("auto_morale", True)),
+            even_troops=bool(data.get("even_troops", False)),
             min_morale=str(data.get("min_morale", "95")),
             auto_swap_tactician=bool(data.get("auto_swap_tactician", False)),
             min_tactician_stamina=str(data.get("min_tactician_stamina", "30")),
@@ -293,6 +295,7 @@ class BaseBinhManConfig:
     target_archers: str = "0"
     auto_recruit: bool = True
     auto_morale: bool = True
+    even_troops: bool = False
     min_morale: str = "95"
     auto_swap_tactician: bool = False
     min_tactician_stamina: str = "30"
@@ -340,6 +343,7 @@ class BaseBinhManConfig:
             target_archers=str(data.get("target_archers", "0")),
             auto_recruit=bool(data.get("auto_recruit", True)),
             auto_morale=bool(data.get("auto_morale", True)),
+            even_troops=bool(data.get("even_troops", False)),
             min_morale=str(data.get("min_morale", "95")),
             auto_swap_tactician=bool(data.get("auto_swap_tactician", False)),
             min_tactician_stamina=str(data.get("min_tactician_stamina", "30")),
@@ -367,6 +371,7 @@ class BinhManProfile:
     target_archers: str = "0"
     auto_recruit: bool = True
     auto_morale: bool = True
+    even_troops: bool = False
     min_morale: str = "95"
     auto_swap_tactician: bool = False
     min_tactician_stamina: str = "30"
@@ -420,6 +425,7 @@ class BinhManProfile:
             target_archers=str(data.get("target_archers", "0")),
             auto_recruit=bool(data.get("auto_recruit", True)),
             auto_morale=bool(data.get("auto_morale", True)),
+            even_troops=bool(data.get("even_troops", False)),
             min_morale=str(data.get("min_morale", "95")),
             auto_swap_tactician=bool(data.get("auto_swap_tactician", False)),
             min_tactician_stamina=str(data.get("min_tactician_stamina", "30")),

@@ -68,6 +68,7 @@ class BinhManMixin:
             "target_cavalry": self.bm_target_cav_var.get() if hasattr(self, "bm_target_cav_var") else "0",
             "target_archers": self.bm_target_arc_var.get() if hasattr(self, "bm_target_arc_var") else "0",
             "auto_recruit": bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True,
+            "even_troops": bool(self.bm_even_troops_var.get()) if hasattr(self, "bm_even_troops_var") else False,
             "auto_morale": bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True,
             "min_morale": self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95",
             "auto_swap_tactician": bool(self.bm_auto_swap_tactician_var.get()) if hasattr(self, "bm_auto_swap_tactician_var") else False,
@@ -119,6 +120,8 @@ class BinhManMixin:
             self.bm_target_arc_var.set(str(bm_data["target_archers"]))
         if hasattr(self, "bm_auto_recruit_var") and "auto_recruit" in bm_data:
             self.bm_auto_recruit_var.set(bool(bm_data["auto_recruit"]))
+        if hasattr(self, "bm_even_troops_var") and "even_troops" in bm_data:
+            self.bm_even_troops_var.set(bool(bm_data["even_troops"]))
         if hasattr(self, "bm_auto_morale_var") and "auto_morale" in bm_data:
             self.bm_auto_morale_var.set(bool(bm_data["auto_morale"]))
         if hasattr(self, "bm_min_morale_var") and "min_morale" in bm_data:
@@ -170,6 +173,7 @@ class BinhManMixin:
                 target_cavalry=str(bm_data.get("target_cavalry", "0")),
                 target_archers=str(bm_data.get("target_archers", "0")),
                 auto_recruit=bool(bm_data.get("auto_recruit", True)),
+                even_troops=bool(bm_data.get("even_troops", False)),
                 auto_morale=bool(bm_data.get("auto_morale", True)),
                 min_morale=str(bm_data.get("min_morale", "95")),
                 auto_swap_tactician=bool(bm_data.get("auto_swap_tactician", False)),
@@ -364,14 +368,23 @@ class BinhManMixin:
         self.bm_adjust_troops_btn = ttk.Button(bm_army_f, text="⚔️ Biên chế ngay", style="Action.TButton", command=self._manual_adjust_bm_troops)
         self.bm_adjust_troops_btn.pack(side="left", padx=(0, 4))
 
-        # Row 5: Tự động bổ sung lính, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        # Row 5: Tự động bổ sung lính, San đều quân, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        bm_rec_f = tk.Frame(f_bm, bg=BG)
+        bm_rec_f.grid(row=5, column=0, columnspan=2, sticky="w", padx=4, pady=4)
         self.bm_auto_recruit_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
-            f_bm,
+            bm_rec_f,
             text="Tự động bổ sung lính",
             variable=self.bm_auto_recruit_var,
             style="TCheckbutton",
-        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+        ).pack(side="left", padx=(0, 8))
+        self.bm_even_troops_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            bm_rec_f,
+            text="San đều quân",
+            variable=self.bm_even_troops_var,
+            style="TCheckbutton",
+        ).pack(side="left")
 
         bm_mor_f = tk.Frame(f_bm, bg=BG)
         bm_mor_f.grid(row=5, column=2, columnspan=2, sticky="w", padx=4, pady=4)
@@ -770,6 +783,8 @@ class BinhManMixin:
             cfg.target_archers = str(self.bm_target_arc_var.get() or "0")
         if hasattr(self, "bm_auto_recruit_var"):
             cfg.auto_recruit = bool(self.bm_auto_recruit_var.get())
+        if hasattr(self, "bm_even_troops_var"):
+            cfg.even_troops = bool(self.bm_even_troops_var.get())
         if hasattr(self, "bm_auto_morale_var"):
             cfg.auto_morale = bool(self.bm_auto_morale_var.get())
         if hasattr(self, "bm_min_morale_var"):
@@ -830,6 +845,8 @@ class BinhManMixin:
                 self.bm_target_arc_var.set(str(cfg.target_archers))
             if hasattr(self, "bm_auto_recruit_var"):
                 self.bm_auto_recruit_var.set(cfg.auto_recruit)
+            if hasattr(self, "bm_even_troops_var"):
+                self.bm_even_troops_var.set(bool(getattr(cfg, "even_troops", False)))
             if hasattr(self, "bm_auto_morale_var"):
                 self.bm_auto_morale_var.set(cfg.auto_morale)
             if hasattr(self, "bm_min_morale_var"):
@@ -988,6 +1005,7 @@ class BinhManMixin:
                 peers=peers,
                 non_blocking_relocate=True,
                 base_name=b.name,
+                even_troops=bool(getattr(cfg, "even_troops", False)),
             )
             tasks.append(task)
 
@@ -1151,6 +1169,7 @@ class BinhManMixin:
             auto_swap_tactician=auto_swap_tactician,
             min_tactician_stamina=min_tactician_stamina,
             base_name=base.name,
+            even_troops=bool(self.bm_even_troops_var.get()) if hasattr(self, "bm_even_troops_var") else False,
         )
 
     def _provision_base_troops(
@@ -1172,6 +1191,7 @@ class BinhManMixin:
         target_army = TargetArmy(infantry=t_inf, cavalry=t_cav, archers=t_arc)
         auto_recruit = cfg.auto_recruit
         auto_morale = cfg.auto_morale
+        even_troops = bool(getattr(cfg, "even_troops", False))
         min_morale = int(cfg.min_morale) if str(cfg.min_morale).isdigit() else 95
         auto_swap_tac = bool(getattr(cfg, "auto_swap_tactician", False))
         min_tac_stam = parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30"))
@@ -1188,25 +1208,39 @@ class BinhManMixin:
 
             fresh_roster = None
             troops_added = False
-            if target_army.total > 0 and auto_recruit:
+            troops_balanced = False
+            city_gens = {}
+            current_armies = {}
+            if auto_swap_tac or even_troops or (target_army.total > 0 and auto_recruit):
                 fresh_roster = fetch_roster_fn(
                     self.gateway,
                     only_base_ids=[city_id],
                     include_civil=auto_swap_tac,
                     include_cities=False,
                 )
-                for gid in sel_gens:
-                    army = fresh_roster.army_of(gid)
-                    adj_res = prov.adjust_troops(
+                city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
+                current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
+                if even_troops:
+                    current_armies, troops_balanced = prov.balance_troops(
                         base_id=city_id,
-                        general_id=gid,
-                        current_army=army,
-                        target_army=target_army,
-                        auto_recruit=True,
-                        on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                        general_ids=sel_gens,
+                        current_armies=current_armies,
+                        base_gens=city_gens,
+                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
                     )
-                    if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
-                        troops_added = True
+                if target_army.total > 0 and auto_recruit:
+                    for gid in sel_gens:
+                        army = current_armies.get(gid)
+                        adj_res = prov.adjust_troops(
+                            base_id=city_id,
+                            general_id=gid,
+                            current_army=army,
+                            target_army=target_army,
+                            auto_recruit=True,
+                            on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                        )
+                        if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                            troops_added = True
 
             if auto_swap_tac:
                 if fresh_roster is None:
@@ -1249,7 +1283,7 @@ class BinhManMixin:
                     target_morale=min_morale,
                     base_gens=city_gens,
                     on_notify=_on_notify_bm_city,
-                    refresh_from_server=troops_added,
+                    refresh_from_server=troops_added or troops_balanced,
                 )
         else:
             camp_id = base_id
@@ -1258,17 +1292,32 @@ class BinhManMixin:
 
             fresh_roster = None
             troops_added = False
+            troops_balanced = False
             rechecked = None
             moved_to_parent = False
-            if target_army.total > 0:
+            camp_gens = {}
+            current_armies = {}
+            if auto_swap_tac or even_troops or target_army.total > 0:
                 fresh_roster = fetch_roster_fn(
                     self.gateway,
                     only_base_ids=[camp_id],
                     include_civil=auto_swap_tac,
                     include_cities=False,
                 )
+                camp_gens = {g.id: g for g in fresh_roster.generals_of(camp_id) if g.role == "vo"}
+                current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
+                if even_troops:
+                    current_armies, troops_balanced = prov.balance_troops(
+                        base_id=camp_id,
+                        general_ids=sel_gens,
+                        current_armies=current_armies,
+                        base_gens=camp_gens,
+                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                    )
+
+            if target_army.total > 0 and fresh_roster is not None:
                 for gid in sel_gens:
-                    army = fresh_roster.army_of(gid)
+                    army = current_armies.get(gid)
                     adj_res = prov.adjust_troops(
                         base_id=camp_id,
                         general_id=gid,
@@ -1290,9 +1339,14 @@ class BinhManMixin:
                     if troops_added
                     else fresh_roster
                 )
+                rechecked_armies = (
+                    {gid: rechecked.army_of(gid) for gid in sel_gens}
+                    if troops_added
+                    else current_armies
+                )
                 def_gens = []
                 for gid in sel_gens:
-                    a = rechecked.army_of(gid)
+                    a = rechecked_armies.get(gid)
                     inf = a.infantry if a else 0
                     cav = a.cavalry if a else 0
                     arc = a.archers if a else 0
@@ -1307,6 +1361,7 @@ class BinhManMixin:
                             parent_city_id=parent_id,
                             general_ids=def_gens,
                             target_army=target_army,
+                            current_armies=rechecked_armies,
                             min_morale=min_morale,
                             on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
                         )
@@ -1356,7 +1411,7 @@ class BinhManMixin:
                     target_morale=min_morale,
                     base_gens=camp_gens,
                     on_notify=_on_notify_bm_camp,
-                    refresh_from_server=troops_added,
+                    refresh_from_server=troops_added or troops_balanced,
                 )
 
     def _manual_adjust_bm_troops(self):

@@ -1234,3 +1234,113 @@ def test_binh_man_mode1_camp_swaps_only_within_camp_and_continues_when_no_replac
     assert out == "attacked"
     assert not any(k in ("OPT.ashx?id=5", "OPT.ashx?id=50") for k, _ in server.calls)
     assert any("giữ nguyên" in a.lower() for a in alerts)
+
+
+def test_binh_man_even_troops_balances_before_recruit_and_refreshes_morale():
+    from linhvuong.troops import TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    server = FakeServer(
+        map_views={mid: {"npc_tent": [man(10, 11, 405, 7)]}},
+        handlers={
+            "/api/city/list": {"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "Thành", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}},
+            "/api/city/pageofficial": {
+                "ret": 0,
+                "data": {
+                    "ret": 0,
+                    "list": [[1001, "Thành", 10, 10, [
+                        [10, "Tướng A", "", 2, 0, 0, 4, 100, 240, 240, 0],
+                        [11, "Tướng B", "", 2, 0, 0, 4, 100, 240, 240, 0],
+                    ]]],
+                },
+            },
+            "/api/city/pagemytroopslist": {
+                "ret": 0,
+                "data": {
+                    "ret": 0,
+                    "list": [[1001, "Thành", [
+                        [10, "Tướng A", 0, "", 0, 0, 1500, 0, 0, 100, 0, 0],
+                        [11, "Tướng B", 0, "", 0, 0, 500, 0, 0, 100, 0, 0],
+                    ]]],
+                },
+            },
+            "/api/city/pagearmament": {"ret": 0, "data": {"ret": 0, "list": [[1001, "Thành", 5000]]}},
+            "OPT.ashx?id=31": {"ret": 0},
+            "OPT.ashx?id=39": {"ret": 0},
+            "OPT.ashx?id=6": {"ret": 0},
+            "OPT.ashx?id=53": {"ret": 0},
+        },
+    )
+    ctx, _ = ctx_for(server)
+    task = BinhMan(
+        ctx,
+        generals=[10, 11],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=1200),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        even_troops=True,
+        sleep_fn=lambda s: None,
+    )
+
+    out = task.run_once()
+    assert out == "attacked"
+    eps = [k for k, _ in server.calls]
+    opt39_idx = eps.index("OPT.ashx?id=39")
+    opt6_indices = [i for i, k in enumerate(eps) if k == "OPT.ashx?id=6"]
+    assert len(opt6_indices) == 2
+    assert opt39_idx < opt6_indices[0]
+
+    opt39 = [d for k, d in server.calls if k == "OPT.ashx?id=39"]
+    assert len(opt39) == 1
+    assert opt39[0]["lFromGeneralID"] == "10"
+    assert opt39[0]["lToGeneralID"] == "11"
+    assert opt39[0]["cavalry"] == "500"
+
+    opt6 = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
+    assert [(d["lGeneralID"], d["lAmount"]) for d in opt6] == [("10", "200"), ("11", "200")]
+    assert sum(1 for k, _ in server.calls if k == "/api/city/pagemytroopslist") >= 2
+
+    # Khi target_army = 0/0/0 và auto_recruit=False vẫn chạy san đều quân nếu even_troops=True
+    server.calls.clear()
+    task_zero = BinhMan(
+        ctx,
+        generals=[10, 11],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(),
+        auto_recruit=False,
+        auto_morale=False,
+        even_troops=True,
+        sleep_fn=lambda s: None,
+    )
+    assert task_zero.run_once() == "attacked"
+    assert sum(1 for k, _ in server.calls if k == "OPT.ashx?id=39") == 1
+    assert not any(k == "OPT.ashx?id=6" for k, _ in server.calls)
+
+    # Khi even_troops=False -> không bao giờ gọi OPT.ashx?id=39
+    server.calls.clear()
+    task_off = BinhMan(
+        ctx,
+        generals=[10, 11],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=1200),
+        auto_recruit=True,
+        auto_morale=False,
+        even_troops=False,
+        sleep_fn=lambda s: None,
+    )
+    assert task_off.run_once() == "attacked"
+    assert not any(k == "OPT.ashx?id=39" for k, _ in server.calls)

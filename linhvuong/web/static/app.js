@@ -1935,6 +1935,7 @@
               <label>Kỵ <input id="bm-cav" type="number" value="${esc(bcfg.target_cavalry)}" style="width:65px;"/></label>
               <label>Cung <input id="bm-arc" type="number" value="${esc(bcfg.target_archers)}" style="width:65px;"/></label>
               <label><input id="bm-rec" type="checkbox" ${bcfg.auto_recruit ? "checked" : ""}/> Tự động bổ sung lính</label>
+              <label><input id="bm-even-troops" type="checkbox" ${bcfg.even_troops ? "checked" : ""}/> San đều quân</label>
               <label><input id="bm-mor" type="checkbox" ${bcfg.auto_morale ? "checked" : ""}/> Tự động nâng sĩ khí ≥</label>
               <input id="bm-minm" type="number" value="${esc(bcfg.min_morale)}" style="width:55px;"/>
             </div>
@@ -1976,6 +1977,7 @@
       bcfg.target_cavalry = $("bm-cav").value;
       bcfg.target_archers = $("bm-arc").value;
       bcfg.auto_recruit = $("bm-rec").checked;
+      bcfg.even_troops = $("bm-even-troops").checked;
       bcfg.auto_morale = $("bm-mor").checked;
       bcfg.min_morale = $("bm-minm").value;
       bcfg.auto_swap_tactician = $("bm-swap-tac").checked;
@@ -2008,7 +2010,7 @@
     $("btn-bm-gen-none").onclick = () => { root.querySelectorAll(".bm-gen-chk").forEach((c) => (c.checked = false)); syncBm(); renderActiveTab(); };
     root.querySelectorAll('input[name="bm-mode"]').forEach((el) => (el.onchange = () => { syncBm(); renderActiveTab(); }));
     root.querySelectorAll(".bm-mtype, .bm-gen-chk").forEach((el) => (el.onchange = syncBm));
-    ["bm-int", "bm-parent", "bm-camp-id", "bm-rad", "bm-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-mor", "bm-minm", "bm-swap-tac", "bm-min-tac-stam"].forEach((id) => ($(id).onchange = syncBm));
+    ["bm-int", "bm-parent", "bm-camp-id", "bm-rad", "bm-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-even-troops", "bm-mor", "bm-minm", "bm-swap-tac", "bm-min-tac-stam"].forEach((id) => ($(id).onchange = syncBm));
     $("btn-tgl-bm").onclick = () => toggleTask("binhman");
     $("btn-bm-once").onclick = async () => {
       await saveProfileImmediate(state.snapshot.profile);
@@ -2053,6 +2055,7 @@
           <label>Cung <input id="gd-arc" type="number" value="${esc(gd.target_archers)}" style="width:68px;"/></label>
           <button id="btn-gd-prov" class="btn-sm">⚔️ Biên chế ngay</button>
           <label><input id="gd-rec" type="checkbox" ${gd.auto_recruit ? "checked" : ""}/> Bù lính</label>
+          <label><input id="gd-even-troops" type="checkbox" ${gd.even_troops ? "checked" : ""}/> San đều quân</label>
           <label><input id="gd-mor" type="checkbox" ${gd.auto_morale ? "checked" : ""}/> Sĩ khí ≥</label>
           <input id="gd-minm" type="number" value="${esc(gd.min_morale)}" style="width:55px;"/>
         </div>
@@ -2105,6 +2108,7 @@
           target_archers: $("gd-arc").value,
           auto_recruit: $("gd-rec").checked,
           auto_recover: $("gd-rec").checked,
+          even_troops: $("gd-even-troops").checked,
           auto_morale: $("gd-mor").checked,
           min_morale: $("gd-minm").value,
           auto_swap_tactician: $("gd-swap-tac").checked,
@@ -2139,7 +2143,7 @@
       return res;
     };
     $("gd-city").onchange = () => { syncGd(); renderActiveTab(); };
-    ["gd-rad", "gd-int", "gd-act", "gd-inf", "gd-cav", "gd-arc", "gd-rec", "gd-mor", "gd-minm", "gd-swap-tac", "gd-min-tac-stam", "gd-caller-en", "gd-caller-user"].forEach((id) => ($(id).onchange = syncGd));
+    ["gd-rad", "gd-int", "gd-act", "gd-inf", "gd-cav", "gd-arc", "gd-rec", "gd-even-troops", "gd-mor", "gd-minm", "gd-swap-tac", "gd-min-tac-stam", "gd-caller-en", "gd-caller-user"].forEach((id) => ($(id).onchange = syncGd));
     $("gd-caller-pass").oninput = () => { state.gdCallerPassByKey[state.currentKey] = $("gd-caller-pass").value || ""; };
     $("gd-caller-pass").onchange = () => {
       syncGdCallerCredentials({ sendVault: !!$("gd-caller-vault")?.checked }).catch((e) => showToast("Lỗi", e.message, "error"));

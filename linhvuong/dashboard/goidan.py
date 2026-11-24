@@ -68,6 +68,7 @@ class GoiDanMixin:
             "target_cavalry": self.gd_target_cav_var.get() if hasattr(self, "gd_target_cav_var") else "0",
             "target_archers": self.gd_target_arc_var.get() if hasattr(self, "gd_target_arc_var") else "0",
             "auto_recruit": bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True,
+            "even_troops": bool(self.gd_even_troops_var.get()) if hasattr(self, "gd_even_troops_var") else False,
             "auto_morale": bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True,
             "min_morale": self.gd_min_morale_var.get() if hasattr(self, "gd_min_morale_var") else "95",
             "auto_swap_tactician": bool(self.gd_auto_swap_tactician_var.get()) if hasattr(self, "gd_auto_swap_tactician_var") else False,
@@ -115,6 +116,8 @@ class GoiDanMixin:
             self.gd_target_arc_var.set(str(gd_data["target_archers"]))
         if hasattr(self, "gd_auto_recruit_var") and "auto_recruit" in gd_data:
             self.gd_auto_recruit_var.set(bool(gd_data["auto_recruit"]))
+        if hasattr(self, "gd_even_troops_var") and "even_troops" in gd_data:
+            self.gd_even_troops_var.set(bool(gd_data["even_troops"]))
         if hasattr(self, "gd_auto_morale_var") and "auto_morale" in gd_data:
             self.gd_auto_morale_var.set(bool(gd_data["auto_morale"]))
         if hasattr(self, "gd_min_morale_var") and "min_morale" in gd_data:
@@ -210,15 +213,24 @@ class GoiDanMixin:
         self.gd_adjust_troops_btn = ttk.Button(army_f, text="⚔️ Biên chế ngay", style="Action.TButton", command=self._manual_adjust_gd_troops)
         self.gd_adjust_troops_btn.pack(side="left", padx=(0, 4))
 
-        # Row 3: Tự động bổ sung lính, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        # Row 3: Tự động bổ sung lính, San đều quân, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        gd_rec_f = tk.Frame(top, bg=BG)
+        gd_rec_f.grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=4)
         self.gd_auto_recruit_var = tk.BooleanVar(value=True)
         self.gd_recover_var = self.gd_auto_recruit_var  # Giữ alias tương thích ngược
         ttk.Checkbutton(
-            top,
+            gd_rec_f,
             text="Tự động bổ sung lính",
             variable=self.gd_auto_recruit_var,
             style="TCheckbutton",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=4)
+        ).pack(side="left", padx=(0, 8))
+        self.gd_even_troops_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            gd_rec_f,
+            text="San đều quân",
+            variable=self.gd_even_troops_var,
+            style="TCheckbutton",
+        ).pack(side="left")
 
         mor_f = tk.Frame(top, bg=BG)
         mor_f.grid(row=3, column=2, columnspan=2, sticky="w", padx=4, pady=4)
@@ -640,6 +652,7 @@ class GoiDanMixin:
             min_tactician_stamina=min_tactician_stamina,
             caller_provider=caller_provider,
             caller_username=caller_usr,
+            even_troops=bool(self.gd_even_troops_var.get()) if hasattr(self, "gd_even_troops_var") else False,
         )
 
     def _manual_adjust_gd_troops(self):
@@ -676,6 +689,7 @@ class GoiDanMixin:
 
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
         auto_recruit = bool(self.gd_auto_recruit_var.get()) if hasattr(self, "gd_auto_recruit_var") else True
+        even_troops = bool(self.gd_even_troops_var.get()) if hasattr(self, "gd_even_troops_var") else False
         auto_morale = bool(self.gd_auto_morale_var.get()) if hasattr(self, "gd_auto_morale_var") else True
         auto_swap_tac = bool(self.gd_auto_swap_tactician_var.get()) if hasattr(self, "gd_auto_swap_tactician_var") else False
         min_tac_stam = parse_stamina_threshold(
@@ -693,9 +707,13 @@ class GoiDanMixin:
                 for gid in sel_gens:
                     prov.heal_general(city_id, gid)
 
-                # 2. Bổ sung lính
-                if target_army.total > 0 and auto_recruit:
-                    total_needed = 0
+                fresh_roster = None
+                city_gens = {}
+                current_armies = {}
+                troops_added = False
+                troops_balanced = False
+
+                if even_troops or (target_army.total > 0 and auto_recruit):
                     if auto_swap_tac:
                         fresh_roster = fetch_roster_fn(
                             self.gateway,
@@ -704,8 +722,23 @@ class GoiDanMixin:
                         )
                     else:
                         fresh_roster = fetch_roster_fn(self.gateway, only_base_ids=[city_id])
+                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
+                    current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
+
+                if even_troops and fresh_roster is not None:
+                    current_armies, troops_balanced = prov.balance_troops(
+                        base_id=city_id,
+                        general_ids=sel_gens,
+                        current_armies=current_armies,
+                        base_gens=city_gens,
+                        on_log=lambda m: self.after(0, self._append_gd_log, f"   {m}"),
+                    )
+
+                # 2. Bổ sung lính
+                if target_army.total > 0 and auto_recruit and fresh_roster is not None:
+                    total_needed = 0
                     for gid in sel_gens:
-                        army = fresh_roster.army_of(gid)
+                        army = current_armies.get(gid)
                         cur_inf = army.infantry if army else 0
                         cur_cav = army.cavalry if army else 0
                         cur_arc = army.archers if army else 0
@@ -725,12 +758,10 @@ class GoiDanMixin:
                                 err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
                                 self.after(0, self._append_gd_log, f"   [Chiêu mộ] ⚠️ Chiêu mộ thất bại ({err_desc})")
 
-                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
-                    troops_added = False
                     for gid in sel_gens:
                         g = city_gens.get(gid)
                         gname = g.name if g else str(gid)
-                        cur_army = fresh_roster.army_of(gid)
+                        cur_army = current_armies.get(gid)
                         results = prov.adjust_troops(
                             base_id=city_id,
                             general_id=gid,
@@ -751,10 +782,6 @@ class GoiDanMixin:
                                     self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
                         else:
                             self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
-                else:
-                    fresh_roster = None
-                    city_gens = {}
-                    troops_added = False
 
                 # 2.5 Tự động đổi mưu sĩ nếu bật
                 if auto_swap_tac:
@@ -796,7 +823,7 @@ class GoiDanMixin:
                         target_morale=min_morale,
                         base_gens=city_gens,
                         on_notify=_on_notify_gd,
-                        refresh_from_server=troops_added,
+                        refresh_from_server=troops_added or troops_balanced,
                     )
 
                 self.after(0, self._append_gd_log, "🏁 Hoàn tất tiến trình biên chế Gọi Man!")
