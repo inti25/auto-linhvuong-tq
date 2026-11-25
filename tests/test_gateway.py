@@ -153,3 +153,34 @@ def test_gateway_parses_relaxed_json_with_table_payload():
             {"gem_id": 354, "counts": 80},
         ],
     }
+
+
+def test_gateway_does_not_retry_non_idempotent_opt6_opt41_opt39_on_network_or_502():
+    class FlakyNetSession:
+        def __init__(self, exc=None, resp=None):
+            self.exc = exc
+            self.resp = resp
+            self.calls = []
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            self.calls.append((url, data))
+            if self.exc is not None:
+                raise self.exc
+            return self.resp
+
+    for ep, api_id in (("OPT.ashx", 6), ("OPT.ashx", 41), ("OPT.ashx", 39)):
+        s_net = FlakyNetSession(exc=TimeoutError("read timed out"))
+        gw_net = GatewayClient(53, s_net, sleep=lambda s: None, max_retries=3)
+        assert gw_net.call(ep, api_id, {"tid": "22040"}) is None
+        assert len(s_net.calls) == 1
+
+        s_502 = FlakyNetSession(resp=MockRawResponse("502 Bad Gateway", status_code=502))
+        gw_502 = GatewayClient(53, s_502, sleep=lambda s: None, max_retries=3)
+        assert gw_502.call(ep, api_id, {"tid": "22040"}) is None
+        assert len(s_502.calls) == 1
+
+    # Phiên hết hạn (ret=198599) vẫn relogin & gửi lại được bình thường
+    s_exp = MockSession([MockRawResponse("{ret:198599}"), MockRawResponse('{"ret": 0}')])
+    gw_exp = GatewayClient(53, s_exp, sleep=lambda s: None, relogin_callback=lambda: True)
+    assert gw_exp.call("OPT.ashx", 6, {"tid": "22040"}) == {"ret": 0}
+    assert len(s_exp.calls) == 2

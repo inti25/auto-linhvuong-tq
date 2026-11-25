@@ -41,10 +41,6 @@ _Avoid_: Độ trung thành, loyalty (khi nói tiếng Việt)
 Hành động dùng Vàng khôi phục Lòng trung thành của Văn quan hoặc Võ tướng lên mức tối đa (100).
 _Avoid_: Thưởng vàng, tăng trung thành, reward
 
-**Đổi Tên Tướng**:
-Hành động thay đổi tên hiển thị của **Võ tướng** hoặc **Văn quan** theo từng tướng hoặc hàng loạt theo tiền tố kèm số thứ tự (`01, 02, ...`).
-_Avoid_: Sửa tên lính, rename hero
-
 **Điểm Tiềm Năng**:
 Điểm thuộc tính chưa phân bổ của **Văn quan** hoặc **Võ tướng** nhận được khi thăng cấp.
 _Avoid_: skill point, free points, điểm tự do
@@ -69,12 +65,8 @@ _Avoid_: Dò đường tránh vật cản, bypass obstacle, detour
 Hành động sử dụng đạo cụ (Lệnh bài tăng tốc / Vàng) để giảm thời gian hoặc hoàn tất tức thì một tiến trình nâng cấp công trình hoặc nghiên cứu.
 _Avoid_: Speedup, cắn bùa tăng tốc
 
-**Xây Xong Ngay**:
-Chế độ **Tăng tốc** hoàn tất tức thì tiến trình nâng/hạ cấp công trình khi ngưỡng giờ đặt từ `0` trở xuống, bằng cách rút ngắn theo tỷ lệ 50% xuống ngưỡng 1 giờ rồi dùng một lần giảm cố định 1 giờ.
-_Avoid_: Instant build, đập max 50% về 0
-
 **DS kiến trúc** (Đại Sư Kiến Trúc / Kích hoạt kiến trúc):
-Đặc quyền đạo cụ mở rộng hàng đợi thi công từ 1 công trình mặc định lên tối đa 3 công trình xây dựng cùng lúc (`OPT.ashx?id=69, type=3`), đồng thời tăng 20% tốc độ xây dựng. Thời hạn hiệu lực được kiểm tra qua trường `plus_finish` của trang hàng đợi xây dựng (`/api/city/pagebuilding`).
+Đặc quyền đạo cụ mở rộng hàng đợi thi công từ 1 công trình mặc định lên tối đa 3 công trình xây dựng cùng lúc (`OPT.ashx?id=69, type=3`), đồng thời tăng 20% tốc độ xây dựng. Thời hạn hiệu lực được kiểm tra qua trường `plus_finish` từ `Common.ashx?id=77`.
 _Avoid_: Boost 20%, kích hoạt bonus
 
 **Chuyển quân giới**:
@@ -109,11 +101,7 @@ _Avoid_: Đánh ải, càn quét
 Chế độ tự động quét và tấn công Man quanh Thành hoặc Doanh trại lưu động.
 
 **Thiên Thành**:
-Thành kích thước cấp 4 (4×4 trên bản đồ Server 58+); vùng phụ cận quanh nó bị loại khỏi phạm vi quét đánh Man.
-
-**Kênh Thông Báo Hệ Thống**:
-Luồng tin báo toàn máy chủ (ví dụ thông báo Niên Thú xuất hiện) đọc qua nhật ký thông báo hệ thống (`/api/notify/history`) trên Server 58+, thay thế cho Kênh Thế Giới Flash/XMLSocket trước đây.
-_Avoid_: WorldChat XMLSocket, SGWebIM
+Thành cấp 5 hoặc 6; vùng phụ cận quanh nó bị loại khỏi phạm vi quét đánh Man.
 
 **Mid**:
 Mã số định danh một ô trên bản đồ thế giới, tương ứng một tọa độ (x, y).
@@ -147,12 +135,8 @@ Tính năng tự động gửi lệnh Cầm Hoạch (`OPT.ashx?id=54, action=5`)
 _Avoid_: Bắt mù quáng, cắn vcoin vô tội vạ, spam action 5 khi sĩ khí cao
 
 **Thông Báo Đa Kênh**:
-Cơ chế phát tín hiệu cảnh báo tức thì đồng thời qua thông báo cục bộ trên nền tảng vận hành (Windows Desktop Toast kèm âm thanh trên bản Desktop, hoặc Web Toast/Browser Notification kèm âm thanh Web Audio trên Bảng Điều Khiển Web), ghi nhật ký tác vụ và đẩy tin nhắn từ xa qua Telegram Bot khi phát hiện sự kiện quan trọng (như BOSS xuất hiện trên chiến trường, Danh Tướng Viếng Thăm, tác vụ tạm dừng vì Captcha hoặc gián đoạn phiên kết nối).
+Cơ chế phát tín hiệu cảnh báo tức thì đồng thời qua thông báo cục bộ trên nền tảng vận hành (Windows Desktop Toast kèm âm thanh trên bản Desktop, hoặc Web Toast/Browser Notification kèm âm thanh Web Audio trên Bảng Điều Khiển Web), ghi nhật ký tác vụ và đẩy tin nhắn từ xa qua Telegram Bot khi phát hiện sự kiện quan trọng (như BOSS xuất hiện trên chiến trường, tác vụ tạm dừng vì Captcha hoặc gián đoạn phiên kết nối).
 _Avoid_: Báo lẻ kênh, notification đơn lẻ, log thông thường
-
-**Danh Tướng Viếng Thăm**:
-Danh tướng võ hoặc danh sỹ văn đang ghé thăm trong **Tửu Quán** / **Tửu Tứ** (`gid=8`/`61`) hoặc **Quán Trọ** / **Thủy Kính Lư** (`gid=7`/`60`) của người chơi, tách biệt với **BOSS** dã ngoại trên chiến trường.
-_Avoid_: Tướng lang bạt thường, BOSS Tửu quán
 
 **An Dân**:
 Hành động tế trời hoặc phát lương thực (`OPT.ashx?id=4`) khôi phục lòng dân và sĩ khí thành trì, triệt tiêu dân nộ để ngăn ngừa bạo loạn.
@@ -182,7 +166,7 @@ _Avoid_: Queue xây, slot xây
 Danh sách các Kỹ Thuật Đại Học được tích chọn và xếp thứ tự ưu tiên nâng cấp tự động.
 
 **Ngưỡng An Toàn**:
-Ngưỡng thể lực tối thiểu của Võ tướng (khi chạm ngưỡng tại Thành sẽ chờ hồi phục thể lực tại chỗ) và ngưỡng quân số rút Doanh trại về Thành mẹ khi hao quân trong Bình Man Chế độ 1; riêng khi biên chế tại Thành có bật Biên Chế Quân Tự Động và Định Mức Biên Chế dương, hệ thống luôn chờ bổ sung đủ 100% Định Mức Biên Chế và Luyện Sĩ Khí đạt ngưỡng mới xuất quân.
+Trong Bình Man được tách thành hai ngưỡng độc lập theo `%` (`0` = tắt): **Thể Lực An Toàn** (`stamina_threshold`, mặc định `30%` — chờ hồi phục thể lực tại chỗ khi có tướng dưới ngưỡng) và **Ngưỡng Quân An Toàn** (`army_threshold`, mặc định `30%` — ngưỡng quân số rút Doanh trại về Thành mẹ khi hao quân ở Chế độ 1 hoặc giữ quân tại Thành khi chưa đạt ngưỡng, giữ tương thích ngược trường `threshold` cũ). Riêng khi biên chế tại Thành có bật Biên Chế Quân Tự Động và Định Mức Biên Chế dương, hệ thống luôn chờ bổ sung đủ 100% Định Mức Biên Chế và Luyện Sĩ Khí đạt ngưỡng mới xuất quân.
 _Avoid_: Mức an toàn, return threshold
 
 **Thời Gian Đóng Băng**:
@@ -280,7 +264,7 @@ Các gói lễ bao sự kiện đặc biệt mở qua `OPT.ashx?id=69` với `ty
 _Avoid_: Rương 69, special chest, gói quà đặc biệt
 
 **Mở Rương Hàng Loạt**:
-Tiện ích do người chơi chủ động kích hoạt để mở liên tiếp một số lượng lớn Rương Đạo Cụ hoặc Lễ Bao Đặc Biệt theo số lượt chỉ định. Đối với các rương hỗ trợ mở theo lô (`bulkAllowed`), hệ thống mở theo từng đợt tối đa 99 rương qua tác vụ bất đồng bộ (`bulk-start`/`bulk-status`); các rương ngoại lệ (như Ngự Tứ Bảo Hạp ID 53 hoặc Lễ Bao Đặc Biệt qua `OPT.ashx?id=69`) tiếp tục mở đơn luồng/đa luồng sau khi chuyển ngữ cảnh Thành (`/api/city/current`), tự động dừng khi hết rương hoặc gặp Captcha.
+Tiện ích do người chơi chủ động kích hoạt để mở liên tiếp một số lượng lớn Rương Đạo Cụ hoặc Lễ Bao Đặc Biệt theo số lượt chỉ định bằng đa luồng (tối đa 5 luồng song song), tự động chuyển ngữ cảnh Thành (`City.ashx?id=50`) đối với các loại rương cộng vật phẩm trực tiếp vào thành trì và tự động dừng ngay khi hết rương trong túi đồ (mã lỗi 10014) hoặc phát sinh Captcha (mã lỗi 110).
 _Avoid_: Spam mở rương, auto cắn rương thủ công, batch chest opener
 
 **Chu Kỳ Lặp**:
@@ -347,10 +331,6 @@ _Avoid_: Đồ lính, vũ khí thô, trang bị lính
 Tiến trình tự động điều phối lệnh sản xuất trang thiết bị quân sự định kỳ tại các công xưởng chuyên trách trong thành trì (Xưởng Binh Khí, Xưởng Khôi Giáp, Xưởng Ngựa) theo chỉ định về chủng loại, số lượng mẻ và chu kỳ lặp lại.
 _Avoid_: Rèn vũ khí, đúc kiếm, mua đồ quân sự
 
-**Đồng Bộ Quân Giới**:
-Hoạt động sao chép cấu hình **Quân Giới** mặc định cho từng binh chủng (Bộ binh, Kỵ binh, Cung binh, Xe ném đá) — cùng **Trận hình** xuất kích nếu chọn — từ một **Võ tướng** mẫu sang các **Võ tướng** khác, độc lập hoàn toàn với **Tự Động Trang Bị**, **Chuyển quân giới** và các phân hệ chiến dịch.
-_Avoid_: Gán đồ lính, auto-equip quân, đồng bộ trang bị tướng
-
 **Ngưỡng Nhật Ký**:
 Giới hạn số dòng tối đa trên khung hiển thị giao diện (mặc định 500 dòng cho tác vụ thường, 300 dòng cho chiến trường) hoặc dung lượng tệp log trên ổ đĩa (mặc định 2MB/tệp, giữ 3 bản sao và lưu giữ tối đa 7 ngày) trước khi kích hoạt Cắt Tỉa Nhật Ký.
 _Avoid_: Max lines, log limit, dung lượng tối đa
@@ -372,16 +352,24 @@ Thành trì được người chơi chỉ định (đánh dấu `NC` trên danh 
 _Avoid_: Research city, thành học viện
 
 **Ngưỡng Tài Nguyên**:
-Mức Vàng tối thiểu và tỷ lệ phần trăm khoáng sản (Gỗ, Sắt, Đá, Thực) cài đặt làm mốc để bot tự động kiểm tra định kỳ, ưu tiên mua qua Chợ hoặc cắn mở rương tài nguyên khi số dư thực tế tụt xuống dưới ngưỡng, và tự động bán bớt khi vượt ngưỡng bán cấu hình.
+Mức Vàng tối thiểu và tỷ lệ phần trăm khoáng sản (Gỗ, Sắt, Đá, Thực) cài đặt làm mốc để bot tự động kiểm tra định kỳ để bù bằng **Ưu Tiên Mua Chợ** hoặc cắn mở rương tài nguyên khi tụt dưới ngưỡng, và **Treo Đơn Bán** khi vượt **Ngưỡng Bán Tài Nguyên**.
 _Avoid_: Resource threshold, mức khoáng sản
 
-**Chợ / Tập Thị**:
-Công trình giao dịch tài nguyên trong thành chính (Chợ hoặc Tập Thị) cho phép mua và bán Gỗ, Sắt, Đá, Thực theo đơn vị Đản (mỗi Đản = 1.000 tài nguyên). Thành không có Chợ/Tập Thị hoặc Doanh Trại không thực hiện giao dịch chợ.
-_Avoid_: Market building, resource shop
+**Đản**:
+Đơn vị giao dịch tài nguyên trên Chợ hoặc Tập Thị, quy đổi cố định 1 đản bằng 1.000 tài nguyên (Thực, Gỗ, Đá, Sắt).
+_Avoid_: Lô, gói, đơn vị chợ, dan
+
+**Treo Đơn Bán**:
+Hành động đăng bán tài nguyên dư lên sàn Chợ hoặc Tập Thị; tài nguyên bị trừ khỏi kho ngay khi treo, không thể hủy đơn mà chỉ có thể sửa giá trong biên độ giá máy chủ cho phép, và thu Vàng sau khi có người mua.
+_Avoid_: Bán trực tiếp, bán NPC, xả kho tức thì
+
+**Ưu Tiên Mua Chợ**:
+Chế độ trong Giám sát Tài Nguyên ưu tiên mua trực tiếp loại tài nguyên thiếu từ sàn Chợ tại các Thành có Chợ hoặc Tập Thị trước khi fallback mở rương, và bỏ qua bước mua chợ (mở rương mặc định) ở các Căn Cứ không có Chợ.
+_Avoid_: Chỉ mua chợ, bỏ qua thành không chợ
 
 **Ngưỡng Bán Tài Nguyên**:
-Tỷ lệ phần trăm sức chứa kho dùng làm mốc kích hoạt bán bớt tài nguyên dư thừa qua Chợ/Tập Thị (mặc định 90%) về mức mục tiêu an toàn.
-_Avoid_: Sell threshold, overflow sell
+Tỷ lệ phần trăm sức chứa kho (mặc định 90%) làm mốc kích hoạt tự động Treo Đơn Bán phần tài nguyên dôi dư tại Thành có Chợ, đưa tồn kho về mức an toàn thấp hơn ngưỡng bán 10% nhưng không thấp hơn ngưỡng mua tương ứng.
+_Avoid_: Trần kho, mức xả đồ, sell cap
 
 **Cấp Hiện Tại** (Cấp HT):
 Cấp độ thực tế của công trình kiến trúc hoặc công nghệ kỹ thuật Viện Đại Học đang hiện hữu trên máy chủ game tại căn cứ được chọn. Đối với nhóm công trình đa ô đất khi thu gọn, Cấp HT thể hiện dải cấp độ từ ô thấp nhất đến ô cao nhất (`min - max`).
@@ -467,12 +455,8 @@ _Avoid_: FreeProxyList, ProxyScrapeFeed, danh sách proxy chùa
 Hoạt động tầm phỏng và khám phá báu vật, danh tướng định kỳ cấp tài khoản (`Common.ashx?id=140`), vận hành theo hai chế độ: chờ hết thời gian đếm ngược tự nhiên (`lAction=0`, `lAction=1`) hoặc xóa thời gian chờ cưỡng bức bằng đạo cụ Roi (`lAction=2, lParam=1`) / Coin (`lAction=2, lParam=2`) theo số lượt chỉ định.
 _Avoid_: Đào bảo, quay thưởng, explore
 
-**Đào Tạo Tướng** (`训练`):
-Hoạt động huấn luyện nhận điểm kinh nghiệm định kỳ cấp tài khoản tại **Điểm Tướng Đài** (`lType=2`, cho **Võ tướng**) và **Tụ Hiền Lâu** (`lType=1`, cho **Văn quan**). Trên Server 58+, hệ thống kiểm tra tối đa 5 ô đào tạo qua `Common.ashx?id=141` (`lType`, `tid` > 0) và gửi lệnh đào tạo qua `OPT.ashx?id=178` (`lType`, `lPos`, `lHeroID`, `tid`) theo thứ tự ưu tiên đã chọn; mỗi ô sau khi kích hoạt vào chu kỳ hồi **24 giờ (86.400 giây)** và không làm tướng bị bận.
-_Avoid_: Train tướng tự động, mở khóa ô bằng Nguyên bảo (`OPT.ashx?id=177`)
-
 **Tự Động Trang Bị** (`Auto-Equip Generals`):
-Cơ chế truy vấn đầy đủ kho đồ đạc và trang bị đang mặc của toàn bộ tướng theo từng trang (`Optimization.ashx?action=equipment`, hỗ trợ trên 50 món) và tự động phân bổ hoặc tháo trang bị qua `OPT.ashx?id=58` (`lCityTentID`, `lGeneralID`, `lEquipType`, `lEquipID`; với `lEquipID=0` là tháo đồ). Mã loại `item_type_id = XYZZ` (`item[2]`) quy định ô trang bị ở `X` (`1..4`) và phân hệ ở `Y` (`Y=1` cho **Võ tướng**, `Y=2` cho **Văn quan**). Hệ thống chỉ thao tác trên tướng rảnh (`status == 0`), tách riêng từng hệ và hỗ trợ tùy chọn **Đổi trang bị** (tháo về kho chia lại từ đầu) và **Tháo trang bị**. Với **Võ tướng**, ưu tiên theo cấp độ giảm dần (`Cao → Thấp`) và ghép trang bị theo bậc/phẩm chất giảm dần (`(-level, -item_type_id, item_id)`). Với **Văn quan**, phân bổ thông minh theo 3 tầng ưu tiên (**Thái thú** → **Mưu sĩ đang biên chế** → **Quan văn nhàn rỗi**, trong mỗi tầng xếp theo cấp độ giảm dần `Cao → Thấp`): **Thái thú** ưu tiên chọn trang bị có chỉ số **Nội chính** (`item[6]`) cao nhất trước, nhường trang bị thuần Trí mưu/Mị lực (`Nội chính = 0`) cho **Mưu sĩ đang biên chế** và **Quan văn nhàn rỗi**, sau đó mới vét đồ còn dư trong kho vào các ô còn trống của Thái thú.
+Cơ chế truy vấn kho đồ đạc và trang bị đang mặc của toàn bộ tướng qua `Common.ashx?id=24` (`lType` ∈ {`1: Mũ`, `2: Vũ khí`, `3: Giáp`, `4: Thú cưỡi`}) và tự động phân bổ hoặc tháo trang bị qua `OPT.ashx?id=58` (`lCityTentID`, `lGeneralID`, `lEquipType`, `lEquipID`; với `lEquipID=0` là tháo đồ). Mã loại `item_type_id = XYZZ` (`item[2]`) quy định ô trang bị ở `X` (`1..4`) và phân hệ ở `Y` (`Y=1` cho **Võ tướng**, `Y=2` cho **Văn quan**). Hệ thống chỉ thao tác trên tướng rảnh (`status == 0`), tách riêng từng hệ và hỗ trợ tùy chọn **Đổi trang bị** (tháo về kho chia lại từ đầu) và **Tháo trang bị**. Với **Võ tướng**, ưu tiên theo cấp độ giảm dần (`Cao → Thấp`) và ghép trang bị theo bậc/phẩm chất giảm dần (`(-level, -item_type_id, item_id)`). Với **Văn quan**, phân bổ thông minh theo 3 tầng ưu tiên (**Thái thú** → **Mưu sĩ đang biên chế** → **Quan văn nhàn rỗi**, trong mỗi tầng xếp theo cấp độ giảm dần `Cao → Thấp`): **Thái thú** ưu tiên chọn trang bị có chỉ số **Nội chính** (`item[6]`) cao nhất trước, nhường trang bị thuần Trí mưu/Mị lực (`Nội chính = 0`) cho **Mưu sĩ đang biên chế** và **Quan văn nhàn rỗi**, sau đó mới vét đồ còn dư trong kho vào các ô còn trống của Thái thú.
 _Avoid_: Mặc đồ ngẫu nhiên, auto-gear chung hệ, đồng bộ đồ mù quáng
 
 **Cường Hóa Trang Bị**:
@@ -511,9 +495,13 @@ _Avoid_: Game session, token đăng nhập game
 Kho lưu trữ tùy chọn bảo vệ mật khẩu tài khoản game ở trạng thái mã hóa trên ổ đĩa, cho phép dịch vụ nền tự động khôi phục kết nối sau khi khởi động lại máy chủ khi được mở khóa.
 _Avoid_: Lưu mật khẩu thô, auto-login cache, file password
 
-**Tự Động Đổi Mưu Sĩ** (`Auto-Swap Tactician`):
-Tùy chọn theo từng tác vụ **Bình Man** / từng căn cứ và tác vụ **Gọi Man** tự động kiểm tra **Mưu Sĩ** đang biên chế cho các **Võ Tướng** rảnh tại thành/trại trước khi xuất quân (và khi bấm `Biên chế ngay`). Nếu tướng chưa có mưu sĩ hoặc thể lực (%) của mưu sĩ đang biên chế thấp hơn **Ngưỡng Thể Lực Mưu Sĩ** (`min_tactician_stamina`, mặc định `30%`), hệ thống ghép cặp tướng cấp cao nhất với văn quan rảnh cùng `origin_id` có thể lực đạt ngưỡng từ cấp cao xuống thấp; nếu không có văn quan thay thế đạt ngưỡng thì giữ nguyên mưu sĩ hiện tại để tránh mất chỉ số.
-_Avoid_: Đổi chéo thành/trại, tháo mưu sĩ khi không có người thay
+**Tự Động Đổi Mưu Sĩ**:
+Cơ chế kiểm tra tỷ lệ thể lực của **Mưu sĩ** đang biên chế cho **Võ tướng xuất kích** (trong **Bình Man** và **Gọi Man**) và tự động thay thế bằng **Văn quan** rảnh rỗi cùng căn cứ đạt ngưỡng thể lực tối thiểu, ưu tiên theo cấp độ giảm dần.
+_Avoid_: Đổi quân sư tự động, auto swap partner
+
+**Đào Tạo Tướng**:
+Hoạt động huấn luyện nhận điểm kinh nghiệm định kỳ cấp tài khoản tại **Điểm Tướng Đài** (`lType=2`, cho **Võ tướng**) và **Tụ Hiền Lâu** (`lType=1`, cho **Văn quan**). Hệ thống kiểm tra trạng thái tối đa 5 ô đào tạo qua `Common.ashx?id=141` (yêu cầu `lCityID > 0`) và gửi lệnh đào tạo qua `OPT.ashx?id=178` cho các tướng theo thứ tự ưu tiên đã chọn; mỗi ô sau khi kích hoạt sẽ vào chu kỳ hồi **24 giờ (86.400 giây)** và không làm tướng bị bận.
+_Avoid_: Train tướng tự động, mở khóa ô bằng Nguyên bảo (`OPT.ashx?id=177`)
 
 **Tài Khoản Gọi Hộ** (`Helper Caller Account`):
 Tài khoản Linh Vương cùng máy chủ được cấu hình tùy chọn trong chế độ **Gọi Man** để thay tài khoản chính tiêu thụ đạo cụ kéo **Man Thường** (Cấp 1–10) về ô đất trống sát thành đã chọn của tài khoản chính; tài khoản chính sau đó xuất quân tiêu diệt, hồi phục quân số và sĩ khí rồi tiếp tục vòng lặp. Không áp dụng cho **Vong Linh** vì bùa Vong Linh chỉ triệu hồi quanh thành của chính tài khoản kích hoạt.

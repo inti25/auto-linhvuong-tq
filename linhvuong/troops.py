@@ -7,12 +7,14 @@ Trích xuất logic miền tập trung từ Thảo Phạt, phục vụ dùng chu
 - Giao diện Dashboard (Biên chế tức thời)
 """
 
+from collections import Counter
 import logging
 import math
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from .armament import fetch_armament
 from .gateway import GatewayClient
 from .roster import Army
 
@@ -265,22 +267,184 @@ class ArmyProvisioner:
         self._comfort_next_allowed: dict[int, float] = {}
         self._waiting_population: dict[int, bool] = {}
 
+    def _fetch_city_stock(self, city_id: int) -> tuple[Optional[int], dict[str, int]]:
+        """Đọc số tân binh và tồn kho quân giới theo tên từ API Common.ashx?id=27."""
+        resp = self.gateway.call("Common.ashx", 27, {"_": ""}) or {}
+        if resp.get("ret") != 0:
+            return None, {}
+        target_cid = int(city_id)
+        for city_data in resp.get("list", []):
+            if not isinstance(city_data, list) or len(city_data) <= 2:
+                continue
+            try:
+                if int(city_data[0]) != target_cid:
+                    continue
+                recruits = int(city_data[2])
+            except (ValueError, TypeError):
+                continue
+            equip_by_name: dict[str, int] = {}
+            for group in city_data[3:]:
+                if not isinstance(group, list):
+                    continue
+                for entry in group:
+                    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                        try:
+                            qty = int(entry[0])
+                        except (ValueError, TypeError):
+                            continue
+                        name = str(entry[1] or "").strip()
+                        if name:
+                            equip_by_name[name] = max(equip_by_name.get(name, 0), qty)
+            return recruits, equip_by_name
+        return None, {}
+
     def check_recruits(self, city_id: int) -> Optional[int]:
-        """Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API /api/city/pagearmament."""
-        resp = self.gateway.page_armament() or {}
-        if resp.get("ret") == 0:
-            for city_data in resp.get("list", []):
-                if isinstance(city_data, list) and len(city_data) > 2:
-                    try:
-                        if int(city_data[0]) == int(city_id):
-                            return int(city_data[2])
-                    except (ValueError, TypeError):
-                        continue
+        """Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API Common.ashx?id=27."""
+        recruits, _ = self._fetch_city_stock(city_id)
+        return recruits
+
+    def _estimate_equipment_caps(
+        self,
+        city_id: int,
+        general_id: int,
+        soldier_type: int,
+        equip_by_name: dict[str, int],
+    ) -> list[int]:
+        """Ước lượng các mức quân tối đa theo quân giới hiện có trong kho Thành."""
+        if not equip_by_name:
+            return []
+        snap = fetch_armament(self.gateway, int(general_id), int(city_id))
+        if snap is None:
+            return []
+        scope_map = {1: snap.infantry, 2: snap.cavalry, 3: snap.bowman}
+        eids = scope_map.get(soldier_type, ())
+        slot_counts = Counter(e for e in eids if e > 0)
+        if not slot_counts:
+            return []
+        for eid in slot_counts:
+            if not snap.names.get(eid, "").strip():
+                return []
+        cap_unique = min(equip_by_name.get(snap.names[eid].strip(), 0) for eid in slot_counts)
+        cap_per_slot = min(
+            equip_by_name.get(snap.names[eid].strip(), 0) // cnt
+            for eid, cnt in slot_counts.items()
+        )
+        caps: list[int] = []
+        for c in (cap_unique, cap_per_slot):
+            if c > 0 and c not in caps:
+                caps.append(c)
+        return caps
+
+    def _provision_partial_by_equipment(
+        self,
+        cid: int,
+        base_id: int,
+        general_id: int,
+        soldier_type: int,
+        diff: int,
+        *,
+        auto_recruit: bool,
+        comfort_attempted: Optional[set[int]],
+        exhausted_cities: Optional[set[int]],
+        apply_min_batch_guard: bool,
+        on_log: Optional[Callable[[str], None]] = None,
+    ) -> Optional[list[tuple[int, int, bool, int]]]:
+        """Biên chế từng phần tối đa theo lượng quân giới hiện có khi OPT.ashx?id=6 báo ret=42."""
+        _, equip_stock = self._fetch_city_stock(cid)
+        caps = [
+            c
+            for c in self._estimate_equipment_caps(cid, general_id, soldier_type, equip_stock)
+            if 0 < c < diff
+        ]
+        if not caps:
+            return None
+
+        tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(soldier_type, "Quân")
+        for cap in caps:
+            payload = {
+                "lGeneralID": str(general_id),
+                "lSoldierType": str(soldier_type),
+                "lAmount": str(cap),
+                "tid": str(base_id),
+                "_": "",
+            }
+            resp_eq = self.gateway.call("OPT.ashx", 6, payload) or {}
+            ret_eq = resp_eq.get("ret", -1)
+            _raise_if_captcha(ret_eq)
+            if ret_eq == 0:
+                remaining = diff - cap
+                if on_log:
+                    on_log(
+                        f"   [Biên chế từng phần] 📦 Kho quân giới chỉ đủ {tname} +{cap}/{diff} (còn thiếu {remaining} do thiếu quân giới)"
+                    )
+                return [(soldier_type, cap, True, 0), (soldier_type, remaining, False, 42)]
+            if ret_eq == 42:
+                continue
+            if ret_eq == 53 and auto_recruit:
+                was_waiting = bool(self._waiting_population.get(cid, False))
+                avail = self.check_recruits(cid)
+                if avail is not None and 0 <= avail < cap:
+                    known_avail = avail
+                    missing = cap - avail
+                else:
+                    known_avail = 0
+                    missing = cap
+                bought, buy_ret = self.buy_recruits_partial(
+                    cid,
+                    missing,
+                    auto_comfort=True,
+                    comfort_attempted=comfort_attempted,
+                    warehouse_avail=known_avail,
+                    total_needed_for_branch=cap,
+                    apply_min_batch_guard=apply_min_batch_guard,
+                    on_log=on_log,
+                )
+                assignable = min(cap, known_avail + bought)
+                if assignable <= 0:
+                    return None
+                if (
+                    apply_min_batch_guard
+                    and was_waiting
+                    and bought == 0
+                    and assignable < min(cap, MIN_PARTIAL_PROVISION_BATCH)
+                ):
+                    return None
+                sub_payload = {
+                    "lGeneralID": str(general_id),
+                    "lSoldierType": str(soldier_type),
+                    "lAmount": str(assignable),
+                    "tid": str(base_id),
+                    "_": "",
+                }
+                resp_sub = self.gateway.call("OPT.ashx", 6, sub_payload) or {}
+                ret_sub = resp_sub.get("ret", -1)
+                _raise_if_captcha(ret_sub)
+                if ret_sub == 0:
+                    remaining = diff - assignable
+                    if assignable < cap and (buy_ret in POPULATION_SHORTAGE_RETS or buy_ret == 0):
+                        rem_ret = buy_ret if buy_ret in POPULATION_SHORTAGE_RETS else 34
+                        self._waiting_population[cid] = True
+                        if exhausted_cities is not None:
+                            exhausted_cities.add(cid)
+                    else:
+                        rem_ret = 42 if assignable == cap else buy_ret
+                    if on_log:
+                        on_log(
+                            f"   [Biên chế từng phần] 📦 Đã biên chế {tname} +{assignable}/{diff} theo quân giới hiện có (còn thiếu {remaining})"
+                        )
+                    return [
+                        (soldier_type, assignable, True, 0),
+                        (soldier_type, remaining, False, rem_ret),
+                    ]
+                if ret_sub == 42:
+                    continue
+                return None
+            return None
         return None
 
     def check_idle_population(self, city_id: int) -> Optional[int]:
-        """Đọc số dân nhàn rỗi hiện có của Thành từ API /api/city/info (fallback population[4])."""
-        resp = self.gateway.city_info(int(city_id)) or {}
+        """Đọc số dân nhàn rỗi hiện có của Thành từ API City.ashx?id=6."""
+        resp = self.gateway.call("City.ashx", 6, {"tid": str(int(city_id)), "_": ""}) or {}
         if not isinstance(resp, dict):
             return None
         ret = resp.get("ret", 0)
@@ -332,6 +496,54 @@ class ArmyProvisioner:
                 self._comfort_next_allowed[cid] = now + POPULATION_COMFORT_RETRY_COOLDOWN
         return ret == 0, ret
 
+    def _buy_partial_from_idle_pop(
+        self,
+        cid: int,
+        amount: int,
+        *,
+        idle_pop: int,
+        warehouse_avail: int,
+        need_total: int,
+        apply_min_batch_guard: bool,
+        guard_active: bool,
+        just_comforted: bool,
+        comfort_on_cd: bool,
+        on_log: Optional[Callable[[str], None]] = None,
+    ) -> tuple[int, int]:
+        """Mua tối đa theo dân nhàn rỗi hiện có và áp dụng ngưỡng gộp chống nhỏ giọt."""
+        if idle_pop <= 0:
+            return 0, 34
+        to_buy = min(amount, idle_pop)
+        if (
+            apply_min_batch_guard
+            and guard_active
+            and to_buy < amount
+            and (warehouse_avail + to_buy)
+            < min(need_total, MIN_PARTIAL_PROVISION_BATCH)
+        ):
+            return 0, 34
+        resp_part = (
+            self.gateway.call(
+                "OPT.ashx", 41, {"lAmount": str(to_buy), "tid": str(cid), "_": ""}
+            )
+            or {}
+        )
+        ret_part = resp_part.get("ret", -1)
+        _raise_if_captcha(ret_part)
+        if ret_part == 0:
+            if to_buy >= amount:
+                if just_comforted or (
+                    not comfort_on_cd and amount >= MIN_PARTIAL_PROVISION_BATCH
+                ):
+                    self._waiting_population[cid] = False
+                return to_buy, 0
+            if on_log:
+                on_log(
+                    f"   [Chiêu mộ] 📦 Dân chưa đủ ({to_buy}/{amount}), đã chiêu mộ hết {to_buy} dân nhàn rỗi!"
+                )
+            return to_buy, 34
+        return 0, ret_part
+
     def buy_recruits_partial(
         self,
         city_id: int,
@@ -372,30 +584,18 @@ class ArmyProvisioner:
         ):
             idle_pop = self.check_idle_population(cid)
             if idle_pop is not None and idle_pop < amount:
-                if idle_pop <= 0:
-                    return 0, 34
-                if apply_min_batch_guard and (warehouse_avail + idle_pop) < min(
-                    need_total, MIN_PARTIAL_PROVISION_BATCH
-                ):
-                    return 0, 34
-                to_buy = min(amount, idle_pop)
-                resp_part = (
-                    self.gateway.call(
-                        "OPT.ashx",
-                        41,
-                        {"lAmount": str(to_buy), "tid": str(cid), "_": ""},
-                    )
-                    or {}
+                return self._buy_partial_from_idle_pop(
+                    cid,
+                    amount,
+                    idle_pop=idle_pop,
+                    warehouse_avail=warehouse_avail,
+                    need_total=need_total,
+                    apply_min_batch_guard=apply_min_batch_guard,
+                    guard_active=True,
+                    just_comforted=False,
+                    comfort_on_cd=comfort_on_cd,
+                    on_log=on_log,
                 )
-                ret_part = resp_part.get("ret", -1)
-                _raise_if_captcha(ret_part)
-                if ret_part == 0:
-                    if on_log:
-                        on_log(
-                            f"   [Chiêu mộ] 📦 Dân chưa đủ ({to_buy}/{amount}), đã chiêu mộ hết {to_buy} dân nhàn rỗi!"
-                        )
-                    return to_buy, 34
-                return 0, ret_part
 
         payload = {
             "lAmount": str(amount),
@@ -406,7 +606,10 @@ class ArmyProvisioner:
         ret = resp.get("ret", -1)
         _raise_if_captcha(ret)
         if ret == 0:
-            self._waiting_population[cid] = False
+            if not was_waiting or (
+                not comfort_on_cd and amount >= MIN_PARTIAL_PROVISION_BATCH
+            ):
+                self._waiting_population[cid] = False
             return amount, 0
         if ret != 34:
             return 0, ret
@@ -440,38 +643,20 @@ class ArmyProvisioner:
         # Fallback Biên Chế Từng Phần: chiêu mộ hết 100% dân nhàn rỗi đang có
         self._waiting_population[cid] = True
         idle_pop = self.check_idle_population(cid)
-        if idle_pop is None or idle_pop <= 0:
+        if idle_pop is None:
             return 0, 34
-
-        to_buy = min(amount, idle_pop)
-        if (
-            apply_min_batch_guard
-            and was_waiting
-            and not just_comforted
-            and to_buy < amount
-            and (warehouse_avail + to_buy)
-            < min(need_total, MIN_PARTIAL_PROVISION_BATCH)
-        ):
-            return 0, 34
-
-        resp_part = (
-            self.gateway.call(
-                "OPT.ashx", 41, {"lAmount": str(to_buy), "tid": str(cid), "_": ""}
-            )
-            or {}
+        return self._buy_partial_from_idle_pop(
+            cid,
+            amount,
+            idle_pop=idle_pop,
+            warehouse_avail=warehouse_avail,
+            need_total=need_total,
+            apply_min_batch_guard=apply_min_batch_guard,
+            guard_active=was_waiting and not just_comforted,
+            just_comforted=just_comforted,
+            comfort_on_cd=comfort_on_cd,
+            on_log=on_log,
         )
-        ret_part = resp_part.get("ret", -1)
-        _raise_if_captcha(ret_part)
-        if ret_part == 0:
-            if to_buy >= amount:
-                self._waiting_population[cid] = False
-                return to_buy, 0
-            if on_log:
-                on_log(
-                    f"   [Chiêu mộ] 📦 Dân chưa đủ ({to_buy}/{amount}), đã chiêu mộ hết {to_buy} dân nhàn rỗi!"
-                )
-            return to_buy, 34
-        return 0, ret_part
 
     def buy_recruits(
         self,
@@ -566,6 +751,23 @@ class ArmyProvisioner:
                 results.append((soldier_type, diff, True, 0))
                 continue
 
+            if ret == 42 and cid > 0:
+                eq_res = self._provision_partial_by_equipment(
+                    cid,
+                    base_id,
+                    general_id,
+                    soldier_type,
+                    diff,
+                    auto_recruit=auto_recruit,
+                    comfort_attempted=comfort_attempted,
+                    exhausted_cities=exhausted_cities,
+                    apply_min_batch_guard=apply_min_batch_guard,
+                    on_log=on_log,
+                )
+                if eq_res is not None:
+                    results.extend(eq_res)
+                    continue
+
             # Nếu tân binh không đủ để biên chế (ret=53) và căn cứ là Thành (ID > 0)
             if ret == 53 and auto_recruit and cid > 0:
                 tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(soldier_type, "Quân")
@@ -602,6 +804,22 @@ class ArmyProvisioner:
                     resp2 = self.gateway.call("OPT.ashx", 6, payload) or {}
                     ret2 = resp2.get("ret", -1)
                     _raise_if_captcha(ret2)
+                    if ret2 == 42:
+                        eq_res = self._provision_partial_by_equipment(
+                            cid,
+                            base_id,
+                            general_id,
+                            soldier_type,
+                            diff,
+                            auto_recruit=auto_recruit,
+                            comfort_attempted=comfort_attempted,
+                            exhausted_cities=exhausted_cities,
+                            apply_min_batch_guard=apply_min_batch_guard,
+                            on_log=on_log,
+                        )
+                        if eq_res is not None:
+                            results.extend(eq_res)
+                            continue
                     results.append((soldier_type, diff, ret2 == 0, ret2))
                     continue
 
@@ -613,8 +831,8 @@ class ArmyProvisioner:
                         and bought == 0
                         and assignable < min(diff, MIN_PARTIAL_PROVISION_BATCH)
                     ):
-                        if exhausted_cities is not None:
-                            exhausted_cities.add(cid)
+                        # Không thêm vào exhausted_cities vì kho vẫn còn `assignable` tân binh
+                        # có thể đủ cho nhánh/tướng sau cần ít hơn.
                         shortage_ret = buy_ret if buy_ret != 0 else 34
                         results.append((soldier_type, diff, False, shortage_ret))
                         continue
@@ -631,26 +849,42 @@ class ArmyProvisioner:
                     _raise_if_captcha(ret_part)
                     if ret_part == 0:
                         remaining = diff - assignable
-                        if on_log:
-                            if remaining > 0:
-                                on_log(
-                                    f"   [Biên chế từng phần] 📦 Đã biên chế {tname} +{assignable}/{diff} (còn thiếu {remaining}, luyện sĩ khí trước và chờ hồi Tăng Nhân Khẩu)"
-                                )
-                            else:
-                                on_log(
-                                    f"   [Biên chế] ✅ Đã biên chế {tname} +{assignable}"
-                                )
-                        results.append((soldier_type, assignable, True, 0))
                         if remaining > 0:
-                            shortage_ret = (
-                                buy_ret if buy_ret in POPULATION_SHORTAGE_RETS else 34
+                            is_pop_shortage = (
+                                buy_ret in POPULATION_SHORTAGE_RETS or buy_ret == 0
                             )
-                            self._waiting_population[cid] = True
-                            if exhausted_cities is not None:
-                                exhausted_cities.add(cid)
+                            if is_pop_shortage:
+                                shortage_ret = (
+                                    buy_ret
+                                    if buy_ret in POPULATION_SHORTAGE_RETS
+                                    else 34
+                                )
+                                self._waiting_population[cid] = True
+                                if exhausted_cities is not None:
+                                    exhausted_cities.add(cid)
+                                if on_log:
+                                    on_log(
+                                        f"   [Biên chế từng phần] 📦 Đã biên chế {tname} +{assignable}/{diff} (còn thiếu {remaining}, luyện sĩ khí trước và chờ hồi Tăng Nhân Khẩu)"
+                                    )
+                            else:
+                                shortage_ret = buy_ret
+                                err_desc = ERROR_MESSAGES.get(
+                                    shortage_ret, f"Mã lỗi: {shortage_ret}"
+                                )
+                                if on_log:
+                                    on_log(
+                                        f"   [Biên chế từng phần] 📦 Đã biên chế {tname} +{assignable}/{diff} (còn thiếu {remaining}: {err_desc})"
+                                    )
+                            results.append((soldier_type, assignable, True, 0))
                             results.append(
                                 (soldier_type, remaining, False, shortage_ret)
                             )
+                        else:
+                            if on_log:
+                                on_log(
+                                    f"   [Biên chế] ✅ Đã biên chế {tname} +{assignable}"
+                                )
+                            results.append((soldier_type, assignable, True, 0))
                         continue
                     results.append((soldier_type, diff, False, ret_part))
                     continue
@@ -723,10 +957,7 @@ class ArmyProvisioner:
         }
         resp = self.gateway.call("OPT.ashx", 39, payload) or {}
         ret = resp.get("ret", -1)
-        if ret in (110, 73):
-            from .tasks.base import CaptchaRequired
-
-            raise CaptchaRequired()
+        _raise_if_captcha(ret)
         return ret == 0, ret
 
     def balance_troops(
@@ -963,6 +1194,7 @@ class ArmyProvisioner:
         current_morales: Optional[dict[int, int]] = None,
         min_morale: int = 95,
         on_log: Optional[Callable[[str], None]] = None,
+        apply_min_batch_guard: bool = True,
     ) -> bool:
         """Thực hiện quy trình điều tướng từ Doanh trại về Thành mẹ:
 
@@ -1010,6 +1242,7 @@ class ArmyProvisioner:
                     on_log=on_log,
                     comfort_attempted=comfort_attempted,
                     exhausted_cities=exhausted_cities,
+                    apply_min_batch_guard=apply_min_batch_guard,
                 )
 
             # 4. Tái phái tướng ra Trại (sĩ khí sẽ luyện tại Doanh trại theo ADR-0032)

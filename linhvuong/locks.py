@@ -16,7 +16,18 @@ class TargetLocks:
         self._clock = clock
         self._expiry: dict[int, float] = {}
         self._owners: dict[int, int] = {}
+        self._base_locks: dict[int, threading.RLock] = {}
         self._mutex = threading.Lock()
+
+    def base_provision_lock(self, base_id: int) -> threading.RLock:
+        """Trả về khóa RLock theo căn cứ để tuần tự hóa biên chế/san quân giữa luồng tự động và thủ công."""
+        bid = int(base_id)
+        with self._mutex:
+            lk = self._base_locks.get(bid)
+            if lk is None:
+                lk = threading.RLock()
+                self._base_locks[bid] = lk
+            return lk
 
     _PRUNE_THRESHOLD = 256
 

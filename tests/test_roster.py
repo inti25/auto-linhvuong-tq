@@ -263,3 +263,55 @@ def test_fetch_roster_parses_stat123_and_skill_point_with_short_row_fallback():
     assert (by_id[514180].stat1, by_id[514180].stat2, by_id[514180].stat3, by_id[514180].skill_point) == (0, 0, 0, 0)
 
 
+def test_fetch_roster_marks_unreliable_armies_when_c76_fails():
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _FailC76Session:
+        def __init__(self, c76_resp):
+            self.c76_resp = c76_resp
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            if key == "Common.ashx?id=29":
+                return _Resp({"ret": 0, "city": [[22040, "ThienCo5"]]})
+            if key == "City.ashx?id=7":
+                return _Resp({"ret": 0, "infos": []})
+            if key == "Common.ashx?id=32":
+                if data.get("type") == "2":
+                    return _Resp(
+                        {
+                            "ret": 0,
+                            "list": [[22040, "ThienCo5", 10, 10, [[104488, "TC5_10", "", 2, 0, 0, 10, 100, 1750, 1750, 0]]]],
+                        }
+                    )
+                return _Resp({"ret": 0, "list": []})
+            if key == "Common.ashx?id=76":
+                if self.c76_resp is None:
+                    return _Resp(None)
+                return _Resp(self.c76_resp)
+            return _Resp({"ret": 0})
+
+    for bad_resp in ({"ret": 198599}, {"ret": 1}):
+        gw = GatewayClient(53, _FailC76Session(bad_resp), sleep=lambda s: None)
+        r = fetch_roster(gw, only_base_ids=[22040], include_civil=False, include_cities=False)
+        assert r.has_reliable_armies(22040) is False
+        assert r.army_of(104488) is None
+
+    # Mạng lỗi hoàn toàn (gateway.call trả về None)
+    gw_none = GatewayClient(53, _FailC76Session(None), sleep=lambda s: None)
+    gw_none.call = lambda ep, aid, d=None, **_kw: None if (ep == "Common.ashx" and aid == 76) else {
+        "ret": 0,
+        "list": [[22040, "ThienCo5", 10, 10, [[104488, "TC5_10", "", 2, 0, 0, 10, 100, 1750, 1750, 0]]]],
+    } if (ep == "Common.ashx" and aid == 32) else {"ret": 0, "city": [[22040, "ThienCo5"]], "infos": []}
+    r_none = fetch_roster(gw_none, only_base_ids=[22040], include_civil=False, include_cities=False)
+    assert r_none.has_reliable_armies(22040) is False
+    assert r_none.army_of(104488) is None
+
+

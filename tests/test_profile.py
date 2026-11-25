@@ -617,3 +617,53 @@ def test_goi_dan_helper_caller_profile_roundtrip_never_persists_password(tmp_pat
     assert reloaded.goi_dan.caller_enabled is True
     assert reloaded.goi_dan.caller_username == "helper01"
 
+
+def test_binh_man_split_stamina_and_army_thresholds_roundtrip_and_legacy_migration():
+    from linhvuong.profile import BaseBinhManConfig
+
+    # Hồ sơ cũ chỉ có "threshold" phải tự động ánh xạ sang cả 2 ngưỡng mới
+    legacy_prof = Profile.from_dict(
+        {
+            "binh_man": {
+                "threshold": "45",
+                "bases": {
+                    "15230": {"mode": 2, "threshold": "45"},
+                },
+            }
+        }
+    )
+    assert legacy_prof.binh_man.stamina_threshold == "45"
+    assert legacy_prof.binh_man.army_threshold == "45"
+    assert legacy_prof.binh_man.bases["15230"].stamina_threshold == "45"
+    assert legacy_prof.binh_man.bases["15230"].army_threshold == "45"
+
+    # Hồ sơ mới giữ độc lập stamina_threshold và army_threshold qua from_dict / to_dict
+    new_prof = Profile.from_dict(
+        {
+            "binh_man": {
+                "stamina_threshold": "20",
+                "army_threshold": "60",
+                "bases": {
+                    "15230": {
+                        "mode": 2,
+                        "stamina_threshold": "20",
+                        "army_threshold": "60",
+                    }
+                },
+            }
+        }
+    )
+    assert new_prof.binh_man.stamina_threshold == "20"
+    assert new_prof.binh_man.army_threshold == "60"
+    d = new_prof.to_dict()
+    assert d["binh_man"]["stamina_threshold"] == "20"
+    assert d["binh_man"]["army_threshold"] == "60"
+    assert d["binh_man"]["bases"]["15230"]["stamina_threshold"] == "20"
+    assert d["binh_man"]["bases"]["15230"]["army_threshold"] == "60"
+
+    base_cfg = BaseBinhManConfig.from_dict({"stamina_threshold": "15", "army_threshold": "75"})
+    assert base_cfg.stamina_threshold == "15"
+    assert base_cfg.army_threshold == "75"
+    assert base_cfg.to_dict()["stamina_threshold"] == "15"
+    assert base_cfg.to_dict()["army_threshold"] == "75"
+

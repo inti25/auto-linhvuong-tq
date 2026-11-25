@@ -1915,7 +1915,8 @@
               <label>Doanh trại ID <input id="bm-camp-id" type="text" value="${esc(bcfg.camp_id || bid || "")}" style="width:90px;" ${isMode2 ? "disabled" : ""}/></label>
             </div>
             <div class="form-row">
-              <label>Ngưỡng An Toàn (%) <input id="bm-thresh" type="number" value="${esc(bcfg.threshold)}" style="width:58px;"/></label>
+              <label>Thể lực an toàn (%) <input id="bm-stam-thresh" type="number" min="0" max="100" value="${esc(bcfg.stamina_threshold ?? bcfg.threshold ?? "30")}" style="width:55px;"/></label>
+              <label>Ngưỡng quân an toàn (%) <input id="bm-army-thresh" type="number" min="0" max="100" value="${esc(bcfg.army_threshold ?? bcfg.threshold ?? "30")}" style="width:55px;"/></label>
               <label>Bán kính <input id="bm-rad" type="number" value="${esc(bcfg.radius)}" style="width:55px;"/></label>
               <label>Chiêu tấn công <select id="bm-act">${actOpts.map((o, i) => `<option value="${i}" ${Number(bcfg.action_combo_idx) === i ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>
             </div>
@@ -1960,7 +1961,9 @@
       bcfg.parent_city_id = $("bm-parent").value;
       bcfg.camp_id = $("bm-camp-id").value.trim();
       bcfg.radius = $("bm-rad").value;
-      bcfg.threshold = $("bm-thresh").value;
+      bcfg.stamina_threshold = $("bm-stam-thresh").value;
+      bcfg.army_threshold = $("bm-army-thresh").value;
+      bcfg.threshold = bcfg.army_threshold;
       bcfg.action_combo_idx = Number($("bm-act").value);
       bcfg.target_infantry = $("bm-inf").value;
       bcfg.target_cavalry = $("bm-cav").value;
@@ -1999,7 +2002,7 @@
     $("btn-bm-gen-none").onclick = () => { root.querySelectorAll(".bm-gen-chk").forEach((c) => (c.checked = false)); syncBm(); renderActiveTab(); };
     root.querySelectorAll('input[name="bm-mode"]').forEach((el) => (el.onchange = () => { syncBm(); renderActiveTab(); }));
     root.querySelectorAll(".bm-mtype, .bm-gen-chk").forEach((el) => (el.onchange = syncBm));
-    ["bm-int", "bm-parent", "bm-camp-id", "bm-rad", "bm-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-even-troops", "bm-mor", "bm-minm", "bm-swap-tac", "bm-min-tac-stam"].forEach((id) => ($(id).onchange = syncBm));
+    ["bm-int", "bm-parent", "bm-camp-id", "bm-rad", "bm-stam-thresh", "bm-army-thresh", "bm-act", "bm-inf", "bm-cav", "bm-arc", "bm-rec", "bm-even-troops", "bm-mor", "bm-minm", "bm-swap-tac", "bm-min-tac-stam"].forEach((id) => ($(id).onchange = syncBm));
     $("btn-tgl-bm").onclick = () => toggleTask("binhman");
     $("btn-bm-once").onclick = async () => {
       await saveProfileImmediate(state.snapshot.profile);

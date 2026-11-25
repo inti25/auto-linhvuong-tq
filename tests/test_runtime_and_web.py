@@ -1973,6 +1973,7 @@ def test_runtime_and_web_auto_swap_tactician_forwarding_and_ui(tmp_path, monkeyp
             "fetch_roster",
             lambda *_a, **_kw: sess.roster,
         )
+        monkeypatch.setattr(sess.gateway, "call", lambda *_a, **_kw: {"ret": 0})
         monkeypatch.setattr(
             rt_mod,
             "auto_swap_low_stamina_tacticians",
@@ -2340,4 +2341,107 @@ def test_runtime_and_web_even_troops_forwarding_and_provision(tmp_path, monkeypa
     app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "bm-even-troops" in app_js
     assert "gd-even-troops" in app_js
+
+
+def test_linhvuong_web_entrypoint_importable():
+    """Đảm bảo entrypoint LinhVuongWeb và linhvuong.web.server import được không lỗi."""
+    import LinhVuongWeb
+    import linhvuong.web.server as server_mod
+
+    assert callable(LinhVuongWeb.main)
+    assert LinhVuongWeb.main is server_mod.main
+
+
+def test_adjust_binhman_troops_camp_parent_city_refreshes_morale_and_disables_batch_guard(tmp_path, monkeypatch):
+    import time
+    from linhvuong.profile import BaseBinhManConfig
+    import linhvuong.runtime as rt_mod
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=True)
+    sess = wm.login_account(server_id=53, username="campuser", password="pw")
+
+    sess.roster.generals_of = lambda bid: [sess.roster._generals[1001][0]] if bid == -2001 else []
+    sess.profile.binh_man.bases["-2001"] = BaseBinhManConfig(
+        enabled=True,
+        mode=1,
+        parent_city_id="1001",
+        generals=[1],
+        target_infantry="1000",
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale="95",
+        even_troops=False,
+    )
+
+    monkeypatch.setattr(rt_mod, "fetch_roster", lambda *_a, **_kw: sess.roster)
+    monkeypatch.setattr(sess.gateway, "call", lambda *_a, **_kw: {"ret": 53})
+
+    parent_calls = []
+    morale_calls = []
+
+    def _fake_parent(self, camp_id, parent_city_id, general_ids, target_army, **kw):
+        parent_calls.append({"camp_id": camp_id, "parent_city_id": parent_city_id, **kw})
+        return True
+
+    def _fake_morale(self, base_id, general_ids, target_morale=100, base_gens=None, on_notify=None, stop_event=None, refresh_from_server=False):
+        morale_calls.append({"base_id": base_id, "refresh_from_server": refresh_from_server})
+        return True, []
+
+    monkeypatch.setattr(rt_mod.ArmyProvisioner, "provision_camp_generals_with_parent_city", _fake_parent)
+    monkeypatch.setattr(rt_mod.MoraleTrainer, "adjust_squad_morale", _fake_morale)
+
+    sess.adjust_binhman_troops(base_id=-2001)
+    deadline = time.monotonic() + 2.0
+    while len(morale_calls) < 1 and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    assert len(parent_calls) == 1
+    assert parent_calls[0]["apply_min_batch_guard"] is False
+    assert len(morale_calls) == 1
+    assert morale_calls[0]["refresh_from_server"] is True
+    wm.graceful_shutdown()
+
+
+def test_runtime_and_web_binhman_split_thresholds(tmp_path, monkeypatch):
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from linhvuong.web.app import create_app
+
+    _mock_offline(monkeypatch)
+    wm = WorkspaceManager(data_dir=tmp_path, acquire_lock=True)
+    sess = wm.login_account(server_id=53, username="thuser", password="pw")
+
+    app = create_app(workspace=wm, host="127.0.0.1", allow_no_auth=True, auto_restore=False)
+    with TestClient(app) as client:
+        r_put = client.put(
+            "/api/accounts/thuser%20%40%20S53/profile",
+            json={
+                "binh_man": {
+                    "bases": {
+                        "1001": {
+                            "enabled": True,
+                            "mode": 2,
+                            "generals": [1],
+                            "stamina_threshold": "25",
+                            "army_threshold": "65",
+                        }
+                    }
+                }
+            },
+        )
+        assert r_put.status_code == 200
+        b1001 = r_put.json()["profile"]["binh_man"]["bases"]["1001"]
+        assert b1001["stamina_threshold"] == "25"
+        assert b1001["army_threshold"] == "65"
+
+        tasks = sess._create_binhman_tasks()
+        assert len(tasks) == 1
+        assert tasks[0].stamina_threshold == 25
+        assert tasks[0].army_threshold == 65
+
+    wm.graceful_shutdown()
+    app_js = (Path(__file__).resolve().parent.parent / "linhvuong" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "bm-stam-thresh" in app_js
+    assert "bm-army-thresh" in app_js
 

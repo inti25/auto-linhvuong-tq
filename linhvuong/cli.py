@@ -277,6 +277,8 @@ def build_task(
             mode=cfg.get("mode"),
             city_id=cfg.get("city_id"),
             return_threshold=cfg.get("return_threshold", 0),
+            stamina_threshold=cfg.get("stamina_threshold"),
+            army_threshold=cfg.get("army_threshold"),
             skip_capital_radius=skip,
             parent_city_id=cfg.get("parent_city_id") or cfg.get("base_city_id"),
             camp_id=cfg.get("camp_id"),

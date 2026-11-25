@@ -131,6 +131,11 @@ class Roster:
     _generals: dict[int, list[General]] = field(default_factory=dict)
     _armies: dict[int, Army] = field(default_factory=dict)
     _upgrading_time: dict[int, int] = field(default_factory=dict)
+    _army_fetch_failed_bases: set[int] = field(default_factory=set)
+
+    def has_reliable_armies(self, base_id: int) -> bool:
+        """Trả về True nếu dữ liệu quân số (Common.ashx?id=76) của căn cứ đã được đọc thành công."""
+        return int(base_id) not in self._army_fetch_failed_bases
 
     @property
     def bases(self) -> list[City]:
@@ -306,7 +311,18 @@ def fetch_roster(
         bases_to_query = [b for b in all_bases if not martial_cids or b.id in martial_cids or b.is_camp]
 
     for base in bases_to_query:
-        resp = gateway.call("Common.ashx", 76, {"cid": str(base.id)}) or {}
+        resp = gateway.call("Common.ashx", 76, {"cid": str(base.id)})
+        if not isinstance(resp, dict):
+            roster._army_fetch_failed_bases.add(int(base.id))
+            continue
+        ret76 = resp.get("ret", 0)
+        if ret76 in (110, 73):
+            from .tasks.base import CaptchaRequired
+
+            raise CaptchaRequired()
+        if ret76 != 0:
+            roster._army_fetch_failed_bases.add(int(base.id))
+            continue
         for entry in resp.get("list", []):
             if len(entry) > 2 and isinstance(entry[2], list):
                 for g in entry[2]:
@@ -332,8 +348,8 @@ def fetch_roster(
             gid = int(g[0])
             loyalty_val = int(g[7]) if len(g) > 7 else 100
             morale_val = morale_map.get(gid, loyalty_val)
-            # Nếu là võ tướng mà chưa có trong API 76, khởi tạo Army(0, 0, 0)
-            if type_ == 2 and gid not in roster._armies:
+            # Nếu là võ tướng mà chưa có trong API 76 (và API 76 đọc thành công), khởi tạo Army(0, 0, 0)
+            if type_ == 2 and gid not in roster._armies and int(cid) not in roster._army_fetch_failed_bases:
                 roster._armies[gid] = Army(0, 0, 0)
             tac_id, tac_name = tactician_map.get(gid, (0, ""))
 

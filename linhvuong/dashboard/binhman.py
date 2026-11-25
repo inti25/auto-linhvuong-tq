@@ -1,5 +1,6 @@
 """Phân hệ Bình Man Đa Căn Cứ (ADR-0029) trên Dashboard."""
 
+from contextlib import nullcontext
 import threading
 import time
 import tkinter as tk
@@ -11,7 +12,7 @@ from ..generals import auto_swap_low_stamina_tacticians, parse_stamina_threshold
 from ..profile import BaseBinhManConfig
 from ..roster import fetch_roster as _default_fetch_roster
 from ..scan import BasePeer, Scanner
-from ..tasks.base import CaptchaRequired, TaskContext
+from ..tasks.base import TaskContext
 from ..tasks.binh_man import MAN_TARGET_OPTIONS, BinhMan
 from ..tasks.morale import MoraleTrainer as _DefaultMoraleTrainer
 from ..tasks.thao_phat import TargetArmy
@@ -52,7 +53,21 @@ class BinhManMixin:
             "auto_comfort": bool(self.bm_comfort_var.get()) if hasattr(self, "bm_comfort_var") else True,
             "interval": self.bm_interval_var.get() if hasattr(self, "bm_interval_var") else "15",
             "camp_id": self.bm_camp_id_var.get() if hasattr(self, "bm_camp_id_var") else "",
-            "threshold": self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30",
+            "threshold": (
+                self.bm_army_threshold_var.get()
+                if hasattr(self, "bm_army_threshold_var")
+                else (self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30")
+            ),
+            "stamina_threshold": (
+                self.bm_stamina_threshold_var.get()
+                if hasattr(self, "bm_stamina_threshold_var")
+                else (self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30")
+            ),
+            "army_threshold": (
+                self.bm_army_threshold_var.get()
+                if hasattr(self, "bm_army_threshold_var")
+                else (self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30")
+            ),
             "mantypes": (
                 self.bm_mantypes_dropdown.get_selected_str()
                 if hasattr(self, "bm_mantypes_dropdown")
@@ -110,8 +125,16 @@ class BinhManMixin:
                 self.bm_mantypes_dropdown.set_selected_str(str(bm_data["mantypes"]))
         if hasattr(self, "bm_mantypes_var") and "mantypes" in bm_data:
             self.bm_mantypes_var.set(str(bm_data["mantypes"]))
-        if hasattr(self, "bm_threshold_var") and "threshold" in bm_data:
-            self.bm_threshold_var.set(str(bm_data["threshold"]))
+        if "stamina_threshold" in bm_data or "threshold" in bm_data:
+            stam_val = str(bm_data.get("stamina_threshold", bm_data.get("threshold", "30")))
+            if hasattr(self, "bm_stamina_threshold_var"):
+                self.bm_stamina_threshold_var.set(stam_val)
+        if "army_threshold" in bm_data or "threshold" in bm_data:
+            army_val = str(bm_data.get("army_threshold", bm_data.get("threshold", "30")))
+            if hasattr(self, "bm_army_threshold_var"):
+                self.bm_army_threshold_var.set(army_val)
+            elif hasattr(self, "bm_threshold_var"):
+                self.bm_threshold_var.set(army_val)
         if hasattr(self, "bm_target_inf_var") and "target_infantry" in bm_data:
             self.bm_target_inf_var.set(str(bm_data["target_infantry"]))
         if hasattr(self, "bm_target_cav_var") and "target_cavalry" in bm_data:
@@ -158,12 +181,17 @@ class BinhManMixin:
             # Tệp hồ sơ cũ chưa có trường 'bases', tự động ánh xạ các giá trị phẳng vào căn cứ đang hoạt động hoặc căn cứ đầu tiên
             bm_gens = [int(x) for x in bm_data.get("generals", []) if str(x).isdigit()] if "generals" in bm_data else []
             m_types_str = str(bm_data.get("mantypes", "7,8,9,10"))
+            legacy_th = str(bm_data.get("threshold", "30"))
+            stam_th = str(bm_data.get("stamina_threshold", legacy_th))
+            army_th = str(bm_data.get("army_threshold", legacy_th))
             legacy_cfg = BaseBinhManConfig(
                 name="",
                 enabled=True,
                 mode=int(bm_data.get("mode", 1)),
                 radius=str(bm_data.get("radius", "5")),
-                threshold=str(bm_data.get("threshold", "30")),
+                threshold=legacy_th if "threshold" in bm_data else army_th,
+                stamina_threshold=stam_th,
+                army_threshold=army_th,
                 camp_id=str(bm_data.get("camp_id", "")),
                 parent_city_id=str(bm_data.get("parent_city_id", "")),
                 mantypes=m_types_str,
@@ -331,9 +359,16 @@ class BinhManMixin:
         self.bm_camp_id_entry = ttk.Entry(f_bm, textvariable=self.bm_camp_id_var, width=12)
         self.bm_camp_id_entry.grid(row=2, column=1, sticky="w", padx=4, pady=4)
 
-        tk.Label(f_bm, text="Ngưỡng An Toàn (%):", bg=BG, fg=FG).grid(row=2, column=2, sticky="w", padx=4, pady=4)
-        self.bm_threshold_var = tk.StringVar(value="30")
-        ttk.Entry(f_bm, textvariable=self.bm_threshold_var, width=8).grid(row=2, column=3, sticky="w", padx=4, pady=4)
+        bm_th_f = tk.Frame(f_bm, bg=BG)
+        bm_th_f.grid(row=2, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        tk.Label(bm_th_f, text="Thể lực an toàn (%):", bg=BG, fg=FG).pack(side="left", padx=(0, 3))
+        self.bm_stamina_threshold_var = tk.StringVar(value="30")
+        ttk.Entry(bm_th_f, textvariable=self.bm_stamina_threshold_var, width=5).pack(side="left", padx=(0, 8))
+        tk.Label(bm_th_f, text="Ngưỡng quân an toàn (%):", bg=BG, fg=FG).pack(side="left", padx=(0, 3))
+        self.bm_army_threshold_var = tk.StringVar(value="30")
+        ttk.Entry(bm_th_f, textvariable=self.bm_army_threshold_var, width=5).pack(side="left")
+        # Alias tương thích ngược cho code/test cũ đọc bm_threshold_var
+        self.bm_threshold_var = self.bm_army_threshold_var
 
         tk.Label(f_bm, text="Bán kính quét:", bg=BG, fg=FG).grid(row=3, column=0, sticky="w", padx=4, pady=4)
         self.bm_radius_var = tk.StringVar(value="10")
@@ -368,7 +403,7 @@ class BinhManMixin:
         self.bm_adjust_troops_btn = ttk.Button(bm_army_f, text="⚔️ Biên chế ngay", style="Action.TButton", command=self._manual_adjust_bm_troops)
         self.bm_adjust_troops_btn.pack(side="left", padx=(0, 4))
 
-        # Row 5: Tự động bổ sung lính, San đều quân, Tự động nâng sĩ khí, Sĩ khí tối thiểu
+        # Row 5: Biên chế quân tự động, San đều quân, Luyện sĩ khí, Sĩ khí tối thiểu
         bm_rec_f = tk.Frame(f_bm, bg=BG)
         bm_rec_f.grid(row=5, column=0, columnspan=2, sticky="w", padx=4, pady=4)
         self.bm_auto_recruit_var = tk.BooleanVar(value=True)
@@ -394,18 +429,17 @@ class BinhManMixin:
         self.bm_min_morale_var = tk.StringVar(value="95")
         ttk.Entry(bm_mor_f, textvariable=self.bm_min_morale_var, width=5).pack(side="left")
 
-        # Row 6: Tự động đổi mưu sĩ
+        # Row 6: Tự động đổi mưu sĩ & Thể lực tối thiểu (%)
+        bm_tac_f = tk.Frame(f_bm, bg=BG)
+        bm_tac_f.grid(row=6, column=0, columnspan=4, sticky="w", padx=4, pady=4)
         self.bm_auto_swap_tactician_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            f_bm,
+            bm_tac_f,
             text="Tự động đổi mưu sĩ",
             variable=self.bm_auto_swap_tactician_var,
             style="TCheckbutton",
-        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=4, pady=4)
-
-        bm_tac_f = tk.Frame(f_bm, bg=BG)
-        bm_tac_f.grid(row=6, column=2, columnspan=2, sticky="w", padx=4, pady=4)
-        tk.Label(bm_tac_f, text="Thể lực tối thiểu (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        ).pack(side="left", padx=(0, 8))
+        tk.Label(bm_tac_f, text="Thể lực MS tối thiểu (%):", bg=BG, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
         self.bm_min_tactician_stamina_var = tk.StringVar(value="30")
         ttk.Entry(bm_tac_f, textvariable=self.bm_min_tactician_stamina_var, width=5).pack(side="left")
 
@@ -606,7 +640,16 @@ class BinhManMixin:
             def_camp_id = str(base.id) if base.is_camp else ""
             vos = [g.id for g in self.roster.generals_of(base.id) if g.role == "vo"] if self.roster else []
             t_rad = self.bm_radius_var.get() if hasattr(self, "bm_radius_var") else "10"
-            t_thresh = self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30"
+            t_stam_thresh = (
+                self.bm_stamina_threshold_var.get()
+                if hasattr(self, "bm_stamina_threshold_var")
+                else (self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30")
+            )
+            t_army_thresh = (
+                self.bm_army_threshold_var.get()
+                if hasattr(self, "bm_army_threshold_var")
+                else (self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30")
+            )
             t_min_mor = self.bm_min_morale_var.get() if hasattr(self, "bm_min_morale_var") else "95"
             t_auto_rec = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
             t_auto_mor = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
@@ -621,7 +664,9 @@ class BinhManMixin:
                 enabled=False,
                 mode=def_mode,
                 radius=str(t_rad),
-                threshold=str(t_thresh),
+                threshold=str(t_army_thresh),
+                stamina_threshold=str(t_stam_thresh),
+                army_threshold=str(t_army_thresh),
                 camp_id=def_camp_id,
                 generals=vos,
                 target_infantry="0",
@@ -631,7 +676,7 @@ class BinhManMixin:
                 auto_morale=t_auto_mor,
                 min_morale=str(t_min_mor),
                 auto_swap_tactician=t_auto_swap_tac,
-                min_tactician_stamina=str(t_min_tac_stam or "30"),
+                min_tactician_stamina=str(t_min_tac_stam),
                 attack_action_mode="adaptive",
                 action_combo_idx=0,
             )
@@ -759,8 +804,18 @@ class BinhManMixin:
             cfg.mode = self.bm_mode_var.get()
         if hasattr(self, "bm_radius_var"):
             cfg.radius = str(self.bm_radius_var.get() or "10")
-        if hasattr(self, "bm_threshold_var"):
-            cfg.threshold = str(self.bm_threshold_var.get() or "30")
+        if hasattr(self, "bm_stamina_threshold_var"):
+            raw_stam = str(self.bm_stamina_threshold_var.get()).strip()
+            cfg.stamina_threshold = raw_stam if raw_stam != "" else "30"
+        elif hasattr(self, "bm_threshold_var"):
+            cfg.stamina_threshold = str(self.bm_threshold_var.get() or "30")
+        if hasattr(self, "bm_army_threshold_var"):
+            raw_army = str(self.bm_army_threshold_var.get()).strip()
+            cfg.army_threshold = raw_army if raw_army != "" else "30"
+            cfg.threshold = cfg.army_threshold
+        elif hasattr(self, "bm_threshold_var"):
+            cfg.army_threshold = str(self.bm_threshold_var.get() or "30")
+            cfg.threshold = cfg.army_threshold
         if hasattr(self, "bm_camp_id_var") and cfg.mode == 1:
             cfg.camp_id = self.bm_camp_id_var.get().strip()
         if hasattr(self, "bm_parent_city_combo") and self.roster and self.roster.cities:
@@ -820,8 +875,12 @@ class BinhManMixin:
                 self.bm_mode_var.set(cfg.mode)
             if hasattr(self, "bm_radius_var"):
                 self.bm_radius_var.set(str(cfg.radius))
-            if hasattr(self, "bm_threshold_var"):
-                self.bm_threshold_var.set(str(cfg.threshold))
+            if hasattr(self, "bm_stamina_threshold_var"):
+                self.bm_stamina_threshold_var.set(str(getattr(cfg, "stamina_threshold", cfg.threshold)))
+            if hasattr(self, "bm_army_threshold_var"):
+                self.bm_army_threshold_var.set(str(getattr(cfg, "army_threshold", cfg.threshold)))
+            elif hasattr(self, "bm_threshold_var"):
+                self.bm_threshold_var.set(str(getattr(cfg, "army_threshold", cfg.threshold)))
             if hasattr(self, "bm_camp_id_var"):
                 self.bm_camp_id_var.set(str(cfg.camp_id) if cfg.camp_id is not None else "")
             if hasattr(self, "bm_parent_city_combo") and self.roster.cities:
@@ -852,9 +911,9 @@ class BinhManMixin:
             if hasattr(self, "bm_min_morale_var"):
                 self.bm_min_morale_var.set(str(cfg.min_morale))
             if hasattr(self, "bm_auto_swap_tactician_var"):
-                self.bm_auto_swap_tactician_var.set(bool(cfg.auto_swap_tactician))
+                self.bm_auto_swap_tactician_var.set(bool(getattr(cfg, "auto_swap_tactician", False)))
             if hasattr(self, "bm_min_tactician_stamina_var"):
-                self.bm_min_tactician_stamina_var.set(str(cfg.min_tactician_stamina or "30"))
+                self.bm_min_tactician_stamina_var.set(str(getattr(cfg, "min_tactician_stamina", "30")))
             apply_action_mode_widgets(
                 getattr(self, "bm_action_mode_var", None),
                 getattr(self, "bm_action_mode_combo", None),
@@ -970,8 +1029,14 @@ class BinhManMixin:
             t_arc = int(cfg.target_archers) if str(cfg.target_archers).isdigit() else 0
             target_army = TargetArmy(infantry=t_inf, cavalry=t_cav, archers=t_arc)
             rad_int = int(cfg.radius) if str(cfg.radius).isdigit() else 10
-            thresh_int = int(cfg.threshold) if str(cfg.threshold).isdigit() else 30
+            legacy_th = int(cfg.threshold) if str(cfg.threshold).strip().isdigit() else 30
+            stam_raw = str(getattr(cfg, "stamina_threshold", cfg.threshold)).strip()
+            stam_int = int(stam_raw) if stam_raw.isdigit() else legacy_th
+            army_raw = str(getattr(cfg, "army_threshold", cfg.threshold)).strip()
+            army_int = int(army_raw) if army_raw.isdigit() else legacy_th
             mor_int = int(cfg.min_morale) if str(cfg.min_morale).isdigit() else 95
+            auto_swap_tac = bool(getattr(cfg, "auto_swap_tactician", False))
+            min_tac_stam = parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30"))
             b_types = cfg.target_types if cfg.target_types else ([int(x.strip()) for x in cfg.mantypes.split(",") if x.strip().isdigit()] if isinstance(cfg.mantypes, str) else [7, 8, 9, 10])
             combo_vals = list(ATTACK_ACTION_COMBO_OPTIONS)
             c_idx = int(getattr(cfg, "action_combo_idx", 0) or 0)
@@ -986,7 +1051,9 @@ class BinhManMixin:
                 camp_id=camp_id,
                 parent_city_id=parent_id,
                 city_id=b.id if mode == 2 else parent_id,
-                return_threshold=thresh_int,
+                return_threshold=army_int,
+                stamina_threshold=stam_int,
+                army_threshold=army_int,
                 mode=mode,
                 sleep_fn=time.sleep,
                 combat_config=self._build_combat_config(action_combo_val=b_combo_val),
@@ -1000,11 +1067,11 @@ class BinhManMixin:
                 auto_recruit=cfg.auto_recruit,
                 auto_morale=cfg.auto_morale,
                 min_morale=mor_int,
-                auto_swap_tactician=bool(getattr(cfg, "auto_swap_tactician", False)),
-                min_tactician_stamina=parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30")),
                 peers=peers,
                 non_blocking_relocate=True,
                 base_name=b.name,
+                auto_swap_tactician=auto_swap_tac,
+                min_tactician_stamina=min_tac_stam,
                 even_troops=bool(getattr(cfg, "even_troops", False)),
             )
             tasks.append(task)
@@ -1088,9 +1155,23 @@ class BinhManMixin:
         camp_id = int(self.bm_camp_id_var.get()) if (mode == 1 and hasattr(self, "bm_camp_id_var") and self.bm_camp_id_var.get().strip()) else (base.id if (mode == 1 and base.is_camp) else None)
         radius = int(self.bm_radius_var.get() or "10") if hasattr(self, "bm_radius_var") else 10
         try:
-            threshold = int(self.bm_threshold_var.get() or "30") if hasattr(self, "bm_threshold_var") else 30
+            raw_stam = (
+                self.bm_stamina_threshold_var.get()
+                if hasattr(self, "bm_stamina_threshold_var")
+                else (self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30")
+            )
+            stamina_threshold = int(raw_stam if str(raw_stam).strip() != "" else "30")
         except ValueError:
-            threshold = 30
+            stamina_threshold = 30
+        try:
+            raw_army = (
+                self.bm_army_threshold_var.get()
+                if hasattr(self, "bm_army_threshold_var")
+                else (self.bm_threshold_var.get() if hasattr(self, "bm_threshold_var") else "30")
+            )
+            army_threshold = int(raw_army if str(raw_army).strip() != "" else "30")
+        except ValueError:
+            army_threshold = 30
         if hasattr(self, "bm_mantypes_dropdown"):
             man_types = self.bm_mantypes_dropdown.get_selected()
         elif hasattr(self, "bm_mantypes_var"):
@@ -1131,16 +1212,11 @@ class BinhManMixin:
         target_army = TargetArmy(infantry=target_inf, cavalry=target_cav, archers=target_arc)
         auto_recruit = bool(self.bm_auto_recruit_var.get()) if hasattr(self, "bm_auto_recruit_var") else True
         auto_morale = bool(self.bm_auto_morale_var.get()) if hasattr(self, "bm_auto_morale_var") else True
-        auto_swap_tactician = (
-            bool(self.bm_auto_swap_tactician_var.get())
-            if hasattr(self, "bm_auto_swap_tactician_var")
-            else False
+        auto_swap_tac = bool(self.bm_auto_swap_tactician_var.get()) if hasattr(self, "bm_auto_swap_tactician_var") else False
+        min_tac_stam = parse_stamina_threshold(
+            self.bm_min_tactician_stamina_var.get() if hasattr(self, "bm_min_tactician_stamina_var") else "30"
         )
-        min_tactician_stamina = parse_stamina_threshold(
-            self.bm_min_tactician_stamina_var.get()
-            if hasattr(self, "bm_min_tactician_stamina_var")
-            else "30"
-        )
+        even_troops = bool(self.bm_even_troops_var.get()) if hasattr(self, "bm_even_troops_var") else False
         bm_combo_val = self.bm_action_mode_combo.get() if hasattr(self, "bm_action_mode_combo") else None
 
         return BinhMan(
@@ -1152,7 +1228,9 @@ class BinhManMixin:
             camp_id=camp_id,
             parent_city_id=parent_id or base.id,
             city_id=base.id if mode == 2 else parent_id,
-            return_threshold=threshold,
+            return_threshold=army_threshold,
+            stamina_threshold=stamina_threshold,
+            army_threshold=army_threshold,
             mode=mode,
             sleep_fn=time.sleep,
             combat_config=self._build_combat_config(action_combo_val=bm_combo_val),
@@ -1166,10 +1244,10 @@ class BinhManMixin:
             auto_recruit=auto_recruit,
             auto_morale=auto_morale,
             min_morale=min_morale,
-            auto_swap_tactician=auto_swap_tactician,
-            min_tactician_stamina=min_tactician_stamina,
             base_name=base.name,
-            even_troops=bool(self.bm_even_troops_var.get()) if hasattr(self, "bm_even_troops_var") else False,
+            auto_swap_tactician=auto_swap_tac,
+            min_tactician_stamina=min_tac_stam,
+            even_troops=even_troops,
         )
 
     def _provision_base_troops(
@@ -1201,223 +1279,211 @@ class BinhManMixin:
         prefix = f"[{base_name}] " if base_name else ""
         self.after(0, self._append_bm_log, f"⚔️ {prefix}Tiến hành biên chế {len(sel_gens)} tướng...")
 
-        if mode == 2:
-            city_id = base_id
-            for gid in sel_gens:
-                prov.heal_general(city_id, gid)
-
-            fresh_roster = None
-            troops_added = False
-            troops_balanced = False
-            city_gens = {}
-            current_armies = {}
-            if auto_swap_tac or even_troops or (target_army.total > 0 and auto_recruit):
-                fresh_roster = fetch_roster_fn(
-                    self.gateway,
-                    only_base_ids=[city_id],
-                    include_civil=auto_swap_tac,
-                    include_cities=False,
-                )
-                city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
-                current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
-                if even_troops:
-                    current_armies, troops_balanced = prov.balance_troops(
-                        base_id=city_id,
-                        general_ids=sel_gens,
-                        current_armies=current_armies,
-                        base_gens=city_gens,
-                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
-                    )
-                if target_army.total > 0 and auto_recruit:
-                    comfort_attempted: set[int] = set()
-                    exhausted_cities: set[int] = set()
-                    for gid in sel_gens:
-                        army = current_armies.get(gid)
-                        adj_res = prov.adjust_troops(
-                            base_id=city_id,
-                            general_id=gid,
-                            current_army=army,
-                            target_army=target_army,
-                            auto_recruit=True,
-                            on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
-                            comfort_attempted=comfort_attempted,
-                            exhausted_cities=exhausted_cities,
-                            apply_min_batch_guard=False,
-                        )
-                        if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
-                            troops_added = True
-
-            if auto_swap_tac:
-                if fresh_roster is None:
-                    fresh_roster = fetch_roster_fn(
-                        self.gateway,
-                        only_base_ids=[city_id],
-                        include_civil=True,
-                        include_cities=False,
-                    )
-                try:
-                    auto_swap_low_stamina_tacticians(
-                        self.gateway,
-                        roster=fresh_roster,
-                        base_id=city_id,
-                        general_ids=sel_gens,
-                        min_stamina_pct=min_tac_stam,
-                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
-                    )
-                except CaptchaRequired:
-                    self.after(0, self._append_bm_log, f"⛔ {prefix}Đổi Mưu sĩ gặp Captcha (mã 110).")
-                    return
-
-            if auto_morale:
-                if fresh_roster is None:
-                    fresh_roster = fetch_roster_fn(
-                        self.gateway,
-                        only_base_ids=[city_id],
-                        include_civil=False,
-                        include_cities=False,
-                    )
-                city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
-                trainer = trainer_cls(self.gateway)
-
-                def _on_notify_bm_city(msg):
-                    self.after(0, self._append_bm_log, f"   {prefix}{msg}")
-
-                trainer.adjust_squad_morale(
-                    base_id=city_id,
-                    general_ids=sel_gens,
-                    target_morale=min_morale,
-                    base_gens=city_gens,
-                    on_notify=_on_notify_bm_city,
-                    refresh_from_server=troops_added or troops_balanced,
-                )
-        else:
-            camp_id = base_id
-            for gid in sel_gens:
-                prov.heal_general(camp_id, gid)
-
-            fresh_roster = None
-            troops_added = False
-            troops_balanced = False
-            rechecked = None
-            moved_to_parent = False
-            camp_gens = {}
-            current_armies = {}
-            if auto_swap_tac or even_troops or target_army.total > 0:
-                fresh_roster = fetch_roster_fn(
-                    self.gateway,
-                    only_base_ids=[camp_id],
-                    include_civil=auto_swap_tac,
-                    include_cities=False,
-                )
-                camp_gens = {g.id: g for g in fresh_roster.generals_of(camp_id) if g.role == "vo"}
-                current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
-                if even_troops:
-                    current_armies, troops_balanced = prov.balance_troops(
-                        base_id=camp_id,
-                        general_ids=sel_gens,
-                        current_armies=current_armies,
-                        base_gens=camp_gens,
-                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
-                    )
-
-            if target_army.total > 0 and fresh_roster is not None:
+        lock_fn = getattr(getattr(self, "shared_target_locks", None), "base_provision_lock", None)
+        with (lock_fn(base_id) if callable(lock_fn) else nullcontext()):
+            if mode == 2:
+                city_id = base_id
                 for gid in sel_gens:
-                    army = current_armies.get(gid)
-                    adj_res = prov.adjust_troops(
-                        base_id=camp_id,
-                        general_id=gid,
-                        current_army=army,
-                        target_army=target_army,
-                        auto_recruit=False,
-                        on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
-                    )
-                    if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
-                        troops_added = True
+                    prov.heal_general(city_id, gid)
 
-                rechecked = (
-                    fetch_roster_fn(
+                fresh_roster = None
+                troops_added = False
+                troops_balanced = False
+                city_gens = {}
+                current_armies = {}
+                if auto_swap_tac or even_troops or (target_army.total > 0 and auto_recruit):
+                    fresh_roster = fetch_roster_fn(
+                        self.gateway,
+                        only_base_ids=[city_id],
+                        include_civil=auto_swap_tac,
+                        include_cities=False,
+                    )
+                    if not getattr(fresh_roster, "has_reliable_armies", lambda _b: True)(city_id):
+                        self.after(0, self._append_bm_log, f"⚠️ {prefix}Không đọc được quân số từ máy chủ (Common.ashx?id=76), bỏ qua biên chế để tránh vượt định mức.")
+                        return
+                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
+                    current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
+                    if auto_swap_tac:
+                        auto_swap_low_stamina_tacticians(
+                            gateway=self.gateway,
+                            roster=fresh_roster,
+                            base_id=city_id,
+                            general_ids=sel_gens,
+                            min_stamina_pct=min_tac_stam,
+                            on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                        )
+                    if even_troops:
+                        current_armies, troops_balanced = prov.balance_troops(
+                            base_id=city_id,
+                            general_ids=sel_gens,
+                            current_armies=current_armies,
+                            base_gens=city_gens,
+                            on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                        )
+                    if target_army.total > 0 and auto_recruit:
+                        comfort_attempted: set[int] = set()
+                        exhausted_cities: set[int] = set()
+                        for gid in sel_gens:
+                            army = current_armies.get(gid)
+                            adj_res = prov.adjust_troops(
+                                base_id=city_id,
+                                general_id=gid,
+                                current_army=army,
+                                target_army=target_army,
+                                auto_recruit=True,
+                                on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                                comfort_attempted=comfort_attempted,
+                                exhausted_cities=exhausted_cities,
+                                apply_min_batch_guard=False,
+                            )
+                            if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                                troops_added = True
+
+                if auto_morale:
+                    if fresh_roster is None:
+                        fresh_roster = fetch_roster_fn(
+                            self.gateway,
+                            only_base_ids=[city_id],
+                            include_civil=False,
+                            include_cities=False,
+                        )
+                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
+                    trainer = trainer_cls(self.gateway)
+
+                    def _on_notify_bm_city(msg):
+                        self.after(0, self._append_bm_log, f"   {prefix}{msg}")
+
+                    trainer.adjust_squad_morale(
+                        base_id=city_id,
+                        general_ids=sel_gens,
+                        target_morale=min_morale,
+                        base_gens=city_gens,
+                        on_notify=_on_notify_bm_city,
+                        refresh_from_server=troops_added or troops_balanced,
+                    )
+            else:
+                camp_id = base_id
+                for gid in sel_gens:
+                    prov.heal_general(camp_id, gid)
+
+                fresh_roster = None
+                troops_added = False
+                troops_balanced = False
+                rechecked = None
+                moved_to_parent = False
+                camp_gens = {}
+                current_armies = {}
+                if auto_swap_tac or even_troops or target_army.total > 0:
+                    fresh_roster = fetch_roster_fn(
                         self.gateway,
                         only_base_ids=[camp_id],
                         include_civil=auto_swap_tac,
                         include_cities=False,
                     )
-                    if troops_added
-                    else fresh_roster
-                )
-                rechecked_armies = (
-                    {gid: rechecked.army_of(gid) for gid in sel_gens}
-                    if troops_added
-                    else current_armies
-                )
-                def_gens = []
-                for gid in sel_gens:
-                    a = rechecked_armies.get(gid)
-                    inf = a.infantry if a else 0
-                    cav = a.cavalry if a else 0
-                    arc = a.archers if a else 0
-                    if inf < target_army.infantry or cav < target_army.cavalry or arc < target_army.archers:
-                        def_gens.append(gid)
+                    if not getattr(fresh_roster, "has_reliable_armies", lambda _b: True)(camp_id):
+                        self.after(0, self._append_bm_log, f"⚠️ {prefix}Không đọc được quân số từ máy chủ (Common.ashx?id=76), bỏ qua biên chế để tránh vượt định mức.")
+                        return
+                    camp_gens = {g.id: g for g in fresh_roster.generals_of(camp_id) if g.role == "vo"}
+                    current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
+                    if auto_swap_tac:
+                        auto_swap_low_stamina_tacticians(
+                            gateway=self.gateway,
+                            roster=fresh_roster,
+                            base_id=camp_id,
+                            general_ids=sel_gens,
+                            min_stamina_pct=min_tac_stam,
+                            on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                        )
+                    if even_troops:
+                        current_armies, troops_balanced = prov.balance_troops(
+                            base_id=camp_id,
+                            general_ids=sel_gens,
+                            current_armies=current_armies,
+                            base_gens=camp_gens,
+                            on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                        )
 
-                if def_gens:
-                    if parent_id:
-                        self.after(0, self._append_bm_log, f"⛺ {prefix}Quân đồn trú tại trại không đủ cho {len(def_gens)} tướng. Tự động điều về Thành mẹ {parent_id} bổ sung...")
-                        prov.provision_camp_generals_with_parent_city(
-                            camp_id=camp_id,
-                            parent_city_id=parent_id,
-                            general_ids=def_gens,
+                if target_army.total > 0 and fresh_roster is not None:
+                    for gid in sel_gens:
+                        army = current_armies.get(gid)
+                        adj_res = prov.adjust_troops(
+                            base_id=camp_id,
+                            general_id=gid,
+                            current_army=army,
                             target_army=target_army,
-                            current_armies=rechecked_armies,
-                            min_morale=min_morale,
+                            auto_recruit=False,
                             on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
                         )
-                        moved_to_parent = True
-                    else:
-                        self.after(0, self._append_bm_log, f"⚠️ {prefix}Quân đồn trú tại trại không đủ và chưa chọn Thành mẹ! Vui lòng chọn Thành mẹ.")
+                        if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
+                            troops_added = True
 
-            camp_roster = rechecked if (rechecked is not None and not moved_to_parent) else None
-            if auto_swap_tac:
-                if camp_roster is None:
-                    camp_roster = fetch_roster_fn(
-                        self.gateway,
-                        only_base_ids=[camp_id],
-                        include_civil=True,
-                        include_cities=False,
+                    rechecked = (
+                        fetch_roster_fn(
+                            self.gateway,
+                            only_base_ids=[camp_id],
+                            include_civil=False,
+                            include_cities=False,
+                        )
+                        if troops_added
+                        else fresh_roster
                     )
-                try:
-                    auto_swap_low_stamina_tacticians(
-                        self.gateway,
-                        roster=camp_roster,
+                    rechecked_armies = (
+                        {gid: rechecked.army_of(gid) for gid in sel_gens}
+                        if troops_added
+                        else current_armies
+                    )
+                    def_gens = []
+                    for gid in sel_gens:
+                        a = rechecked_armies.get(gid)
+                        inf = a.infantry if a else 0
+                        cav = a.cavalry if a else 0
+                        arc = a.archers if a else 0
+                        if inf < target_army.infantry or cav < target_army.cavalry or arc < target_army.archers:
+                            def_gens.append(gid)
+
+                    if def_gens:
+                        if parent_id:
+                            self.after(0, self._append_bm_log, f"⛺ {prefix}Quân đồn trú tại trại không đủ cho {len(def_gens)} tướng. Tự động điều về Thành mẹ {parent_id} bổ sung...")
+                            prov.provision_camp_generals_with_parent_city(
+                                camp_id=camp_id,
+                                parent_city_id=parent_id,
+                                general_ids=def_gens,
+                                target_army=target_army,
+                                current_armies=rechecked_armies,
+                                min_morale=min_morale,
+                                on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                                apply_min_batch_guard=False,
+                            )
+                            moved_to_parent = True
+                        else:
+                            self.after(0, self._append_bm_log, f"⚠️ {prefix}Quân đồn trú tại trại không đủ và chưa chọn Thành mẹ! Vui lòng chọn Thành mẹ.")
+
+                if auto_morale:
+                    if rechecked is not None and not moved_to_parent:
+                        camp_roster = rechecked
+                    elif fresh_roster is not None and not moved_to_parent:
+                        camp_roster = fresh_roster
+                    else:
+                        camp_roster = fetch_roster_fn(
+                            self.gateway,
+                            only_base_ids=[camp_id],
+                            include_civil=False,
+                            include_cities=False,
+                        )
+                    camp_gens = {g.id: g for g in camp_roster.generals_of(camp_id) if g.role == "vo"}
+                    trainer = trainer_cls(self.gateway)
+
+                    def _on_notify_bm_camp(msg):
+                        self.after(0, self._append_bm_log, f"   {prefix}{msg}")
+
+                    trainer.adjust_squad_morale(
                         base_id=camp_id,
                         general_ids=sel_gens,
-                        min_stamina_pct=min_tac_stam,
-                        on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
+                        target_morale=min_morale,
+                        base_gens=camp_gens,
+                        on_notify=_on_notify_bm_camp,
+                        refresh_from_server=troops_added or troops_balanced,
                     )
-                except CaptchaRequired:
-                    self.after(0, self._append_bm_log, f"⛔ {prefix}Đổi Mưu sĩ gặp Captcha (mã 110).")
-                    return
-
-            if auto_morale:
-                if camp_roster is None:
-                    camp_roster = fetch_roster_fn(
-                        self.gateway,
-                        only_base_ids=[camp_id],
-                        include_civil=False,
-                        include_cities=False,
-                    )
-                camp_gens = {g.id: g for g in camp_roster.generals_of(camp_id) if g.role == "vo"}
-                trainer = trainer_cls(self.gateway)
-
-                def _on_notify_bm_camp(msg):
-                    self.after(0, self._append_bm_log, f"   {prefix}{msg}")
-
-                trainer.adjust_squad_morale(
-                    base_id=camp_id,
-                    general_ids=sel_gens,
-                    target_morale=min_morale,
-                    base_gens=camp_gens,
-                    on_notify=_on_notify_bm_camp,
-                    refresh_from_server=troops_added or troops_balanced,
-                )
 
     def _manual_adjust_bm_troops(self):
         msgbox = resolve_dashboard_symbol("messagebox", _default_messagebox)
@@ -1525,4 +1591,3 @@ class BinhManMixin:
         else:
             self._bm_runner.stop()
             self.bm_start_btn.configure(text="▶️ Bắt đầu Bình Man", style="Success.TButton")
-

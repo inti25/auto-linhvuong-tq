@@ -11,6 +11,14 @@ logger = logging.getLogger("linhvuong.gateway")
 
 RET_SESSION_EXPIRED = 198599
 
+NON_IDEMPOTENT_APIS: frozenset[tuple[str, int]] = frozenset(
+    {
+        ("OPT.ashx", 6),   # Biên chế cộng thêm quân vào tướng
+        ("OPT.ashx", 39),  # Chuyển quân trực tiếp giữa 2 tướng
+        ("OPT.ashx", 41),  # Chiêu mộ cộng thêm tân binh
+    }
+)
+
 
 class GatewayClient:
     def __init__(
@@ -85,14 +93,20 @@ class GatewayClient:
         data: Any,
         referer: Optional[str] = None,
         query_suffix: Optional[str] = None,
+        retry_on_error: Optional[bool] = None,
     ) -> Optional[dict]:
-        """POST tới <endpoint>?id=<api_id>. Retry tuyến tính khi HTTP 502/503/504."""
+        """POST tới <endpoint>?id=<api_id>. Retry tuyến tính khi HTTP 502/503/504 (trừ lệnh không idempotent)."""
         url = f"{self.base_url}/GateWay/{endpoint}?id={api_id}"
         if query_suffix:
             url = f"{url}&{query_suffix}"
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Request: POST {endpoint}?id={api_id} | Data: {data}")
 
+        allow_retry = (
+            (endpoint, int(api_id)) not in NON_IDEMPOTENT_APIS
+            if retry_on_error is None
+            else bool(retry_on_error)
+        )
         headers = self._headers(referer=referer)
         relogin_attempted = False
         failovers_used = 0
@@ -104,6 +118,11 @@ class GatewayClient:
                     url, data=data, headers=headers, timeout=self.timeout
                 )
             except Exception as e:
+                if not allow_retry:
+                    logger.warning(
+                        f"Lỗi mạng khi gọi {endpoint}?id={api_id} (không retry lệnh không idempotent): {e}"
+                    )
+                    return None
                 logger.warning(
                     f"Lỗi mạng khi gọi {endpoint}?id={api_id} (lần {attempt}/{self.max_retries}): {e}"
                 )
@@ -121,6 +140,12 @@ class GatewayClient:
                             continue
                 self._sleep(0.5)
                 continue
+
+            if resp.status_code in (502, 503, 504) and not allow_retry:
+                logger.warning(
+                    f"Máy chủ trả về HTTP {resp.status_code} cho {endpoint}?id={api_id} (không retry lệnh không idempotent)"
+                )
+                return None
 
             if resp.status_code in (502, 504):
                 if self.proxy_pool and getattr(self.session, "proxies", None) and failovers_used < self.max_failovers:
