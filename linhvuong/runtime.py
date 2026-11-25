@@ -59,25 +59,25 @@ from .enhance import (
 )
 from .gateway import GatewayClient
 from .generals import (
-    ADD_POINT_MODE_PAIR_1_3,
-    ADD_POINT_MODES,
     EQUIP_MODE_ASSIGN,
     EQUIP_MODE_UNEQUIP,
     EQUIP_TYPES,
-    RENAME_MAX_WIDTH,
-    add_points_generals,
-    auto_swap_low_stamina_tacticians,
-    build_rename_plan,
-    collect_reward_targets,
     configure_equipment,
     configure_tacticians,
     fetch_equipment_inventory,
+    build_rename_plan,
+    rename_generals,
+    validate_general_name,
     general_name_width,
+    RENAME_MAX_WIDTH,
+    ADD_POINT_MODE_PAIR_1_3,
+    ADD_POINT_MODES,
+    add_points_generals,
+    auto_swap_low_stamina_tacticians,
     is_max_add_mode,
     parse_stamina_threshold,
-    rename_generals,
     reward_all_generals,
-    validate_general_name,
+    collect_reward_targets,
 )
 from .locks import TargetLocks
 from .logger import setup_logger
@@ -90,9 +90,11 @@ from .market import (
 )
 from .notifications import (
     NotificationConfig,
+    clear_general_visit_alerts,
     dispatch_boss_alert,
     dispatch_system_alert,
     reset_system_alert,
+    sync_general_visit_alerts,
 )
 from .paths import (
     DataDirLock,
@@ -115,9 +117,11 @@ from .tasks.building import (
     CHEST_MAPPING,
     BuildingPlan,
     BuildingTask,
+    check_general_visits,
     chest_needs_city_switch,
     parse_boost_remaining_time,
     run_batch_open_chest,
+    select_general_visit_city,
 )
 from .tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
 from .tasks.di_trai import DiTrai
@@ -164,19 +168,18 @@ RESUMABLE_TASKS = (
     "resource_monitor",
     "crafting",
     "transfer_loop",
-    "army_transfer",
 )
 
 AUTO_START_TASK_LABELS = (
     ("building", "🏛️ Xây dựng"),
     ("research", "🔬 Nghiên cứu"),
+    ("resource_monitor", "📦 Tài Nguyên"),
     ("thaophat", "⚔️ Thảo phạt"),
     ("binhman", "🏕️ Bình man"),
     ("goidan", "🧛 Gọi man"),
     ("nienthu", "🧧 Niên thú"),
     ("crafting", "🛡️ Chế tạo quân giới"),
     ("transfer_loop", "🚚 Chuyển quân giới lặp"),
-    ("resource_monitor", "📦 Tài Nguyên"),
 )
 
 
@@ -263,13 +266,14 @@ def serialize_roster(roster: Optional[Roster]) -> dict:
                 "status_text": g.status_text,
                 "tactician_id": getattr(g, "tactician_id", 0),
                 "tactician_name": g.tactician_name,
-                "is_mayor": bool(getattr(g, "is_mayor", False)),
-                "is_tactician": bool(getattr(g, "is_tactician", False)),
-                "upgrading_time": getattr(g, "upgrading_time", 0),
                 "stat1": getattr(g, "stat1", 0),
                 "stat2": getattr(g, "stat2", 0),
                 "stat3": getattr(g, "stat3", 0),
                 "skill_point": getattr(g, "skill_point", 0),
+                "is_mayor": bool(getattr(g, "is_mayor", False)),
+                "is_tactician": bool(getattr(g, "is_tactician", False)),
+                "is_available_tactician": bool(getattr(g, "is_available_tactician", False)),
+                "upgrading_time": getattr(g, "upgrading_time", 0),
                 "army": {
                     "infantry": army.infantry if army else 0,
                     "cavalry": army.cavalry if army else 0,
@@ -558,6 +562,9 @@ class AccountSession:
 
         self._nien_thu_ann: Optional[dict] = None
         self._last_roster_err: Optional[str] = None
+        self._general_visits: list[dict] = []
+        self._general_visit_city_id: Optional[int] = None
+        self._general_visit_last_check: float = 0.0
 
         # Auxiliary periodic timer (boost/explore/daily)
         self._aux_stop = threading.Event()
@@ -580,6 +587,7 @@ class AccountSession:
             telegram_enabled=np.telegram_enabled,
             telegram_alert_captcha=np.telegram_alert_captcha,
             telegram_alert_disconnect=np.telegram_alert_disconnect,
+            telegram_alert_general_visit=np.telegram_alert_general_visit,
             telegram_bot_token=np.telegram_bot_token,
             telegram_chat_id=np.telegram_chat_id,
         )
@@ -708,6 +716,7 @@ class AccountSession:
             ("explore", self._check_explore_once),
             ("daily_reward", self._check_daily_reward_once),
             ("tribute", self._check_tribute_once),
+            ("general_visit", self._check_general_visit_once),
             ("training", self._check_training_once),
         )
 
@@ -740,7 +749,9 @@ class AccountSession:
 
     def _check_boost_once(self) -> None:
         cid = self._default_city_id() or 0
-        resp = self.gateway.call("Common.ashx", 77, {"cid": str(cid), "_": ""}) or {}
+        resp = self.gateway.page_building(cid) or {}
+        if not isinstance(resp, dict) or _safe_int(resp.get("ret", -1), -1) != 0:
+            return
         rem = parse_boost_remaining_time(resp, cid)
         self._set_boost_left(rem)
         if rem <= 0 and self.profile.building.auto_boost:
@@ -751,8 +762,9 @@ class AccountSession:
                 act = self.gateway.call("OPT.ashx", 69, {"type": "3", "param1": "0", "param2": "0", "paytype": "2", "_": ""}) or {}
                 if act.get("ret", 0) == 0:
                     self.append_log("building", "✅ Kích hoạt thành công DS kiến trúc!")
-                    resp2 = self.gateway.call("Common.ashx", 77, {"cid": str(cid), "_": ""}) or {}
-                    self._set_boost_left(parse_boost_remaining_time(resp2, cid))
+                    resp2 = self.gateway.page_building(cid) or {}
+                    if isinstance(resp2, dict) and _safe_int(resp2.get("ret", -1), -1) == 0:
+                        self._set_boost_left(parse_boost_remaining_time(resp2, cid))
         self._emit("aux_updated", self.get_aux_status())
 
     def _check_explore_once(self) -> None:
@@ -812,6 +824,13 @@ class AccountSession:
             self.save_profile()
             data = self.profile.to_dict()
         self._emit("profile_updated", data)
+        if "logistics" in patch:
+            self._general_visit_last_check = 0.0
+            if not self.profile.logistics.notify_general_visit:
+                clear_general_visit_alerts(self.account_key)
+                if self._general_visits:
+                    self._general_visits = []
+                    self._emit("aux_updated", self.get_aux_status())
         if "training" in patch:
             self._training_next_check_at = 0.0
         if "building" in patch or "logistics" in patch or "training" in patch:
@@ -886,8 +905,8 @@ class AccountSession:
             "equip_running": self._equip_running,
             "equip_status": self._equip_status,
             "enhance_running": self._enhance_running,
-            "enhance_progress": dict(self._enhance_progress),
             "enhance_resources": dict(self._enhance_resources),
+            "enhance_progress": dict(self._enhance_progress),
             "transfer_running": self._transfer_running,
             "transfer_status": self._transfer_status,
             "army_transfer_running": self._army_xfer_running,
@@ -904,6 +923,7 @@ class AccountSession:
             "training_status": self._training_status,
             "training": self._serialize_training_status(),
             "nien_thu_announcement": self._nien_thu_ann,
+            "general_visits": list(self._general_visits),
             "goidan_caller": self.get_goidan_caller_status(),
         }
 
@@ -1033,8 +1053,8 @@ class AccountSession:
         return data
 
     def fetch_city_buildings(self, city_id: int) -> list[dict]:
-        resp = self.gateway.call("City.ashx", 5, {"tid": str(city_id), "_": ""}) or {}
-        buildings = resp.get("infos") or resp.get("buildings") or resp.get("build", [])
+        resp = self.gateway.building_list(city_id) or {}
+        buildings = resp.get("items") or resp.get("infos") or resp.get("buildings") or resp.get("build", [])
         plans = self._sync_city_buildings_from_raw(city_id, buildings, from_auto_cycle=False)
         return plans
 
@@ -1066,11 +1086,11 @@ class AccountSession:
         elif isinstance(buildings, (list, tuple)):
             for b in buildings:
                 if isinstance(b, dict):
-                    pid = int(b.get("pid", 0))
+                    pid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
                     real_map[pid] = {
-                        "gid": int(b.get("gid", 0)),
-                        "level": int(b.get("level", 0)),
-                        "name": b.get("name", ""),
+                        "gid": int(b.get("m_lgid") if b.get("m_lgid") is not None else b.get("gid", 0)),
+                        "level": int(b.get("m_llevel") if b.get("m_llevel") is not None else b.get("level", 0)),
+                        "name": str(b.get("m_szname") or b.get("name") or ""),
                     }
                 elif isinstance(b, (list, tuple)) and len(b) >= 4:
                     pid = int(b[0])
@@ -1180,14 +1200,17 @@ class AccountSession:
             raise ValueError("Không tìm thấy thành trì để tải kỹ thuật.")
 
         def _find_univ(target_cid: int):
-            self.gateway.call("City.ashx", 50, {"tid": str(target_cid), "_": ""})
-            resp_bld = self.gateway.call("City.ashx", 5, {"tid": str(target_cid), "_": ""}) or {}
-            b_list = resp_bld.get("infos") or resp_bld.get("buildings") or []
+            self.gateway.set_current_city(target_cid)
+            resp_bld = self.gateway.building_list(target_cid) or {}
+            b_list = resp_bld.get("items") or resp_bld.get("infos") or resp_bld.get("buildings") or []
             for b in b_list:
                 if isinstance(b, (list, tuple)) and len(b) >= 2 and int(b[1]) in (6, 59):
                     return int(b[0]), int(b[1])
-                if isinstance(b, dict) and int(b.get("gid", 0)) in (6, 59):
-                    return int(b.get("pid", 0)), int(b.get("gid", 0))
+                if isinstance(b, dict):
+                    bgid = int(b.get("m_lgid") if b.get("m_lgid") is not None else b.get("gid", 0))
+                    if bgid in (6, 59):
+                        bpid = int(b.get("m_lpos") if b.get("m_lpos") is not None else b.get("pid", 0))
+                        return bpid, bgid
             return None, None
 
         univ_pid, univ_gid = _find_univ(cid)
@@ -1395,67 +1418,72 @@ class AccountSession:
         if not res_cids:
             raise ValueError("Vui lòng chọn ít nhất 1 thành hợp lệ để giám sát tài nguyên.")
 
+        self._res_monitor_running = True
         stop_ev = threading.Event()
         self._res_monitor_stop = stop_ev
-        self._res_monitor_running = True
-        self.append_log("building", f"▶️ Bắt đầu giám sát tài nguyên cho {len(res_cids)} thành...")
+        self.append_log("building", f"▶️ Bắt đầu giám sát Tài Nguyên (Chợ / mở rương theo ngưỡng) cho {len(res_cids)} thành...")
         market_cache = CityMarketCache()
         warned_conflicts: set[tuple[int, str]] = set()
 
+        def _parse_gold_th(raw_val: Any) -> int:
+            raw_s = str(raw_val).replace(",", "").strip()
+            if "." in raw_s and all(len(part) == 3 for part in raw_s.split(".")[1:]):
+                raw_s = raw_s.replace(".", "")
+            return max(0, _safe_int(raw_s, 100000000))
+
         def _loop():
-            while self._res_monitor_running and not stop_ev.is_set():
-                r_cfg = self.profile.resource
-                cur_valid_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
-                raw_cids = list(r_cfg.resource_cities) or res_cids
-                cids = [cid for cid in raw_cids if cur_valid_ids is None or cid in cur_valid_ids]
-
-                g_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.gold_box_idx)))
-                tn_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.tn_box_idx)))
-                settings = ResourceMonitorSettings(
-                    gold_threshold=_safe_int(r_cfg.gold_threshold, 100000000),
-                    buy_pcts={
-                        "wood": max(0.0, _safe_float(r_cfg.wood_pct, 70.0)),
-                        "iron": max(0.0, _safe_float(r_cfg.iron_pct, 70.0)),
-                        "stone": max(0.0, _safe_float(r_cfg.stone_pct, 70.0)),
-                        "food": max(0.0, _safe_float(r_cfg.food_pct, 70.0)),
-                    },
-                    gold_box_id=BOX_OPTION_IDS[g_idx],
-                    tn_box_id=BOX_OPTION_IDS[tn_idx],
-                    prefer_market_buy=bool(getattr(r_cfg, "prefer_market_buy", False)),
-                    auto_sell_resource=bool(getattr(r_cfg, "auto_sell_resource", False)),
-                    sell_threshold_pct=parse_sell_threshold_pct(getattr(r_cfg, "sell_threshold_pct", "90")),
-                )
-
-                for cid in cids:
-                    if not self._res_monitor_running or stop_ev.is_set():
+            try:
+                while self._res_monitor_running and not stop_ev.is_set():
+                    r_cfg = self.profile.resource
+                    cur_valid_ids = {b.id for b in self.roster.bases} if self.roster and self.roster.bases else None
+                    raw_cids = list(r_cfg.resource_cities) or res_cids
+                    cids = [cid for cid in raw_cids if cur_valid_ids is None or cid in cur_valid_ids]
+                    g_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.gold_box_idx)))
+                    tn_idx = max(0, min(len(BOX_OPTION_IDS) - 1, int(r_cfg.tn_box_idx)))
+                    settings = ResourceMonitorSettings(
+                        gold_threshold=_parse_gold_th(r_cfg.gold_threshold),
+                        buy_pcts={
+                            "wood": max(0.0, _safe_float(r_cfg.wood_pct, 70.0)),
+                            "iron": max(0.0, _safe_float(r_cfg.iron_pct, 70.0)),
+                            "stone": max(0.0, _safe_float(r_cfg.stone_pct, 70.0)),
+                            "food": max(0.0, _safe_float(r_cfg.food_pct, 70.0)),
+                        },
+                        gold_box_id=BOX_OPTION_IDS[g_idx],
+                        tn_box_id=BOX_OPTION_IDS[tn_idx],
+                        prefer_market_buy=bool(getattr(r_cfg, "prefer_market_buy", False)),
+                        auto_sell_resource=bool(getattr(r_cfg, "auto_sell_resource", False)),
+                        sell_threshold_pct=parse_sell_threshold_pct(getattr(r_cfg, "sell_threshold_pct", "90")),
+                    )
+                    for cid in cids:
+                        if not self._res_monitor_running or stop_ev.is_set():
+                            break
+                        try:
+                            base = self.roster.base_by_id(cid)
+                            cname = base.name if base else f"Thành {cid}"
+                            summary = process_city_resource_cycle(
+                                self.gateway,
+                                cid,
+                                cname,
+                                settings,
+                                market_cache,
+                                notify=lambda msg: self.append_log("building", msg),
+                                warned_conflicts=warned_conflicts,
+                            )
+                            if summary.get("city_missing"):
+                                self._trigger_roster_resync_async(cid)
+                                continue
+                        except CaptchaRequired:
+                            self._handle_captcha("Kiểm tra/giao dịch tài nguyên gặp Captcha (mã 110).")
+                            stop_ev.set()
+                            break
+                        except Exception as exc:
+                            self.append_log("building", f"❌ Lỗi giám sát TN thành {cid}: {exc}")
+                    if stop_ev.wait(30.0):
                         break
-                    try:
-                        base = self.roster.base_by_id(cid)
-                        cname = base.name if base else f"Thành {cid}"
-                        res = process_city_resource_cycle(
-                            self.gateway,
-                            cid,
-                            cname,
-                            settings,
-                            market_cache,
-                            notify=lambda m: self.append_log("building", m),
-                            warned_conflicts=warned_conflicts,
-                        )
-                        if res.get("city_missing"):
-                            self._trigger_roster_resync_async(cid)
-                            continue
-                    except CaptchaRequired:
-                        self._handle_captcha("Giám sát tài nguyên gặp Captcha (mã 110).")
-                        if self._res_monitor_thread is threading.current_thread():
-                            self._res_monitor_running = False
-                        break
-                    except Exception as exc:
-                        self.append_log("building", f"❌ Lỗi giám sát TN thành {cid}: {exc}")
-                if stop_ev.wait(30.0):
-                    break
-            if self._res_monitor_thread is threading.current_thread():
-                self._res_monitor_running = False
-                self._emit("status_changed", self.get_status_snapshot())
+            finally:
+                if self._res_monitor_thread is threading.current_thread():
+                    self._res_monitor_running = False
+                    self._emit("status_changed", self.get_status_snapshot())
 
         self._res_monitor_thread = threading.Thread(target=_loop, daemon=True)
         self._res_monitor_thread.start()
@@ -1610,27 +1638,15 @@ class AccountSession:
         threading.Thread(target=_run, daemon=True).start()
 
     def tribute_city(self, city_id: int, building_gid: int = 1) -> None:
-        cid = int(city_id)
-        gid = int(building_gid)
-        if cid <= 0:
-            raise ValueError("Cống quận chỉ áp dụng cho Thành, không áp dụng cho Doanh trại.")
-        if gid not in (1, 2):
-            raise ValueError("Công trình Cống quận chỉ hỗ trợ Quan Phủ (1) hoặc Tường Thành (2).")
-
         def _worker():
             try:
                 resp = self.gateway.call(
-                    "OPT.ashx", 146, {"tid": str(cid), "gid": str(gid), "_": ""}
+                    "OPT.ashx", 146, {"tid": str(city_id), "gid": str(building_gid), "_": ""}
                 ) or {}
-                ret = resp.get("ret", -1)
-                if ret == 110:
-                    self._handle_captcha("Cống quận tạm dừng do Captcha.")
-                elif ret == 0:
-                    self.append_log("building", f"✅ Đã gửi lệnh Cống quận cho thành {cid}.")
+                if resp.get("ret", -1) == 0:
+                    self.append_log("building", f"✅ Đã gửi lệnh Cống quận cho thành {city_id}.")
                 else:
-                    self.append_log("building", f"⚠️ Cống quận thành {cid} trả về mã lỗi {ret}.")
-            except CaptchaRequired:
-                self._handle_captcha("Cống quận tạm dừng do Captcha.")
+                    self.append_log("building", f"⚠️ Cống quận thành {city_id} trả về mã lỗi {resp.get('ret')}.")
             except Exception as exc:
                 self.append_log("building", f"❌ Lỗi Cống quận: {exc}")
 
@@ -1642,19 +1658,62 @@ class AccountSession:
         today = _game_today_str()
         if not lg.tribute_enabled or self._tribute_last_date == today:
             return
+        self._tribute_last_date = today
         self._ensure_roster_loaded()
-        if not self.roster or not self.roster.cities:
-            return
-        valid = {c.id for c in self.roster.cities}
         city_ids = [
             int(cid) for cid, cfg in self.profile.building.cities.items()
-            if cfg.enabled and int(cid) > 0 and int(cid) in valid
+            if cfg.enabled and int(cid) > 0
         ]
-        if not city_ids:
-            return
+        valid = {c.id for c in self.roster.cities} if self.roster and self.roster.cities else None
         for cid in city_ids:
+            if valid is not None and cid not in valid:
+                continue
             self.tribute_city(cid, lg.tribute_building_gid)
-        self._tribute_last_date = today
+
+    def _check_general_visit_once(self) -> None:
+        """Kiểm tra Danh tướng / Danh sỹ viếng thăm tại 1 Thành chính duy nhất (chu kỳ ~60s)."""
+        if not self.profile.logistics.notify_general_visit:
+            clear_general_visit_alerts(self.account_key)
+            if self._general_visits:
+                self._general_visits = []
+                self._emit("aux_updated", self.get_aux_status())
+            return
+
+        now_mono = time.monotonic()
+        if self._general_visit_last_check > 0.0 and (now_mono - self._general_visit_last_check) < 55.0:
+            return
+        self._general_visit_last_check = now_mono
+
+        self._ensure_roster_loaded()
+        cities = list(self.roster.cities or []) if self.roster else []
+        city = select_general_visit_city(
+            self.gateway,
+            cities,
+            preferred_city_id=self._general_visit_city_id,
+        )
+        if not city:
+            return
+        self._general_visit_city_id = int(city.id)
+
+        try:
+            visits = check_general_visits(self.gateway, city.id, city.name)
+        except CaptchaRequired:
+            self._handle_captcha("Kiểm tra Danh tướng viếng thăm gặp Captcha (mã 110).")
+            return
+
+        serialized = [v.to_dict() for v in visits]
+        changed = serialized != self._general_visits
+        self._general_visits = serialized
+        if changed:
+            self._emit("aux_updated", self.get_aux_status())
+
+        sync_general_visit_alerts(
+            account_key=self.account_key,
+            visits=visits,
+            config=self._notification_config(),
+            on_log=lambda m: self.append_log("building", m),
+            on_web_event=lambda ev: self._emit("notification", ev),
+        )
 
     # -------------------------------------------------------------------------
     # ĐÀO TẠO TƯỚNG (ĐIỂM TƯỚNG ĐÀI & TỤ HIỀN LẦU — LẶP LẠI HÀNG NGÀY)
@@ -1793,15 +1852,12 @@ class AccountSession:
         ]
 
     def start_transfer_loop(self) -> None:
-        """Chạy lặp bảng Chuyển quân giới bằng Chợ; dừng ngay khi Thành nguồn thiếu hàng (ADR-0042)."""
+        """Chạy lặp bảng Chuyển quân giới bằng Chợ; dừng ngay khi thiếu quân giới hoặc lỗi."""
         if self._transfer_running:
             return
         orders = self.transfer_loop_orders()
         if not orders:
             raise ValueError("Chưa có lệnh Chuyển quân giới nào trong bảng.")
-        for order in orders:
-            if order.from_city_id <= 0 or order.to_city_id <= 0 or order.from_city_id == order.to_city_id:
-                raise ValueError("Chuyển quân giới bằng Chợ yêu cầu 2 Thành khác nhau (không hỗ trợ Doanh trại).")
         interval = max(3.0, _safe_float(self.profile.logistics.transfer_interval, 60.0))
         self._transfer_running = True
         self._transfer_stop.clear()
@@ -1817,22 +1873,21 @@ class AccountSession:
             stopped_reason: Optional[str] = None
             try:
                 while not self._transfer_stop.is_set():
-                    cur_orders = self.transfer_loop_orders()
-                    if not cur_orders:
-                        self.append_log("logistics", "⏹️ Không còn lệnh Chuyển quân giới — dừng vòng lặp.")
-                        stopped_reason = "Đã dừng: không có lệnh"
-                        return
-                    for order in cur_orders:
+                    for order in self.transfer_loop_orders():
                         if self._transfer_stop.is_set():
                             break
-                        garrison = task.get_garrison_troops(order.from_city_id)
-                        available = garrison.get(order.army_id, 0)
+                        if order.from_city_id <= 0 or order.to_city_id <= 0 or order.from_city_id == order.to_city_id:
+                            self.append_log("logistics", "⏹️ Lệnh Chuyển quân giới không hợp lệ (cần 2 Thành khác nhau) — dừng.")
+                            stopped_reason = "Đã dừng: lệnh không hợp lệ"
+                            return
+                        stock = task.get_garrison_troops(order.from_city_id)
+                        available = stock.get(order.army_id, 0)
+                        wname = get_transfer_weapon_name(order.army_id)
                         if available < order.amount:
-                            wname = get_transfer_weapon_name(order.army_id)
                             self.append_log(
                                 "logistics",
-                                f"⏹️ Thành {order.from_city_id} thiếu {wname} (ID {order.army_id}) "
-                                f"({available:,}/{order.amount:,}) — dừng vòng lặp Chuyển quân giới.",
+                                f"⏹️ Thành {order.from_city_id} thiếu {wname} (ID {order.army_id}: "
+                                f"{available:,}/{order.amount:,}) — dừng vòng lặp Chuyển quân giới.",
                             )
                             stopped_reason = "Đã dừng: thiếu quân giới"
                             return
@@ -1861,45 +1916,36 @@ class AccountSession:
     def stop_transfer_loop(self) -> None:
         self._transfer_running = False
         self._transfer_stop.set()
-        self._army_xfer_running = False
-        self._army_xfer_stop.set()
         self._transfer_status = "Đã dừng"
         self._emit("aux_updated", self.get_aux_status())
         self._emit("status_changed", self.get_status_snapshot())
 
     def start_army_transfer(
         self,
-        from_city_id: Optional[int] = None,
-        to_city_id: Optional[int] = None,
-        weapon_id: Optional[int] = None,
-        general_ids: Optional[list[int]] = None,
+        from_city_id: int,
+        to_city_id: int,
+        weapon_id: int,
+        general_ids: list[int],
         *,
-        loop: Optional[bool] = None,
+        loop: bool = True,
     ) -> None:
         """Chạy Chuyển quân giới bằng Quân đội (điều phái Võ tướng qua lại giữa 2 Thành)."""
         if self._army_xfer_running:
             raise RuntimeError("Tiến trình Chuyển quân giới bằng Quân đội đang chạy.")
-        lg = self.profile.logistics
-        src_cid = int(lg.army_transfer_from_city_id if from_city_id is None else from_city_id)
-        dst_cid = int(lg.army_transfer_to_city_id if to_city_id is None else to_city_id)
-        wid = int(lg.army_transfer_weapon_id if weapon_id is None else weapon_id)
-        raw_gids = lg.army_transfer_general_ids if general_ids is None else general_ids
-        run_loop = bool(lg.army_transfer_loop if loop is None else loop)
-
-        if src_cid <= 0 or dst_cid <= 0:
+        if int(from_city_id) <= 0 or int(to_city_id) <= 0:
             raise ValueError("Chuyển quân giới bằng Quân đội chỉ hỗ trợ giữa các Thành.")
-        if src_cid == dst_cid:
+        if int(from_city_id) == int(to_city_id):
             raise ValueError("Thành chứa Quân giới và Thành nhận phải khác nhau.")
-        clean_gids = [int(g) for g in raw_gids if int(g) > 0]
+        clean_gids = [int(g) for g in general_ids if int(g) > 0]
         if not clean_gids:
             raise ValueError("Vui lòng chọn ít nhất 1 Võ tướng.")
-        if wid <= 0:
+        if int(weapon_id) <= 0:
             raise ValueError("Vui lòng chọn Quân giới hợp lệ.")
 
         self._ensure_roster_loaded()
         self._army_xfer_running = True
         self._army_xfer_stop.clear()
-        wname = get_transfer_weapon_name(wid)
+        wname = get_transfer_weapon_name(int(weapon_id))
         self._army_xfer_status = f"Đang chạy ({wname}, {len(clean_gids)} tướng)"
 
         def _set_status(msg: str) -> None:
@@ -1911,12 +1957,12 @@ class AccountSession:
             final_status = "Đã dừng"
             try:
                 res = task.run(
-                    from_city_id=src_cid,
-                    to_city_id=dst_cid,
-                    weapon_id=wid,
+                    from_city_id=int(from_city_id),
+                    to_city_id=int(to_city_id),
+                    weapon_id=int(weapon_id),
                     general_ids=clean_gids,
                     roster=self.roster,
-                    loop=run_loop,
+                    loop=bool(loop),
                     stop_event=self._army_xfer_stop,
                     status_cb=_set_status,
                 )
@@ -1951,7 +1997,6 @@ class AccountSession:
         self._army_xfer_status = "Đã dừng"
         self._emit("aux_updated", self.get_aux_status())
         self._emit("status_changed", self.get_status_snapshot())
-
     # -------------------------------------------------------------------------
     # DI TRẠI ĐỘC LẬP
     # -------------------------------------------------------------------------
@@ -2031,7 +2076,7 @@ class AccountSession:
         combo_val = combo_opts[idx] if 0 <= idx < len(combo_opts) else combo_opts[0]
         action_mode, fixed_id = parse_attack_action_combo(combo_val)
 
-        stratagem_ids = [0, 93, 95, 94]  # khớp Desktop (ADR-0042)
+        stratagem_ids = [0, 93, 95, 94]  # khớp Desktop (ADR-0043)
         s_idx = int(cb.stratagem_combo_idx or 0)
         s_id = stratagem_ids[s_idx] if 0 <= s_idx < len(stratagem_ids) else 0
 
@@ -2522,17 +2567,11 @@ class AccountSession:
                 prov = ArmyProvisioner(self.gateway, sleep_fn=time.sleep)
                 for gid in gd.generals:
                     prov.heal_general(cid, gid)
-                fresh = fetch_roster(self.gateway, only_base_ids=[cid])
-                city_gens = {g.id: g for g in fresh.generals_of(cid) if g.role == "vo"}
                 if auto_swap_tac:
-                    auto_swap_low_stamina_tacticians(
-                        gateway=self.gateway,
-                        roster=fresh,
-                        base_id=cid,
-                        general_ids=list(gd.generals),
-                        min_stamina_pct=min_tac_stam,
-                        on_log=lambda m: self.append_log("goidan", m),
-                    )
+                    fresh = fetch_roster(self.gateway, only_base_ids=[cid], include_civil=True, include_cities=False)
+                else:
+                    fresh = fetch_roster(self.gateway, only_base_ids=[cid])
+                city_gens = {g.id: g for g in fresh.generals_of(cid) if g.role == "vo"}
                 current_armies = {gid: fresh.army_of(gid) for gid in gd.generals}
                 troops_balanced = False
                 if even_troops:
@@ -2573,6 +2612,15 @@ class AccountSession:
                         )
                         if any(succ and diff > 0 for _, diff, succ, _ in (res or [])):
                             troops_added = True
+                if auto_swap_tac:
+                    auto_swap_low_stamina_tacticians(
+                        self.gateway,
+                        roster=fresh,
+                        base_id=cid,
+                        general_ids=list(gd.generals),
+                        min_stamina_pct=min_tac_stam,
+                        on_log=lambda m: self.append_log("goidan", m),
+                    )
                 if gd.auto_morale:
                     MoraleTrainer(self.gateway).adjust_squad_morale(
                         base_id=cid, general_ids=list(gd.generals), target_morale=min_morale,
@@ -2659,11 +2707,11 @@ class AccountSession:
                     auto_recruit=cfg.auto_recruit,
                     auto_morale=cfg.auto_morale,
                     min_morale=max(0, min(100, _safe_int(cfg.min_morale, 95))),
+                    auto_swap_tactician=bool(getattr(cfg, "auto_swap_tactician", False)),
+                    min_tactician_stamina=parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30")),
                     peers=[p for p in all_peers if p.base_id != b.id],
                     non_blocking_relocate=True,
                     base_name=b.name,
-                    auto_swap_tactician=bool(getattr(cfg, "auto_swap_tactician", False)),
-                    min_tactician_stamina=parse_stamina_threshold(getattr(cfg, "min_tactician_stamina", "30")),
                     even_troops=bool(getattr(cfg, "even_troops", False)),
                 )
             )
@@ -2741,15 +2789,6 @@ class AccountSession:
                         prov.heal_general(b.id, gid)
                     fresh = fetch_roster(self.gateway, only_base_ids=[b.id], include_civil=auto_swap_tac, include_cities=False)
                     gens = {g.id: g for g in fresh.generals_of(b.id) if g.role == "vo"}
-                    if auto_swap_tac:
-                        auto_swap_low_stamina_tacticians(
-                            gateway=self.gateway,
-                            roster=fresh,
-                            base_id=b.id,
-                            general_ids=list(cfg.generals),
-                            min_stamina_pct=min_tac_stam,
-                            on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
-                        )
                     current_armies = {gid: fresh.army_of(gid) for gid in cfg.generals}
                     troops_balanced = False
                     if even_troops:
@@ -2761,6 +2800,7 @@ class AccountSession:
                             on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                         )
                     troops_added = False
+                    moved_to_parent = False
                     comfort_attempted: set[int] = set()
                     exhausted_cities: set[int] = set()
                     if target_army.total > 0:
@@ -2792,15 +2832,27 @@ class AccountSession:
                                 min_morale=min_morale,
                                 on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                             )
+                            moved_to_parent = True
+                    if auto_swap_tac:
+                        if moved_to_parent:
+                            fresh = fetch_roster(self.gateway, only_base_ids=[b.id], include_civil=True, include_cities=False)
+                        auto_swap_low_stamina_tacticians(
+                            self.gateway,
+                            roster=fresh,
+                            base_id=b.id,
+                            general_ids=list(cfg.generals),
+                            min_stamina_pct=min_tac_stam,
+                            on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
+                        )
                     if cfg.auto_morale:
+                        gens = {g.id: g for g in fresh.generals_of(b.id) if g.role == "vo"}
                         MoraleTrainer(self.gateway).adjust_squad_morale(
                             base_id=b.id, general_ids=list(cfg.generals), target_morale=min_morale,
                             base_gens=gens, on_notify=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                             refresh_from_server=troops_added or troops_balanced,
                         )
                 except CaptchaRequired:
-                    self._handle_captcha(f"Đổi Mưu sĩ Bình Man [{b.name}] gặp Captcha (mã 110).")
-                    break
+                    self._handle_captcha(f"[{b.name}] Đổi Mưu sĩ Bình Man gặp Captcha (mã 110).")
                 except Exception as exc:
                     self.append_log("binhman", f"❌ [{b.name}] Lỗi biên chế: {exc}")
             self.append_log("binhman", "🏁 Hoàn tất biên chế Bình Man!")
@@ -3150,7 +3202,7 @@ class AccountSession:
         self._equip_stop.set()
 
     # -------------------------------------------------------------------------
-    # CƯỜNG HÓA TRANG BỊ & HỦY TRANG BỊ (ADR-0043)
+    # CƯỜNG HÓA TRANG BỊ & HỦY TRANG BỊ (ADR-0045)
     # -------------------------------------------------------------------------
     def fetch_enhance_resources(self) -> dict:
         try:
@@ -3336,7 +3388,7 @@ class AccountSession:
         self.append_log("enhance", "⏹️ Đã gửi yêu cầu dừng tác vụ Cường Hóa / Hủy Trang Bị.")
 
     # -------------------------------------------------------------------------
-    # ĐỒNG BỘ QUÂN GIỚI VÕ TƯỚNG (ADR-0041 / ADR-0042)
+    # ĐỒNG BỘ QUÂN GIỚI VÕ TƯỚNG (ADR-0039 / ADR-0043)
     # -------------------------------------------------------------------------
     def fetch_all_armaments(self) -> dict:
         self._ensure_roster_loaded()
@@ -3350,36 +3402,29 @@ class AccountSession:
                 snap = fetch_armament(self.gateway, gen.id, base.id)
                 if snap is not None:
                     out[str(gen.id)] = {
-                        "infantry": list(snap.infantry),
-                        "cavalry": list(snap.cavalry),
-                        "bowman": list(snap.bowman),
-                        "mangonel": snap.mangonel,
+                        "description": describe_armament(snap),
                         "battle_array": snap.battle_array,
-                        "formation_name": FORMATION_NAMES.get(snap.battle_array, str(snap.battle_array)),
                         "labels": {s: snap.label(s) for s in ARM_ALL_SCOPES},
-                        "summary": describe_armament(snap),
+                        "eids": {s: list(snap.eids(s)) for s in ARM_ALL_SCOPES},
                     }
         return out
 
     def armament_template_info(self, general_id: int) -> dict:
         self._ensure_roster_loaded()
-        loc = find_general_base(self.roster, int(general_id))
-        if loc is None:
+        located = find_general_base(self.roster, int(general_id))
+        if located is None:
             raise ValueError("Không tìm thấy Võ tướng mẫu.")
-        base_id, gen = loc
+        base_id, gen = located
         snap = fetch_armament(self.gateway, gen.id, base_id)
         if snap is None:
             raise RuntimeError(f"Không đọc được cấu hình quân giới của {gen.name}.")
         return {
             "general_id": gen.id,
-            "general_name": gen.name,
+            "name": gen.name,
+            "description": describe_armament(snap),
             "battle_array": snap.battle_array,
-            "formation_name": FORMATION_NAMES.get(snap.battle_array, str(snap.battle_array)),
-            "scopes": {
-                s: {"name": ARM_SCOPE_NAMES[s], "eids": list(snap.eids(s)), "label": snap.label(s)}
-                for s in ARM_ALL_SCOPES
-            },
-            "summary": describe_armament(snap),
+            "scopes": {s: {"label": snap.label(s), "eids": list(snap.eids(s))} for s in ARM_ALL_SCOPES},
+            "scope_names": dict(ARM_SCOPE_NAMES),
         }
 
     def armament_compare(
@@ -3449,7 +3494,7 @@ class AccountSession:
         self._arm_stop.set()
 
     # -------------------------------------------------------------------------
-    # ĐỔI TÊN VĂN QUAN & VÕ TƯỚNG (ADR-0042)
+    # ĐỔI TÊN VĂN QUAN & VÕ TƯỚNG (ADR-0043)
     # -------------------------------------------------------------------------
     def preview_rename(self, general_ids: list[int], prefix: str, numbered: bool = True, start_index: int = 1) -> dict:
         self._ensure_roster_loaded()
@@ -3585,7 +3630,6 @@ class AccountSession:
 
     def stop_add_points(self) -> None:
         self._add_pts_stop.set()
-
     # -------------------------------------------------------------------------
     # CAPTCHA / PROXY / RELOGIN / AUTO-RESUME / SHUTDOWN
     # -------------------------------------------------------------------------
@@ -3648,7 +3692,6 @@ class AccountSession:
             "resource_monitor": self.start_resource_monitor,
             "crafting": self.start_crafting,
             "transfer_loop": self.start_transfer_loop,
-            "army_transfer": self.start_army_transfer,
         }
         for name in task_names:
             fn = actions.get(name)
@@ -3688,6 +3731,7 @@ class AccountSession:
         self._destroyed = True
         self._aux_stop.set()
         self._aux_wakeup.set()
+        clear_general_visit_alerts(self.account_key)
         try:
             self.save_profile()
         except Exception:
@@ -4089,12 +4133,12 @@ class WorkspaceManager:
 
     def start_all_accounts(self) -> int:
         count = 0
-        batch_tasks = [t for t in RESUMABLE_TASKS if t not in ("resource_monitor", "transfer_loop")]
         with self._lock:
             sessions = list(self.sessions.values())
+        tasks_to_start = [t for t in RESUMABLE_TASKS if t not in ("resource_monitor", "transfer_loop")]
         for sess in sessions:
             try:
-                started = sess.resume_tasks(batch_tasks)
+                started = sess.resume_tasks(tasks_to_start)
                 if started:
                     count += 1
             except Exception:

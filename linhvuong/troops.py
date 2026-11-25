@@ -266,8 +266,8 @@ class ArmyProvisioner:
         self._waiting_population: dict[int, bool] = {}
 
     def check_recruits(self, city_id: int) -> Optional[int]:
-        """Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API Common.ashx?id=27."""
-        resp = self.gateway.call("Common.ashx", 27, {"_": ""}) or {}
+        """Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API /api/city/pagearmament."""
+        resp = self.gateway.page_armament() or {}
         if resp.get("ret") == 0:
             for city_data in resp.get("list", []):
                 if isinstance(city_data, list) and len(city_data) > 2:
@@ -279,8 +279,8 @@ class ArmyProvisioner:
         return None
 
     def check_idle_population(self, city_id: int) -> Optional[int]:
-        """Đọc số dân nhàn rỗi hiện có của Thành từ API City.ashx?id=6."""
-        resp = self.gateway.call("City.ashx", 6, {"tid": str(int(city_id)), "_": ""}) or {}
+        """Đọc số dân nhàn rỗi hiện có của Thành từ API /api/city/info (fallback population[4])."""
+        resp = self.gateway.city_info(int(city_id)) or {}
         if not isinstance(resp, dict):
             return None
         ret = resp.get("ret", 0)

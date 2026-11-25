@@ -27,11 +27,35 @@ class FakeServer:
     def __init__(self, responses=None):
         self.responses = responses or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
+
+    def _lookup(self, key):
+        aliases = {
+            "/api/city/list": "Common.ashx?id=29",
+            "/api/city/pageofficial": "Common.ashx?id=32",
+            "/api/city/pagemytroopslist": "Common.ashx?id=76",
+            "/api/city/pagearmament": "Common.ashx?id=27",
+            "/api/city/current": "City.ashx?id=50",
+        }
+        if key in self.responses:
+            return key, self.responses[key]
+        alias = aliases.get(key)
+        if alias and alias in self.responses:
+            return alias, self.responses[alias]
+        return key, {"ret": 0}
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        self.calls.append((path, dict(params or {})))
+        _, payload = self._lookup(path)
+        if isinstance(payload, list):
+            return Resp(payload.pop(0) if payload else {"ret": 0})
+        return Resp(payload)
 
     def post(self, url, data=None, headers=None, timeout=None):
-        endpoint = url.split("/GateWay/")[1]
-        self.calls.append((endpoint, dict(data)))
-        payload = self.responses.get(endpoint, {"ret": 0})
+        endpoint = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        self.calls.append((endpoint, dict(data or {})))
+        _, payload = self._lookup(endpoint)
         if isinstance(payload, list):
             return Resp(payload.pop(0) if payload else {"ret": 0})
         return Resp(payload)
@@ -197,7 +221,7 @@ def test_check_recruits_from_common_ashx_27():
     count = executor.check_recruits(city_id=15230)
     assert count == 250
 
-    calls = [c for c in server.calls if c[0] == "Common.ashx?id=27"]
+    calls = [c for c in server.calls if c[0] == "/api/city/pagearmament"]
     assert len(calls) == 1
 
     # Không tìm thấy thành
@@ -994,35 +1018,49 @@ def test_thao_phat_reduced_server_requests():
 
     assert runner.completed_cycles == 1
     endpoints = [c[0] for c in server.calls]
-    assert "Common.ashx?id=29" not in endpoints
-    assert "City.ashx?id=7" not in endpoints
-    # Không gọi Common.ashx?id=32 type=1
-    c32_types = [d.get("type") for ep, d in server.calls if ep == "Common.ashx?id=32"]
+    assert "/api/city/list" not in endpoints
+    # Không gọi pageofficial heroType=1
+    c32_types = [str(d.get("heroType")) for ep, d in server.calls if ep == "/api/city/pageofficial"]
     assert "1" not in c32_types
-    # Chỉ gọi API 76 đúng 1 lần trong Bước 1 (Bước 2, 3, Kiểm tra lại, Bước 5 đều không gọi lại)
-    assert endpoints.count("Common.ashx?id=76") == 1
+    # Chỉ gọi pagemytroopslist đúng 1 lần trong Bước 1
+    assert endpoints.count("/api/city/pagemytroopslist") == 1
 
 
 def test_thao_phat_partial_provision_trains_morale_before_waiting():
-    """Khi biên chế từng phần vì thiếu dân, Thảo Phạt phải luyện sĩ khí phần quân vừa biên chế rồi mới chờ 30s (không xuất quân sớm)."""
     state = {"recruits": 0, "idle_pop": 300, "infantry": 0, "morale": 85}
 
-    class PartialTPServer:
+    class PartialTPS58Server:
+        cookies = {"uid": "1"}
+
         def __init__(self):
             self.calls = []
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            ep = "/" + url.split("://", 1)[1].split("/", 1)[1]
+            self.calls.append((ep, dict(params or {})))
+            if ep == "/api/city/pageofficial":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "G", "", 2, 0, 0, 4, 100, 240, 240]]]]}}
+            elif ep == "/api/city/pagemytroopslist":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", [[417506, "G", 0, "", 0, state["infantry"], 0, 0, 0, state["morale"], 0, 0]]]]}}
+            elif ep == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}}
+            elif ep == "/api/city/info":
+                resp = {"ret": 0, "data": {"m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
 
         def post(self, url, data=None, headers=None, timeout=None):
             ep = url.split("/GateWay/")[1]
             self.calls.append((ep, dict(data or {})))
-            if ep == "Common.ashx?id=32":
-                resp = {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "G", "", 2, 0, 0, 4, 100, 240, 240]]]]}
-            elif ep == "Common.ashx?id=76":
-                resp = {"ret": 0, "list": [[15230, "NB", [[417506, "G", 0, "", 0, state["infantry"], 0, 0, 0, state["morale"], 0, 0]]]]}
-            elif ep == "Common.ashx?id=27":
-                resp = {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}
-            elif ep == "City.ashx?id=6":
-                resp = {"ret": 0, "population": [5000, 5000, 1000, 0, state["idle_pop"]]}
-            elif ep == "OPT.ashx?id=4":
+            if ep == "OPT.ashx?id=4":
                 resp = {"ret": 55}
             elif ep == "OPT.ashx?id=41":
                 amt = int(data["lAmount"])
@@ -1056,8 +1094,8 @@ def test_thao_phat_partial_provision_trains_morale_before_waiting():
 
             return R()
 
-    srv = PartialTPServer()
-    client = GatewayClient(57, srv, sleep=lambda s: None)
+    srv = PartialTPS58Server()
+    client = GatewayClient(58, srv, sleep=lambda s: None)
     stop_event = threading.Event()
     logs = []
     runner = ThaoPhatAutoRunner(

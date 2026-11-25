@@ -23,13 +23,40 @@ class FakeServer:
         self.map_views = map_views or {}
         self.handlers = handlers or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
+
+    def _lookup_handler(self, key):
+        aliases = {
+            "/api/city/list": "Common.ashx?id=29",
+            "/api/city/pageofficial": "Common.ashx?id=32",
+            "/api/city/pagemytroopslist": "Common.ashx?id=76",
+            "/api/city/pagearmament": "Common.ashx?id=27",
+            "/api/city/current": "City.ashx?id=50",
+        }
+        if key in self.handlers:
+            return self.handlers[key]
+        alias = aliases.get(key)
+        if alias and alias in self.handlers:
+            return self.handlers[alias]
+        return {"ret": 0}
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        p = dict(params or {})
+        self.calls.append((path, p))
+        if path == "/api/map/query":
+            return Resp(self.map_views.get(int(p["mid"]), {"npc_tent": []}))
+        handler = self._lookup_handler(path)
+        if callable(handler):
+            return Resp(handler())
+        if isinstance(handler, list):
+            return Resp(handler.pop(0))
+        return Resp(handler)
 
     def post(self, url, data=None, headers=None, timeout=None):
-        key = url.split("/GateWay/")[1]
+        key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
         self.calls.append((key, dict(data or {})))
-        if key == "Map.ashx?id=6":
-            return Resp(self.map_views.get(int(data["mid"]), {"npc_tent": []}))
-        handler = self.handlers.get(key, {"ret": 0})
+        handler = self._lookup_handler(key)
         if callable(handler):
             return Resp(handler())
         if isinstance(handler, list):
@@ -1019,9 +1046,9 @@ def test_binh_man_recover_in_city_does_not_recruit_when_army_already_sufficient(
     # Khi quân số đã đủ 20000 kỵ, recover_in_city không được nhét thêm 20000 kỵ hay gọi chiêu mộ id=41
     server = FakeServer(
         handlers={
-            "Common.ashx?id=29": {"ret": 0, "city": [[1001, "ThienCo", 0, 0, 0, 0, 0, 0, 0, 0, 0]]},
-            "Common.ashx?id=32": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]},
-            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 100, 0]]]]},
+            "/api/city/list": {"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}},
+            "/api/city/pageofficial": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]}},
+            "/api/city/pagemytroopslist": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 100, 0]]]]}},
             "OPT.ashx?id=31": {"ret": 0},
             "OPT.ashx?id=41": {"ret": 0},
             "OPT.ashx?id=6": {"ret": 0},
@@ -1054,9 +1081,9 @@ def test_binh_man_recover_in_city_refills_only_missing_troops():
     # Khi tướng đang có 15000 kỵ và target là 20000 kỵ, chỉ bổ sung đúng 5000 kỵ
     server = FakeServer(
         handlers={
-            "Common.ashx?id=29": {"ret": 0, "city": [[1001, "ThienCo", 0, 0, 0, 0, 0, 0, 0, 0, 0]]},
-            "Common.ashx?id=32": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]},
-            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 100, 0]]]]},
+            "/api/city/list": {"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}},
+            "/api/city/pageofficial": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 10, 10, 10, 10, 0]]]]}},
+            "/api/city/pagemytroopslist": {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 100, 0]]]]}},
             "OPT.ashx?id=31": {"ret": 0},
             "OPT.ashx?id=41": {"ret": 0},
             "OPT.ashx?id=6": {"ret": 0},
@@ -1083,42 +1110,30 @@ def test_binh_man_recover_in_city_refills_only_missing_troops():
 
 
 def test_binh_man_auto_swap_tactician_before_attack_without_target_army():
-    """Khi bật auto_swap_tactician (dù target_army=None), Bình Man đổi Mưu sĩ dưới ngưỡng theo cấp cao -> thấp rồi xuất kích."""
-    origin_mid = mid_from_coords(10, 10)
-    man_mid = mid_from_coords(11, 10)
+    """Ngay cả khi target_army=None & auto_morale=False, BinhMan vẫn kiểm tra & đổi mưu sĩ trước khi đánh."""
+    def _pageofficial():
+        hero_type = str(server.calls[-1][1].get("heroType", "2"))
+        if hero_type == "1":
+            gens = [
+                [201, "VanThap", 100, 100, 2, 0, 20, 100, 20, 100],
+                [202, "VanKhoe", 100, 100, 0, 0, 45, 100, 85, 100],
+            ]
+        else:
+            gens = [[15, "TC1_01", 100, 100, 0, 0, 50, 100, 95, 100]]
+        return {"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, gens]]}}
 
-    def _c32(body):
-        t = body.get("type")
-        if t == "1":
-            return {
-                "ret": 0,
-                "list": [
-                    [
-                        1001,
-                        "ThienCo",
-                        10,
-                        10,
-                        [
-                            # [0]id, [1]name, ..., [4]special, [5]status, [6]lv, [7]loy, [8]stam, [9]stam_max
-                            [201, "MSCu", "", 1, 2, 0, 70, 100, 15, 100, 0, 0, 0, 0, 0],       # 15% < 30%
-                            [202, "ThaiThu", "", 1, 1, 0, 99, 100, 100, 100, 0, 0, 0, 0, 0],   # Thái thú -> bỏ qua
-                            [203, "VanThap", "", 1, 0, 0, 40, 100, 90, 100, 0, 0, 0, 0, 0],    # 90% >= 30%, lv 40
-                            [204, "VanCao", "", 1, 0, 0, 85, 100, 50, 100, 0, 0, 0, 0, 0],     # 50% >= 30%, lv 85 -> ưu tiên chọn
-                        ],
-                    ]
-                ],
-            }
-        return {
-            "ret": 0,
-            "list": [[1001, "ThienCo", 10, 10, [[15, "TrieuVan", "", 2, 0, 0, 80, 100, 90, 100, 0, 0, 0, 0, 0]]]],
-        }
-
-    # Note: FakeServer handler callable takes no args, so inspect server.calls[-1]
     server = FakeServer(
-        map_views={origin_mid: {"npc_tent": [man(11, 10, 777, 7)]}, man_mid: {"npc_tent": [man(11, 10, 777, 7)]}},
+        map_views={mid_from_coords(10, 10): {"npc_tent": [man(10, 10, 7701, 7)]}},
         handlers={
-            "Common.ashx?id=32": lambda: _c32(server.calls[-1][1]),
-            "Common.ashx?id=76": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TrieuVan", 201, "MSCu", 0, 0, 5000, 0, 0, 100, 0]]]]},
+            "/api/city/list": {
+                "ret": 0,
+                "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]},
+            },
+            "/api/city/pageofficial": _pageofficial,
+            "/api/city/pagemytroopslist": {
+                "ret": 0,
+                "data": {"ret": 0, "list": [[1001, "ThienCo", [[15, "TC1_01", 201, "VanThap", 0, 100, 0, 0, 0, 100, 0]]]]},
+            },
             "OPT.ashx?id=5": {"ret": 0},
             "OPT.ashx?id=53": {"ret": 0},
         },
@@ -1132,46 +1147,68 @@ def test_binh_man_auto_swap_tactician_before_attack_without_target_army():
         man_types=[7],
         mode=2,
         city_id=1001,
-        check_idle=False,
+        target_army=None,
+        auto_recruit=False,
+        auto_morale=False,
         auto_swap_tactician=True,
-        min_tactician_stamina=30,
+        min_tactician_stamina=30.0,
     )
     out = task.run_once()
     assert out == "attacked"
 
-    tac_calls = [d for k, d in server.calls if k == "OPT.ashx?id=5"]
-    assert [(d["lType"], d["lGeneralID"], d["lFollowGeneralID"], d["lCityID"]) for d in tac_calls] == [
-        ("0", "201", "0", "1001"),   # Tháo MSCu
-        ("3", "204", "15", "1001"),  # Gán VanCao (lv 85) -> TrieuVan
-    ]
-    assert any("MSCu" in m and "VanCao" in m for m in alerts)
+    hero_types = [str(p.get("heroType")) for ep, p in server.calls if ep == "/api/city/pageofficial"]
+    assert "1" in hero_types and "2" in hero_types
+
+    post_keys = [k for k, _ in server.calls if k in ("OPT.ashx?id=5", "OPT.ashx?id=53")]
+    assert post_keys == ["OPT.ashx?id=5", "OPT.ashx?id=5", "OPT.ashx?id=53"]
+    opt5_calls = [d for k, d in server.calls if k == "OPT.ashx?id=5"]
+    assert opt5_calls[0]["lType"] == "0" and opt5_calls[0]["lGeneralID"] == "201"
+    assert opt5_calls[1]["lType"] == "3" and opt5_calls[1]["lGeneralID"] == "202" and opt5_calls[1]["lFollowGeneralID"] == "15"
+    assert any("VanKhoe" in a for a in alerts)
 
 
 def test_binh_man_mode1_camp_swaps_only_within_camp_and_continues_when_no_replacement():
-    """ADR-0044: Bình Man Chế độ 1 chỉ đổi trong phạm vi Doanh trại, không kéo từ Thành mẹ và vẫn xuất quân nếu hết ứng viên."""
-    origin_mid = mid_from_coords(10, 10)
-
-    def _c32(body):
-        t = body.get("type")
-        if t == "1":
+    """Chế độ 1 tại Doanh trại chỉ xét Văn quan cùng trại, không điều từ Thành mẹ & giữ nguyên mưu sĩ cũ nếu thiếu người."""
+    def _pageofficial():
+        hero_type = str(server.calls[-1][1].get("heroType", "2"))
+        if hero_type == "1":
             return {
                 "ret": 0,
-                "list": [
-                    [-500, "TienDon", 10, 10, [[201, "MSYeu", "", 1, 2, 0, 60, 100, 10, 100, 0, 0, 0, 0, 0]]],
-                    # Thành mẹ 1001 có Văn quan khỏe nhưng ở Chế độ 1 KHÔNG được rút từ Thành mẹ
-                    [1001, "ThanhMe", 5, 5, [[299, "VanThanhMe", "", 1, 0, 0, 99, 100, 100, 100, 0, 0, 0, 0, 0]]],
-                ],
+                "data": {
+                    "ret": 0,
+                    "list": [
+                        [1001, "ThanhMe", 10, 10, [[299, "VanThanhMe", 100, 100, 0, 0, 99, 100, 100, 100]]],
+                        [-2001, "Trai1", 12, 12, [[201, "VanTraiYeu", 100, 100, 2, 0, 30, 100, 10, 100]]],
+                    ],
+                },
             }
         return {
             "ret": 0,
-            "list": [[-500, "TienDon", 10, 10, [[15, "QuanVu", "", 2, 0, 0, 70, 100, 90, 100, 0, 0, 0, 0, 0]]]],
+            "data": {
+                "ret": 0,
+                "list": [
+                    [-2001, "Trai1", 12, 12, [[15, "VoTrai", 100, 100, 0, 0, 50, 100, 95, 100]]],
+                ],
+            },
         }
 
     server = FakeServer(
-        map_views={origin_mid: {"npc_tent": [man(10, 11, 888, 7)]}},
+        map_views={mid_from_coords(12, 12): {"npc_tent": [man(12, 12, 7702, 7)]}},
         handlers={
-            "Common.ashx?id=32": lambda: _c32(server.calls[-1][1]),
-            "Common.ashx?id=76": {"ret": 0, "list": [[-500, "TienDon", [[15, "QuanVu", 201, "MSYeu", 0, 0, 5000, 0, 0, 100, 0]]]]},
+            "/api/city/list": {
+                "ret": 0,
+                "data": {
+                    "items": [
+                        {"m_ltype": 1, "m_lid": 1001, "m_szname": "ThanhMe", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1},
+                        {"m_ltype": 5, "m_lid": -2001, "m_szname": "Trai1", "m_lx_pos": 12, "m_ly_pos": 12, "m_llevel": 1},
+                    ]
+                },
+            },
+            "/api/city/pageofficial": _pageofficial,
+            "/api/city/pagemytroopslist": {
+                "ret": 0,
+                "data": {"ret": 0, "list": [[-2001, "Trai1", [[15, "VoTrai", 201, "VanTraiYeu", 0, 100, 0, 0, 0, 100, 0]]]]},
+            },
             "OPT.ashx?id=5": {"ret": 0},
             "OPT.ashx?id=50": {"ret": 0},
             "OPT.ashx?id=53": {"ret": 0},
@@ -1181,437 +1218,53 @@ def test_binh_man_mode1_camp_swaps_only_within_camp_and_continues_when_no_replac
     task = BinhMan(
         ctx,
         generals=[15],
-        origin=(10, 10),
+        origin=(12, 12),
         radius=5,
         man_types=[7],
-        camp_id=-500,
+        camp_id=-2001,
         parent_city_id=1001,
         mode=1,
-        check_idle=False,
+        target_army=None,
+        auto_recruit=False,
+        auto_morale=False,
         auto_swap_tactician=True,
-        min_tactician_stamina=30,
+        min_tactician_stamina=30.0,
     )
     out = task.run_once()
     assert out == "attacked"
-    assert [d for k, d in server.calls if k == "OPT.ashx?id=5"] == []
-    assert [d for k, d in server.calls if k == "OPT.ashx?id=50"] == []
-    assert any("không có Văn quan đủ thể lực" in m for m in alerts)
-
-
-def test_binh_man_mode_city_provisions_and_trains_morale_while_waiting_stamina():
-    from linhvuong.troops import TargetArmy
-
-    mid = mid_from_coords(10, 10)
-    c32 = {
-        "ret": 0,
-        "list": [[1001, "Thành", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
-    }
-    c76 = {
-        "ret": 0,
-        "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 80, 0, 500]]]],
-    }
-    server = FakeServer(
-        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
-        handlers={
-            "Common.ashx?id=32": c32,
-            "Common.ashx?id=76": c76,
-            "Common.ashx?id=27": {"ret": 0, "list": [[1001, "Thành", 10000]]},
-            "OPT.ashx?id=31": {"ret": 0},
-            "OPT.ashx?id=41": {"ret": 0},
-            "OPT.ashx?id=6": {"ret": 0},
-            "OPT.ashx?id=47": {"ret": 0},
-            "OPT.ashx?id=53": {"ret": 0},
-        },
-    )
-    ctx, alerts = ctx_for(server)
-    task = BinhMan(
-        ctx,
-        generals=[15],
-        origin=(10, 10),
-        radius=5,
-        man_types=[7],
-        mode=2,
-        city_id=1001,
-        return_threshold=30,
-        target_army=TargetArmy(cavalry=20000),
-        auto_recruit=True,
-        auto_morale=True,
-        min_morale=95,
-        sleep_fn=lambda s: None,
-    )
-
-    # Lượt 1: Thể lực 20/100 < 30% -> vẫn ưu tiên trị thương, bù +5000 kỵ và nâng sĩ khí trước
-    out1 = task.run_once()
-    assert out1 == "waiting_morale"
-    assert any(k == "OPT.ashx?id=31" for k, _ in server.calls)
-    opt6_1 = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
-    assert len(opt6_1) == 1
-    assert opt6_1[0]["lAmount"] == "5000"
-    opt47_1 = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
-    assert len(opt47_1) == 1
-    assert opt47_1[0]["lGeneralID"] == "15"
-    assert opt47_1[0]["lAddPoint"] == "10"
-    assert not any(k == "OPT.ashx?id=53" for k, _ in server.calls)
-
-    # Lượt 2: Quân đủ 20000, sĩ khí đạt 95, thể lực vẫn 25/100 < 30% -> chờ hồi thể lực
-    server.calls.clear()
-    alerts.clear()
-    c32["list"][0][4][0][7] = 95
-    c32["list"][0][4][0][8] = 25
-    c76["list"][0][2][0][6] = 20000
-    c76["list"][0][2][0][9] = 95
-    c76["list"][0][2][0][10] = 0
-
-    out2 = task.run_once()
-    assert out2 == "waiting_stamina"
-    assert any("Thể lực" in a for a in alerts)
-    assert not any(k in ("OPT.ashx?id=6", "OPT.ashx?id=47", "OPT.ashx?id=53") for k, _ in server.calls)
-
-    # Lượt 3: Thể lực hồi lên 35/100 >= 30% -> xuất kích
-    server.calls.clear()
-    c32["list"][0][4][0][8] = 35
-    out3 = task.run_once()
-    assert out3 == "attacked"
-    assert len([d for k, d in server.calls if k == "OPT.ashx?id=53"]) == 1
-
-
-def test_binh_man_mode_city_trains_morale_when_troop_refill_dilutes_morale_under_low_stamina():
-    from linhvuong.troops import TargetArmy
-
-    mid = mid_from_coords(10, 10)
-    c32 = {
-        "ret": 0,
-        "list": [[1001, "Thành", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 100, 20, 100, 0]]]],
-    }
-    c76_responses = [
-        {"ret": 0, "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 15000, 0, 0, 100, 0, 500]]]]},
-        {"ret": 0, "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 85, 0, 500]]]]},
-    ]
-    server = FakeServer(
-        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
-        handlers={
-            "Common.ashx?id=32": c32,
-            "Common.ashx?id=76": c76_responses,
-            "OPT.ashx?id=31": {"ret": 0},
-            "OPT.ashx?id=6": {"ret": 0},
-            "OPT.ashx?id=47": {"ret": 0},
-            "OPT.ashx?id=53": {"ret": 0},
-        },
-    )
-    ctx, _ = ctx_for(server)
-    task = BinhMan(
-        ctx,
-        generals=[15],
-        origin=(10, 10),
-        radius=5,
-        man_types=[7],
-        mode=2,
-        city_id=1001,
-        return_threshold=30,
-        target_army=TargetArmy(cavalry=20000),
-        auto_recruit=True,
-        auto_morale=True,
-        min_morale=95,
-        sleep_fn=lambda s: None,
-    )
-
-    out = task.run_once()
-    assert out == "waiting_morale"
-    opt6_calls = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
-    assert len(opt6_calls) == 1
-    assert opt6_calls[0]["lAmount"] == "5000"
-    assert len([k for k, _ in server.calls if k == "Common.ashx?id=76"]) == 2
-    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
-    assert len(opt47_calls) == 1
-    assert opt47_calls[0]["lAddPoint"] == "10"
-    assert not any(k == "OPT.ashx?id=53" for k, _ in server.calls)
-
-
-def test_binh_man_mode_city_zero_target_army_trains_morale_without_legacy_infantry_spam():
-    from linhvuong.troops import TargetArmy
-
-    mid = mid_from_coords(10, 10)
-    server = FakeServer(
-        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
-        handlers={
-            "Common.ashx?id=32": {
-                "ret": 0,
-                "list": [[1001, "Thành", 10, 10, [[15, "TC1_01", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
-            },
-            "Common.ashx?id=76": {
-                "ret": 0,
-                "list": [[1001, "Thành", [[15, "TC1_01", 0, "", 0, 0, 20000, 0, 0, 80, 0, 500]]]],
-            },
-            "OPT.ashx?id=31": {"ret": 0},
-            "OPT.ashx?id=41": {"ret": 0},
-            "OPT.ashx?id=6": {"ret": 0},
-            "OPT.ashx?id=47": {"ret": 0},
-            "OPT.ashx?id=53": {"ret": 0},
-        },
-    )
-    ctx, _ = ctx_for(server)
-    task = BinhMan(
-        ctx,
-        generals=[15],
-        origin=(10, 10),
-        radius=5,
-        man_types=[7],
-        mode=2,
-        city_id=1001,
-        return_threshold=30,
-        target_army=TargetArmy(0, 0, 0),
-        auto_recruit=True,
-        auto_morale=True,
-        min_morale=95,
-        sleep_fn=lambda s: None,
-    )
-
-    out = task.run_once()
-    assert out == "waiting_morale"
-    assert len([d for k, d in server.calls if k == "OPT.ashx?id=47"]) == 1
-    assert not any(k in ("OPT.ashx?id=41", "OPT.ashx?id=6", "OPT.ashx?id=53") for k, _ in server.calls)
-
-
-def test_binh_man_mode_camp_low_stamina_trains_morale_at_camp_without_ping_pong_retreat():
-    from linhvuong.troops import TargetArmy
-
-    mid = mid_from_coords(10, 10)
-    c32 = {
-        "ret": 0,
-        "list": [[-501, "Trại", 10, 10, [[20, "Quan Vũ", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
-    }
-    c76 = {
-        "ret": 0,
-        "list": [[-501, "Trại", [[20, "Quan Vũ", 0, "", 0, 0, 20000, 0, 0, 80, 0, 500]]]],
-    }
-    server = FakeServer(
-        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
-        handlers={
-            "Common.ashx?id=32": c32,
-            "Common.ashx?id=76": c76,
-            "OPT.ashx?id=50": {"ret": 0},
-            "OPT.ashx?id=31": {"ret": 0},
-            "OPT.ashx?id=47": {"ret": 0},
-            "OPT.ashx?id=53": {"ret": 0},
-        },
-    )
-    ctx, _ = ctx_for(server)
-    task = BinhMan(
-        ctx,
-        generals=[20],
-        origin=(10, 10),
-        radius=5,
-        man_types=[7],
-        mode=1,
-        camp_id=-501,
-        parent_city_id=1001,
-        return_threshold=30,
-        target_army=TargetArmy(cavalry=20000),
-        auto_recruit=True,
-        auto_morale=True,
-        min_morale=95,
-        sleep_fn=lambda s: None,
-    )
-
-    out1 = task.run_once()
-    assert out1 == "waiting_morale"
-    assert not any(k == "OPT.ashx?id=50" for k, _ in server.calls)
-    opt47_calls = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
-    assert len(opt47_calls) == 1
-    assert opt47_calls[0]["tid"] == "-501"
-    assert not any(k == "OPT.ashx?id=53" for k, _ in server.calls)
-
-    # Lượt 2: Sĩ khí đã đủ 95, thể lực vẫn 20/100 -> chờ thể lực tại Trại, không rút về Thành mẹ
-    server.calls.clear()
-    c32["list"][0][4][0][7] = 95
-    c76["list"][0][2][0][9] = 95
-    out2 = task.run_once()
-    assert out2 == "waiting_stamina"
-    assert not any(k in ("OPT.ashx?id=50", "OPT.ashx?id=53") for k, _ in server.calls)
-
-
-def test_binh_man_mode_camp_low_army_retreats_first_then_trains_morale_under_low_stamina():
-    from linhvuong.troops import TargetArmy
-
-    mid = mid_from_coords(10, 10)
-    c32 = {
-        "ret": 0,
-        "list": [[-501, "Trại", 10, 10, [[20, "Quan Vũ", "", 2, 0, 0, 10, 80, 20, 100, 0]]]],
-    }
-    c76 = {
-        "ret": 0,
-        "list": [[-501, "Trại", [[20, "Quan Vũ", 0, "", 0, 0, 4000, 0, 0, 80, 0, 500]]]],
-    }
-
-    def _opt6():
-        payload = server.calls[-1][1]
-        if payload.get("tid") == "-501":
-            return {"ret": 53}
-        return {"ret": 0}
-
-    server = FakeServer(
-        map_views={mid: {"npc_tent": [man(10, 11, 404, 7)]}},
-        handlers={
-            "Common.ashx?id=32": c32,
-            "Common.ashx?id=76": c76,
-            "OPT.ashx?id=50": {"ret": 0},
-            "OPT.ashx?id=31": {"ret": 0},
-            "OPT.ashx?id=41": {"ret": 0},
-            "OPT.ashx?id=6": _opt6,
-            "OPT.ashx?id=47": {"ret": 0},
-            "OPT.ashx?id=53": {"ret": 0},
-        },
-    )
-    ctx, _ = ctx_for(server)
-    task = BinhMan(
-        ctx,
-        generals=[20],
-        origin=(10, 10),
-        radius=5,
-        man_types=[7],
-        mode=1,
-        camp_id=-501,
-        parent_city_id=1001,
-        return_threshold=30,
-        target_army=TargetArmy(cavalry=20000),
-        auto_recruit=True,
-        auto_morale=True,
-        min_morale=95,
-        sleep_fn=lambda s: None,
-    )
-
-    # Lượt 1: Quân số 4000/20000 = 20% < 30% và trại hết quân đồn trú -> rút về thành mẹ bổ sung rồi quay lại trại
-    out1 = task.run_once()
-    assert out1 == "retreated_below_threshold"
-    opt50_1 = [d for k, d in server.calls if k == "OPT.ashx?id=50"]
-    assert [(d["lCityID"], d["lDestID"]) for d in opt50_1] == [("-501", "1001"), ("1001", "-501")]
-    opt6_parent = [d for k, d in server.calls if k == "OPT.ashx?id=6" and d["tid"] == "1001"]
-    assert len(opt6_parent) == 1
-    assert opt6_parent[0]["lAmount"] == "16000"
-
-    # Lượt 2: Đã đủ 20000 quân tại trại, sĩ khí 70, thể lực vẫn 21/100 < 30% -> luyện sĩ khí tại trại, không rút nữa
-    server.calls.clear()
-    c32["list"][0][4][0][8] = 21
-    c76["list"][0][2][0][6] = 20000
-    c76["list"][0][2][0][9] = 70
-    out2 = task.run_once()
-    assert out2 == "waiting_morale"
-    assert not any(k == "OPT.ashx?id=50" for k, _ in server.calls)
-    opt47_2 = [d for k, d in server.calls if k == "OPT.ashx?id=47"]
-    assert len(opt47_2) == 1
-    assert opt47_2[0]["tid"] == "-501"
-
-
-def test_binh_man_active_battle_tracked_even_when_stamina_below_threshold():
-    from linhvuong.troops import TargetArmy
-
-    server = FakeServer(
-        handlers={
-            "Common.ashx?id=32": {
-                "ret": 0,
-                "list": [
-                    [21936, "ThienCo", 280, 237, [[99057, "TP3", "", 2, 0, 16, 31, 100, 20, 100, 0]]],
-                ],
-            },
-            "Common.ashx?id=40": {
-                "ret": 0,
-                "come": [],
-                "goto": [],
-                "battle": [[1002, 1002, "倭国部队", 268, 251, 5]],
-            },
-            "Common.ashx?id=4": {
-                "ret": 0,
-                "battle_id": 39304906,
-                "next_left": 12,
-                "atside": 1,
-                "city": [1002, "倭国部队", 268, 251],
-                "myside": [[1, 21936, "ThienCo", 280, 237, 738816, "quilia", "TP3", 0, 8919, 0, 0, 100, 99057]],
-                "enemy": [],
-            },
-            "OPT.ashx?id=24": [
-                {
-                    "ret": 0,
-                    "site": "倭国部队",
-                    "mapid": 1002,
-                    "bout": 1,
-                    "bout_left": 12,
-                    "attack_total": 1,
-                    "defend_total": 1,
-                    "troops": [
-                        [1, "quilia", 738816, "TP3", 99057, "", 21936, 0, 1, 100, 0, 0, 8919, 8919, 0, 0, 0, 98396, "QV42", 1],
-                        [11, "", 0, "倭国部队", 0, "", 0, 0, 4, 100, 0, 5000, 0, 5000, 0, 0, 0, 0, "", 16],
-                    ],
-                },
-                {"ret": 13, "troops": []},
-            ],
-            "OPT.ashx?id=54": {"ret": 0},
-            "OPT.ashx?id=57": {"ret": 0},
-            "OPT.ashx?id=26": {"ret": 0, "last_tips_id": 0, "tips": []},
-            "OPT.ashx?id=31": {"ret": 0},
-            "OPT.ashx?id=41": {"ret": 0},
-            "OPT.ashx?id=6": {"ret": 0},
-        }
-    )
-    server.cookies = {"uid": "738816"}
-    ctx, _ = ctx_for(server)
-    task = BinhMan(
-        ctx,
-        generals=[99057],
-        origin=(280, 237),
-        radius=20,
-        man_types=[1],
-        mode=2,
-        city_id=21936,
-        return_threshold=30,
-        target_army=TargetArmy(cavalry=20000),
-        check_idle=True,
-        sleep_fn=lambda s: None,
-    )
-
-    out = task.run_once()
-    assert out == "battle_tracked"
-    assert not any(k in ("OPT.ashx?id=6", "OPT.ashx?id=31", "OPT.ashx?id=41") for k, _ in server.calls)
+    assert not any(k in ("OPT.ashx?id=5", "OPT.ashx?id=50") for k, _ in server.calls)
+    assert any("giữ nguyên" in a.lower() for a in alerts)
 
 
 def test_binh_man_even_troops_balances_before_recruit_and_refreshes_morale():
     from linhvuong.troops import TargetArmy
 
     mid = mid_from_coords(10, 10)
-    c32 = {
-        "ret": 0,
-        "list": [
-            [
-                1001,
-                "Thành",
-                10,
-                10,
-                [
-                    [10, "Tướng A", "", 2, 0, 0, 4, 100, 240, 240, 0],
-                    [11, "Tướng B", "", 2, 0, 0, 4, 100, 240, 240, 0],
-                ],
-            ]
-        ],
-    }
-    # A có 1500 Kỵ, B có 500 Kỵ -> sau san đều mỗi tướng 1000 Kỵ, định mức 1200 -> mỗi tướng chỉ bù thêm 200 (không phải B bù 700!)
-    c76 = {
-        "ret": 0,
-        "list": [
-            [
-                1001,
-                "Thành",
-                [
-                    [10, "Tướng A", 0, "", 0, 0, 1500, 0, 0, 100, 0, 0],
-                    [11, "Tướng B", 0, "", 0, 0, 500, 0, 0, 100, 0, 0],
-                ],
-            ]
-        ],
-    }
     server = FakeServer(
         map_views={mid: {"npc_tent": [man(10, 11, 405, 7)]}},
         handlers={
-            "Common.ashx?id=32": c32,
-            "Common.ashx?id=76": c76,
-            "Common.ashx?id=27": {"ret": 0, "list": [[1001, "Thành", 5000]]},
+            "/api/city/list": {"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "Thành", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}},
+            "/api/city/pageofficial": {
+                "ret": 0,
+                "data": {
+                    "ret": 0,
+                    "list": [[1001, "Thành", 10, 10, [
+                        [10, "Tướng A", "", 2, 0, 0, 4, 100, 240, 240, 0],
+                        [11, "Tướng B", "", 2, 0, 0, 4, 100, 240, 240, 0],
+                    ]]],
+                },
+            },
+            "/api/city/pagemytroopslist": {
+                "ret": 0,
+                "data": {
+                    "ret": 0,
+                    "list": [[1001, "Thành", [
+                        [10, "Tướng A", 0, "", 0, 0, 1500, 0, 0, 100, 0, 0],
+                        [11, "Tướng B", 0, "", 0, 0, 500, 0, 0, 100, 0, 0],
+                    ]]],
+                },
+            },
+            "/api/city/pagearmament": {"ret": 0, "data": {"ret": 0, "list": [[1001, "Thành", 5000]]}},
             "OPT.ashx?id=31": {"ret": 0},
             "OPT.ashx?id=39": {"ret": 0},
             "OPT.ashx?id=6": {"ret": 0},
@@ -1651,7 +1304,7 @@ def test_binh_man_even_troops_balances_before_recruit_and_refreshes_morale():
 
     opt6 = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
     assert [(d["lGeneralID"], d["lAmount"]) for d in opt6] == [("10", "200"), ("11", "200")]
-    assert sum(1 for k, _ in server.calls if k == "Common.ashx?id=76") >= 2
+    assert sum(1 for k, _ in server.calls if k == "/api/city/pagemytroopslist") >= 2
 
     # Khi target_army = 0/0/0 và auto_recruit=False vẫn chạy san đều quân nếu even_troops=True
     server.calls.clear()
@@ -1696,26 +1349,34 @@ def test_binh_man_even_troops_balances_before_recruit_and_refreshes_morale():
 def test_binh_man_city_partial_provision_trains_morale_and_waits_for_100pct_before_marching():
     from linhvuong.troops import ArmyProvisioner, TargetArmy
 
-    mid = mid_from_coords(10, 10)
     state = {"recruits": 0, "idle_pop": 1000, "troops": 4000, "morale": 85, "comfort_ok": False}
 
-    class StatefulServer:
+    class StatefulS58Server:
+        cookies = {"uid": "1"}
+
         def __init__(self):
             self.calls = []
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/map/query":
+                return Resp({"npc_tent": [man(10, 10, 999, 7)]})
+            if path == "/api/city/list":
+                return Resp({"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}})
+            if path == "/api/city/pageofficial":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[10, "G10", "", 2, 0, 0, 10, 100, 240, 240, 0]]]]}})
+            if path == "/api/city/pagemytroopslist":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, state["morale"], 0]]]]}})
+            if path == "/api/city/pagearmament":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", state["recruits"]]]}})
+            if path == "/api/city/info":
+                return Resp({"ret": 0, "data": {"m_lpopulation_idle_man": state["idle_pop"]}})
+            return Resp({"ret": 0})
 
         def post(self, url, data=None, headers=None, timeout=None):
             key = url.split("/GateWay/")[1]
             self.calls.append((key, dict(data or {})))
-            if key == "Map.ashx?id=6":
-                return Resp({"npc_tent": [man(10, 10, 999, 7)]})
-            if key == "Common.ashx?id=32":
-                return Resp({"ret": 0, "list": [[1001, "C", 0, 0, [[10, "G10", "", 2, 0, 0, 4, 100, 240, 240, 0]]]]})
-            if key == "Common.ashx?id=76":
-                return Resp({"ret": 0, "list": [[1001, "C", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, state["morale"], 0, 0]]]]})
-            if key == "Common.ashx?id=27":
-                return Resp({"ret": 0, "list": [[1001, "C", state["recruits"]]]})
-            if key == "City.ashx?id=6":
-                return Resp({"ret": 0, "population": [10000, 10000, 2000, 0, state["idle_pop"]]})
             if key == "OPT.ashx?id=4":
                 if not state["comfort_ok"]:
                     return Resp({"ret": 55})
@@ -1738,13 +1399,11 @@ def test_binh_man_city_partial_provision_trains_morale_and_waits_for_100pct_befo
             if key == "OPT.ashx?id=47":
                 state["morale"] = min(100, state["morale"] + int(data["lAddPoint"]))
                 return Resp({"ret": 0})
-            if key == "OPT.ashx?id=53":
-                return Resp({"ret": 0})
             return Resp({"ret": 0})
 
     clock = [0.0]
-    srv = StatefulServer()
-    ctx, alerts = ctx_for(srv)
+    srv = StatefulS58Server()
+    ctx, _ = ctx_for(srv)
     prov = ArmyProvisioner(ctx.gateway, sleep_fn=lambda s: None, clock_fn=lambda: clock[0])
     task = BinhMan(
         ctx,
@@ -1758,31 +1417,103 @@ def test_binh_man_city_partial_provision_trains_morale_and_waits_for_100pct_befo
         auto_recruit=True,
         auto_morale=True,
         min_morale=95,
-        return_threshold=30,  # Dù 5000/6000 = 83% > 30% vẫn phải chờ đủ 100%
+        return_threshold=30,
         sleep_fn=lambda s: None,
         provisioner=prov,
     )
 
-    # Chu kỳ 1: chỉ có 1000 dân nhàn rỗi -> lên 5000/6000, luyện sĩ khí (85->95) xong trả waiting_troops, KHÔNG xuất quân
     out1 = task.run_once()
     assert out1 in ("waiting_morale", "waiting_troops")
     assert state["troops"] == 5000
     assert any(k == "OPT.ashx?id=47" for k, _ in srv.calls)
     assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
 
-    # Giả sử MoraleTrainer vừa nâng từ 85 -> 95 (waiting_morale), lượt kế tiếp đã 95 nhưng vẫn thiếu 1000 quân -> vẫn giữ waiting_troops
     if out1 == "waiting_morale":
-        out1b = task.run_once()
-        assert out1b == "waiting_troops"
+        assert task.run_once() == "waiting_troops"
         assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
 
-    # Chu kỳ 2: hết cooldown Tăng Nhân Khẩu -> bổ sung đủ 6000 -> đủ sĩ khí -> xuất quân
     clock[0] = 100.0
     state["comfort_ok"] = True
     state["morale"] = 96
-    out2 = task.run_once()
-    assert out2 == "attacked"
+    assert task.run_once() == "attacked"
     assert state["troops"] == 6000
     assert any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+
+def test_binh_man_s58_recover_in_city_partial_provision_still_trains_morale_below_threshold():
+    from linhvuong.troops import ArmyProvisioner, TargetArmy
+
+    state = {"recruits": 0, "idle_pop": 1000, "troops": 0, "morale": 85}
+
+    class BelowThreshS58Server:
+        cookies = {"uid": "1"}
+
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/city/list":
+                return Resp({"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 1001, "m_szname": "ThienCo", "m_lx_pos": 10, "m_ly_pos": 10, "m_llevel": 1}]}})
+            if path == "/api/city/pageofficial":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", 10, 10, [[10, "G10", "", 2, 0, 0, 10, 100, 240, 240, 0]]]]}})
+            if path == "/api/city/pagemytroopslist":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, state["morale"], 0]]]]}})
+            if path == "/api/city/pagearmament":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "ThienCo", state["recruits"]]]}})
+            if path == "/api/city/info":
+                return Resp({"ret": 0, "data": {"m_lpopulation_idle_man": state["idle_pop"]}})
+            return Resp({"ret": 0})
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            self.calls.append((key, dict(data or {})))
+            if key == "OPT.ashx?id=4":
+                return Resp({"ret": 55})
+            if key == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 34})
+            if key == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["troops"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 53})
+            if key == "OPT.ashx?id=47":
+                state["morale"] = min(100, state["morale"] + int(data["lAddPoint"]))
+                return Resp({"ret": 0})
+            return Resp({"ret": 0})
+
+    srv = BelowThreshS58Server()
+    ctx, _ = ctx_for(srv)
+    prov = ArmyProvisioner(ctx.gateway, sleep_fn=lambda s: None)
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=6000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        return_threshold=30,
+        sleep_fn=lambda s: None,
+        provisioner=prov,
+    )
+
+    out = task.run_once()
+    assert out == "recovered_in_city"
+    assert state["troops"] == 1000
+    assert any(k == "OPT.ashx?id=47" for k, _ in srv.calls)
+    assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
 
 

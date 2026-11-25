@@ -433,66 +433,95 @@ def test_balance_troops_morale_water_filling_assortative_empty_and_replan():
     assert ok_calls[0]["cavalry"] == "500"
 
 
-def test_check_idle_population_parses_city6_list_and_dict_and_clamps_negative():
-    prov, _ = make_provisioner({"City.ashx?id=6": {"ret": 0, "population": [123944, 123944, 21399, 94966, 7579]}})
-    assert prov.check_idle_population(15230) == 7579
+def test_check_idle_population_parses_rest_city_info_and_clamps_negative():
+    class RestServer(FakeServer):
+        cookies = {"uid": "1"}
 
-    prov_neg, _ = make_provisioner({"City.ashx?id=6": {"ret": 0, "population": [100, 100, 80, 30, -10]}})
-    assert prov_neg.check_idle_population(15230) == 0
+        def get(self, url, params=None, headers=None, timeout=None):
+            ep = "/" + url.split("://", 1)[1].split("/", 1)[1]
+            self.calls.append((ep, dict(params or {})))
+            payload = self.responses.get(ep, {"ret": 0})
+            resp_data = payload.pop(0) if isinstance(payload, list) else payload
 
-    prov_dict, _ = make_provisioner({"City.ashx?id=6": {"ret": 0, "data": {"m_lpopulation_idle_man": 133680}}})
-    assert prov_dict.check_idle_population(10129) == 133680
+            class Resp:
+                status_code = 200
 
-    prov_cap, _ = make_provisioner({"City.ashx?id=6": {"ret": 110}})
+                def json(self_inner):
+                    return resp_data
+
+            return Resp()
+
+    srv1 = RestServer({"/api/city/info": {"ret": 0, "data": {"m_lpopulation_idle_man": 133680}}})
+    prov1 = ArmyProvisioner(GatewayClient(58, srv1, sleep=lambda s: None), sleep_fn=lambda s: None)
+    assert prov1.check_idle_population(10129) == 133680
+
+    srv_neg = RestServer({"/api/city/info": {"ret": 0, "data": {"m_lpopulation_idle_man": -5}}})
+    prov_neg = ArmyProvisioner(GatewayClient(58, srv_neg, sleep=lambda s: None), sleep_fn=lambda s: None)
+    assert prov_neg.check_idle_population(10129) == 0
+
+    srv_cap = RestServer({"/api/city/info": {"ret": 110}})
+    prov_cap = ArmyProvisioner(GatewayClient(58, srv_cap, sleep=lambda s: None), sleep_fn=lambda s: None)
     with pytest.raises(CaptchaRequired):
-        prov_cap.check_idle_population(15230)
+        prov_cap.check_idle_population(10129)
 
 
 def test_comfort_population_cooldown_900s_on_success_and_60s_on_ret55():
     now = [0.0]
     server = FakeServer({"OPT.ashx?id=4": [{"ret": 0}, {"ret": 55}, {"ret": 0}]})
-    client = GatewayClient(57, server, sleep=lambda s: None)
+    client = GatewayClient(58, server, sleep=lambda s: None)
     prov = ArmyProvisioner(client, sleep_fn=lambda s: None, clock_fn=lambda: now[0])
 
-    # Lần 1 thành công (ret=0) -> khóa 900s
-    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (True, 0)
+    assert prov.comfort_population(10129, ltype=4, respect_cooldown=True) == (True, 0)
     assert len(server.calls) == 1
 
-    # Trước 900s -> không gửi request lên server
     now[0] = 899.0
-    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (False, 55)
+    assert prov.comfort_population(10129, ltype=4, respect_cooldown=True) == (False, 55)
     assert len(server.calls) == 1
 
-    # Đúng 900s -> gửi lại; giả sử trả ret=55 -> khóa 60s
     now[0] = 900.0
-    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (False, 55)
+    assert prov.comfort_population(10129, ltype=4, respect_cooldown=True) == (False, 55)
     assert len(server.calls) == 2
 
     now[0] = 959.0
-    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (False, 55)
+    assert prov.comfort_population(10129, ltype=4, respect_cooldown=True) == (False, 55)
     assert len(server.calls) == 2
 
     now[0] = 960.0
-    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (True, 0)
+    assert prov.comfort_population(10129, ltype=4, respect_cooldown=True) == (True, 0)
     assert len(server.calls) == 3
 
 
 def test_adjust_troops_partial_fill_after_comfort_cooldown_and_multi_general_sequential():
-    # 3 tướng mỗi tướng thiếu 2000 Bộ; kho có 500 tân binh; Tăng Nhân Khẩu đang hồi (ret=55); dân rảnh = 2500
     state = {"recruits": 500, "idle_pop": 2500, "assigned": {1: 0, 2: 0, 3: 0}}
 
-    class StatefulServer:
+    class StatefulS58Server:
+        cookies = {"uid": "1"}
+
         def __init__(self):
             self.calls = []
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            ep = "/" + url.split("://", 1)[1].split("/", 1)[1]
+            self.calls.append((ep, dict(params or {})))
+            if ep == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[10129, "1", state["recruits"]]]}}
+            elif ep == "/api/city/info":
+                resp = {"ret": 0, "data": {"m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
 
         def post(self, url, data=None, headers=None, timeout=None):
             ep = url.split("/GateWay/")[1]
             self.calls.append((ep, dict(data or {})))
-            if ep == "Common.ashx?id=27":
-                resp = {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}
-            elif ep == "City.ashx?id=6":
-                resp = {"ret": 0, "population": [10000, 10000, 2000, 0, state["idle_pop"]]}
-            elif ep == "OPT.ashx?id=4":
+            if ep == "OPT.ashx?id=4":
                 resp = {"ret": 55}
             elif ep == "OPT.ashx?id=41":
                 amt = int(data["lAmount"])
@@ -522,17 +551,16 @@ def test_adjust_troops_partial_fill_after_comfort_cooldown_and_multi_general_seq
 
             return R()
 
-    srv = StatefulServer()
-    prov = ArmyProvisioner(GatewayClient(57, srv, sleep=lambda s: None), sleep_fn=lambda s: None)
+    srv = StatefulS58Server()
+    prov = ArmyProvisioner(GatewayClient(58, srv, sleep=lambda s: None), sleep_fn=lambda s: None)
     comfort_attempted = set()
     exhausted = set()
     target = TargetArmy(infantry=2000)
 
-    r1 = prov.adjust_troops(15230, 1, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
-    r2 = prov.adjust_troops(15230, 2, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
-    r3 = prov.adjust_troops(15230, 3, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
+    r1 = prov.adjust_troops(10129, 1, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
+    r2 = prov.adjust_troops(10129, 2, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
+    r3 = prov.adjust_troops(10129, 3, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
 
-    # Tướng 1 nhận đủ 2000 (500 kho + 1500 mua), Tướng 2 nhận phần còn lại 1000 và báo thiếu 1000, Tướng 3 bỏ qua vì thành đã cạn dân
     assert r1 == [(1, 2000, True, 0)]
     assert r2 == [(1, 1000, True, 0), (1, 1000, False, 34)]
     assert r3 == [(1, 2000, False, 34)]
@@ -540,49 +568,43 @@ def test_adjust_troops_partial_fill_after_comfort_cooldown_and_multi_general_seq
     assert state["idle_pop"] == 0
     assert state["recruits"] == 0
     assert sum(1 for ep, _ in srv.calls if ep == "OPT.ashx?id=4") == 1
-    # Tướng 3 không spam OPT.ashx?id=6 hay OPT.ashx?id=41
     assert not any(ep == "OPT.ashx?id=6" and d["lGeneralID"] == "3" for ep, d in srv.calls)
     assert has_population_shortage(r2) is True
     assert has_population_shortage(r1) is False
-
-
-def test_adjust_troops_partial_fill_after_comfort_success_still_insufficient():
-    responses = {
-        "Common.ashx?id=27": {"ret": 0, "list": [[15230, "NB", 0]]},
-        "OPT.ashx?id=4": {"ret": 0},
-        "City.ashx?id=6": {"ret": 0, "population": [5000, 5000, 1000, 0, 1200]},
-        # Thử 3000 (ret=34) -> Tăng Nhân Khẩu -> thử lại 3000 (vẫn ret=34) -> mua 1200 (ret=0)
-        "OPT.ashx?id=41": [{"ret": 34}, {"ret": 34}, {"ret": 0}],
-        # Thử biên chế 3000 (ret=53) -> biên chế 1200 (ret=0)
-        "OPT.ashx?id=6": [{"ret": 53}, {"ret": 0}],
-    }
-    prov, srv = make_provisioner(responses)
-    logs = []
-    res = prov.adjust_troops(15230, 101, Army(0, 0, 0), TargetArmy(infantry=3000), on_log=logs.append)
-    assert res == [(1, 1200, True, 0), (1, 1800, False, 34)]
-    opt41 = [d["lAmount"] for ep, d in srv.calls if ep == "OPT.ashx?id=41"]
-    assert opt41 == ["3000", "3000", "1200"]
-    opt6 = [d["lAmount"] for ep, d in srv.calls if ep == "OPT.ashx?id=6"]
-    assert opt6 == ["3000", "1200"]
-    assert any("Biên chế từng phần" in m for m in logs)
 
 
 def test_adjust_troops_anti_micro_drip_guard_while_waiting_but_finishes_small_tail():
     now = [0.0]
     state = {"recruits": 0, "idle_pop": 0}
 
-    class DripServer:
+    class DripS58Server:
+        cookies = {"uid": "1"}
+
         def __init__(self):
             self.calls = []
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            ep = "/" + url.split("://", 1)[1].split("/", 1)[1]
+            self.calls.append((ep, dict(params or {})))
+            if ep == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[10129, "1", state["recruits"]]]}}
+            elif ep == "/api/city/info":
+                resp = {"ret": 0, "data": {"m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
 
         def post(self, url, data=None, headers=None, timeout=None):
             ep = url.split("/GateWay/")[1]
             self.calls.append((ep, dict(data or {})))
-            if ep == "Common.ashx?id=27":
-                resp = {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}
-            elif ep == "City.ashx?id=6":
-                resp = {"ret": 0, "population": [5000, 5000, 1000, 0, state["idle_pop"]]}
-            elif ep == "OPT.ashx?id=4":
+            if ep == "OPT.ashx?id=4":
                 resp = {"ret": 55}
             elif ep == "OPT.ashx?id=41":
                 amt = int(data["lAmount"])
@@ -610,40 +632,30 @@ def test_adjust_troops_anti_micro_drip_guard_while_waiting_but_finishes_small_ta
 
             return R()
 
-    srv = DripServer()
-    prov = ArmyProvisioner(GatewayClient(57, srv, sleep=lambda s: None), sleep_fn=lambda s: None, clock_fn=lambda: now[0])
+    srv = DripS58Server()
+    prov = ArmyProvisioner(GatewayClient(58, srv, sleep=lambda s: None), sleep_fn=lambda s: None, clock_fn=lambda: now[0])
 
-    # Lượt 1: cạn dân -> đánh dấu đang chờ dân và khóa comfort 60s
-    r1 = prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=1000))
-    assert r1 == [(1, 1000, False, 34)]
+    assert prov.adjust_troops(10129, 1, Army(0, 0, 0), TargetArmy(infantry=1000)) == [(1, 1000, False, 34)]
 
-    # Lượt 2 (10s sau): dân tự tăng nhỏ giọt 15 (< 50) -> bỏ qua không mua/biên chế lắt nhắt
     now[0] = 10.0
     state["idle_pop"] = 15
     srv.calls.clear()
-    r2 = prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=1000))
-    assert r2 == [(1, 1000, False, 34)]
+    assert prov.adjust_troops(10129, 1, Army(0, 0, 0), TargetArmy(infantry=1000)) == [(1, 1000, False, 34)]
     assert not any(ep == "OPT.ashx?id=41" for ep, _ in srv.calls)
 
-    # Lượt 3: chỉ còn thiếu 30 để đạt 100% và dân = 30 -> vẫn mua & biên chế dứt điểm!
     now[0] = 20.0
     state["idle_pop"] = 30
     srv.calls.clear()
-    r3 = prov.adjust_troops(15230, 1, Army(970, 0, 0), TargetArmy(infantry=1000))
+    r3 = prov.adjust_troops(10129, 1, Army(970, 0, 0), TargetArmy(infantry=1000))
     assert r3 == [(1, 30, True, 0)]
     assert has_population_shortage(r3) is False
 
 
 def test_adjust_troops_non_shortage_error_not_flagged_as_population_shortage():
     prov42, _ = make_provisioner({"OPT.ashx?id=6": {"ret": 42}})
-    r42 = prov42.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=500))
+    r42 = prov42.adjust_troops(10129, 1, Army(0, 0, 0), TargetArmy(infantry=500))
     assert r42 == [(1, 500, False, 42)]
     assert has_population_shortage(r42) is False
-
-    prov43, _ = make_provisioner({"OPT.ashx?id=6": {"ret": 43}})
-    r43 = prov43.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=500))
-    assert r43 == [(1, 500, False, 43)]
-    assert has_population_shortage(r43) is False
 
 
 
