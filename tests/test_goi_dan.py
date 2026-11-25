@@ -1055,6 +1055,7 @@ def test_goi_man_auto_swap_tactician_and_fallback_when_no_replacement():
     """GoiDan tự động đổi mưu sĩ thể lực thấp khi đủ điều kiện và giữ nguyên khi không có người thay thế."""
     origin_mid = mid_from_coords(180, 67)
     empty_mid = mid_from_coords(181, 67)
+    far_mid = mid_from_coords(194, 67)
 
     def _pageofficial():
         hero_type = str(server.calls[-1][1].get("heroType", "2"))
@@ -1068,11 +1069,15 @@ def test_goi_man_auto_swap_tactician_and_fallback_when_no_replacement():
         return {"ret": 0, "data": {"ret": 0, "list": [[10254, "TT", 180, 67, gens]]}}
 
     def handle_call_69():
+        server.map_views[far_mid] = {"npc_tent": []}
         server.map_views[origin_mid] = {"npc_tent": [man(181, 67, 2299, 1)], "infos": [[empty_mid, 1, 0, 0, 0, 0]]}
         return {"ret": 0}
 
     server = FakeServer(
-        map_views={origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]}},
+        map_views={
+            origin_mid: {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]},
+            far_mid: {"npc_tent": [man(194, 67, 2299, 1)]},
+        },
         handlers={
             "/api/city/list": {
                 "ret": 0,
@@ -1109,6 +1114,7 @@ def test_goi_man_auto_swap_tactician_and_fallback_when_no_replacement():
     # Ngưỡng 95%: VanKhoe 90% không đạt -> không gọi id=5 (giữ VanThap) và vẫn gọi đánh
     server.calls.clear()
     server.map_views[origin_mid] = {"npc_tent": [], "infos": [[empty_mid, 1, 0, 0, 0, 0]]}
+    server.map_views[far_mid] = {"npc_tent": [man(194, 67, 2299, 1)]}
     alerts2 = []
     task_high = GoiDan(
         ctx_for(server)[0],
@@ -1477,6 +1483,100 @@ def test_goi_dan_even_troops_balances_before_recruit_and_refreshes_morale():
     opt6 = [d for k, d in server.calls if k == "OPT.ashx?id=6"]
     assert [(d["lGeneralID"], d["lAmount"]) for d in opt6] == [("50", "300"), ("51", "300")]
     assert sum(1 for k, _ in server.calls if k == "/api/city/pagemytroopslist") >= 2
+
+
+def test_goi_dan_partial_provision_trains_morale_and_waits_for_100pct_even_with_zero_threshold():
+    from linhvuong.troops import ArmyProvisioner, TargetArmy
+
+    state = {"recruits": 0, "idle_pop": 800, "troops": 1000, "morale": 85, "comfort_ok": False}
+
+    class StatefulServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/map/query":
+                return Resp({"npc_tent": [man(2, 2, 777, VONG_LINH)]})
+            if path == "/api/city/pageofficial":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[123, "City", 0, 0, [[50, "G50", "", 2, 0, 0, 4, 100, 240, 240, 0]]]]}})
+            if path == "/api/city/pagemytroopslist":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[123, "City", [[50, "G50", 0, "", 0, state["troops"], 0, 0, 0, state["morale"], 0, 0]]]]}})
+            if path == "/api/city/pagearmament":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[123, "City", state["recruits"]]]}})
+            if path == "/api/city/info":
+                return Resp({"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}})
+            return Resp({"ret": 0})
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((key, dict(data or {})))
+            if key == "OPT.ashx?id=4":
+                if not state["comfort_ok"]:
+                    return Resp({"ret": 55})
+                state["idle_pop"] += 1500
+                return Resp({"ret": 0})
+            if key == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 34})
+            if key == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["troops"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 53})
+            if key == "OPT.ashx?id=47":
+                state["morale"] = min(100, state["morale"] + int(data["lAddPoint"]))
+                return Resp({"ret": 0})
+            if key == "OPT.ashx?id=53":
+                return Resp({"ret": 0})
+            return Resp({"ret": 0})
+
+    clock = [0.0]
+    srv = StatefulServer()
+    ctx, _ = ctx_for(srv)
+    prov = ArmyProvisioner(ctx.gateway, sleep_fn=lambda s: None, clock_fn=lambda: clock[0])
+    task = GoiDan(
+        ctx,
+        generals=[50],
+        origin=(2, 2),
+        radius=5,
+        city_id=123,
+        target_army=TargetArmy(infantry=2000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        return_threshold=0,
+        sleep_fn=lambda s: None,
+        provisioner=prov,
+    )
+
+    out1 = task.run_once()
+    assert out1 in ("waiting_morale", "waiting_troops")
+    assert state["troops"] == 1800
+    assert any(k == "OPT.ashx?id=47" for k, _ in srv.calls)
+    assert not any(k in ("OPT.ashx?id=69", "OPT.ashx?id=53") for k, _ in srv.calls)
+
+    if out1 == "waiting_morale":
+        assert task.run_once() == "waiting_troops"
+        assert not any(k in ("OPT.ashx?id=69", "OPT.ashx?id=53") for k, _ in srv.calls)
+
+    clock[0] = 100.0
+    state["comfort_ok"] = True
+    state["morale"] = 96
+    out2 = task.run_once()
+    assert out2 == "attacked"
+    assert state["troops"] == 2000
+    assert any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
 
 
 

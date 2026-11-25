@@ -12,6 +12,14 @@ logger = logging.getLogger("linhvuong.gateway")
 
 RET_SESSION_EXPIRED = 198599
 
+NON_IDEMPOTENT_APIS: frozenset[tuple[str, int]] = frozenset(
+    {
+        ("OPT.ashx", 6),   # Biên chế cộng thêm quân vào tướng
+        ("OPT.ashx", 39),  # Chuyển quân trực tiếp giữa 2 tướng
+        ("OPT.ashx", 41),  # Chiêu mộ cộng thêm tân binh
+    }
+)
+
 
 class GatewayClient:
     def __init__(
@@ -163,6 +171,7 @@ class GatewayClient:
         referer: Optional[str] = None,
         log_label: str = "",
         accept_json: bool = False,
+        retry_on_error: bool = True,
     ) -> Optional[dict]:
         """Thực thi HTTP request với retry 502/503/504, proxy failover, HTTP 400 JSON và relogin 198599."""
         headers = self._headers(referer=referer)
@@ -182,6 +191,11 @@ class GatewayClient:
                 else:
                     resp = self.session.post(url, data=data, headers=headers, timeout=self.timeout)
             except Exception as e:
+                if not retry_on_error:
+                    logger.warning(
+                        f"Lỗi mạng khi gọi {log_label} (không retry lệnh không idempotent): {e}"
+                    )
+                    return None
                 logger.warning(f"Lỗi mạng khi gọi {log_label} (lần {attempt}/{self.max_retries}): {e}")
                 err_str = str(e).lower()
                 if (
@@ -195,6 +209,12 @@ class GatewayClient:
                     continue
                 self._sleep(0.5)
                 continue
+
+            if resp.status_code in (502, 503, 504) and not retry_on_error:
+                logger.warning(
+                    f"Máy chủ trả về HTTP {resp.status_code} cho {log_label} (không retry lệnh không idempotent)"
+                )
+                return None
 
             if resp.status_code in (502, 504) and failovers_used < self.max_failovers:
                 if self._try_proxy_failover():
@@ -282,15 +302,28 @@ class GatewayClient:
         data: Any,
         referer: Optional[str] = None,
         query_suffix: Optional[str] = None,
+        retry_on_error: Optional[bool] = None,
     ) -> Optional[dict]:
-        """POST tới /GateWay/<endpoint>?id=<api_id>."""
+        """POST tới /GateWay/<endpoint>?id=<api_id>. Retry khi HTTP 502/503/504 (trừ lệnh không idempotent)."""
         url = f"{self.base_url}/GateWay/{endpoint}?id={api_id}"
         if query_suffix:
             url = f"{url}&{query_suffix}"
         log_label = f"{endpoint}?id={api_id}"
+        allow_retry = (
+            (endpoint, int(api_id)) not in NON_IDEMPOTENT_APIS
+            if retry_on_error is None
+            else bool(retry_on_error)
+        )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"Request: POST {log_label} | Data: {data}")
-        return self._request("POST", url, data=data, referer=referer, log_label=log_label)
+        return self._request(
+            "POST",
+            url,
+            data=data,
+            referer=referer,
+            log_label=log_label,
+            retry_on_error=allow_retry,
+        )
 
     def rest_get(
         self,

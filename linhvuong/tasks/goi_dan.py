@@ -16,6 +16,7 @@ Reverse engineered chính xác từ ZMan.exe:
   2. Bổ sung quân số: OPT.ashx?id=6 (lGeneralID, lSoldierType, lAmount, tid).
 """
 
+from contextlib import nullcontext
 import math
 import time
 from typing import Any, Callable, Optional
@@ -27,7 +28,7 @@ from ..helper_caller import HelperCallerLoginError
 from ..locks import LockReason
 from ..roster import Army, fetch_roster
 from ..scan import Target
-from ..troops import ArmyProvisioner, TargetArmy
+from ..troops import ArmyProvisioner, TargetArmy, has_population_shortage
 from .base import (
     RET_CAPTCHA_REQUIRED,
     RET_OK,
@@ -73,6 +74,7 @@ class GoiDan:
         provisioner: Optional[ArmyProvisioner] = None,
         auto_swap_tactician: bool = False,
         min_tactician_stamina: float = 30.0,
+        return_threshold: int = 0,
         caller_gateway: Optional[Any] = None,
         caller_provider: Optional[Any] = None,
         caller_username: str = "",
@@ -107,6 +109,7 @@ class GoiDan:
         self.provisioner = provisioner or ArmyProvisioner(ctx.gateway, sleep_fn=sleep_fn)
         self.auto_swap_tactician = bool(auto_swap_tactician)
         self.min_tactician_stamina = max(0.0, min(100.0, float(min_tactician_stamina)))
+        self.return_threshold = max(0, int(return_threshold))
         self.caller_gateway = caller_gateway
         self.caller_provider = caller_provider
         self.caller_username = (caller_username or "").strip()
@@ -503,8 +506,17 @@ class GoiDan:
                     include_civil=False,
                     include_cities=False,
                 )
+            except CaptchaRequired:
+                raise
             except Exception:
                 roster = None
+
+        if roster is not None and not getattr(roster, "has_reliable_armies", lambda _b: True)(self.city_id):
+            if self.ctx.notify:
+                self.ctx.notify(
+                    "⚠️ Không đọc được quân số từ máy chủ (/api/city/pagemytroopslist), bỏ qua san đều/biên chế để tránh biên chế vượt định mức."
+                )
+            return
 
         for gid in self.generals:
             self.provisioner.heal_general(self.city_id, gid)
@@ -526,6 +538,8 @@ class GoiDan:
                 on_log=self.ctx.notify,
             )
 
+        comfort_attempted: set[int] = set()
+        exhausted_cities: set[int] = set()
         for gid in self.generals:
             # 2. Bù lính theo TargetArmy hoặc cấu hình legacy
             if self.target_army and self.target_army.total > 0 and self.auto_recruit and self.city_id:
@@ -537,6 +551,8 @@ class GoiDan:
                     target_army=self.target_army,
                     auto_recruit=True,
                     on_log=self.ctx.notify,
+                    comfort_attempted=comfort_attempted,
+                    exhausted_cities=exhausted_cities,
                 )
             elif self.refill_amount > 0 and self.city_id:
                 self.ctx.gateway.call(
@@ -591,6 +607,49 @@ class GoiDan:
             return None
         return target
 
+    def _check_safety_thresholds(
+        self,
+        roster: Any,
+        added_troops: Optional[dict[int, int]] = None,
+        army_overrides: Optional[dict[int, Army]] = None,
+    ) -> Optional[str]:
+        """Kiểm tra thể lực & quân số sau khi đã ưu tiên biên chế và luyện sĩ khí."""
+        if self.return_threshold <= 0 or not self.city_id or roster is None:
+            return None
+
+        gens = {g.id: g for g in roster.generals_of(self.city_id)}
+        added_map = added_troops or {}
+
+        for gid in self.generals:
+            g = gens.get(gid)
+            if g and g.stamina_max > 0:
+                stamina_pct = (g.stamina / g.stamina_max) * 100.0
+                if stamina_pct < self.return_threshold:
+                    if self.ctx.notify:
+                        self.ctx.notify(
+                            f"⏳ [Thể lực] Võ tướng {g.name} thể lực ({g.stamina}/{g.stamina_max} = {stamina_pct:.0f}%) "
+                            f"dưới ngưỡng an toàn ({self.return_threshold}%), chờ hồi phục..."
+                        )
+                    return "waiting_stamina"
+
+        if self.target_army and self.target_army.total > 0:
+            for gid in self.generals:
+                g = gens.get(gid)
+                if not g:
+                    continue
+                army = army_overrides[gid] if (army_overrides and gid in army_overrides) else roster.army_of(gid)
+                cur_total = (army.total if army else 0) + added_map.get(gid, 0)
+                army_pct = (cur_total / self.target_army.total) * 100.0
+                if army_pct < self.return_threshold:
+                    if self.ctx.notify:
+                        self.ctx.notify(
+                            f"⏳ [Quân lực] Võ tướng {g.name} quân số ({cur_total}/{self.target_army.total} = {army_pct:.0f}%) "
+                            f"dưới ngưỡng an toàn ({self.return_threshold}%), chờ bổ sung..."
+                        )
+                    return "waiting_troops"
+
+        return None
+
     def run_once(self) -> str:
         # 0. Kiểm tra tướng rảnh rỗi (Idle Check) nếu bật check_idle
         if self.check_idle and self.city_id:
@@ -614,81 +673,130 @@ class GoiDan:
                 and ((self.target_army.total > 0 and self.auto_recruit) or self.auto_morale)
             )
         )
-        if self.city_id and (needs_army_prep or self.auto_swap_tactician):
-            try:
-                roster = fetch_roster(
-                    self.ctx.gateway,
-                    only_base_ids=[self.city_id],
-                    include_civil=bool(self.auto_swap_tactician),
-                    include_cities=False,
-                )
-            except Exception:
-                roster = None
+        needs_threshold_check = bool(self.return_threshold > 0 and self.city_id)
+        roster = None
+        added_troops: dict[int, int] = {}
+        current_armies: dict[int, Optional[Army]] = {}
+        troops_balanced = False
+        prov_lock = getattr(getattr(self.ctx, "locks", None), "base_provision_lock", None)
+        with (prov_lock(self.city_id) if (self.city_id and callable(prov_lock)) else nullcontext()):
+            if self.city_id and (needs_army_prep or self.auto_swap_tactician or needs_threshold_check):
+                try:
+                    roster = fetch_roster(
+                        self.ctx.gateway,
+                        only_base_ids=[self.city_id],
+                        include_civil=bool(self.auto_swap_tactician),
+                        include_cities=False,
+                    )
+                except CaptchaRequired:
+                    raise
+                except Exception:
+                    roster = None
 
-            if self.auto_swap_tactician and roster is not None:
-                auto_swap_low_stamina_tacticians(
-                    gateway=self.ctx.gateway,
-                    roster=roster,
-                    base_id=self.city_id,
-                    general_ids=self.generals,
-                    min_stamina_pct=self.min_tactician_stamina,
-                    on_log=self.ctx.notify,
-                    stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
-                )
-
-            if needs_army_prep:
-                city_gens = (
-                    {g.id: g for g in roster.generals_of(self.city_id) if g.role == "vo"}
-                    if roster
-                    else {}
-                )
-
-                # Trị thương, San đều quân & Bổ sung lính
-                for gid in self.generals:
-                    self.provisioner.heal_general(self.city_id, gid)
-
-                current_armies: dict[int, Optional[Army]] = (
-                    {gid: roster.army_of(gid) for gid in self.generals} if roster else {}
-                )
-                troops_balanced = False
-                if self.even_troops and roster is not None:
-                    current_armies, troops_balanced = self.provisioner.balance_troops(
+                if self.auto_swap_tactician and roster is not None:
+                    auto_swap_low_stamina_tacticians(
+                        gateway=self.ctx.gateway,
+                        roster=roster,
                         base_id=self.city_id,
                         general_ids=self.generals,
-                        current_armies=current_armies,
-                        base_gens=city_gens,
+                        min_stamina_pct=self.min_tactician_stamina,
                         on_log=self.ctx.notify,
+                        stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
                     )
 
-                troops_added = False
-                for gid in self.generals:
-                    if self.auto_recruit and self.target_army and self.target_army.total > 0 and roster:
-                        cur_army = current_armies.get(gid)
-                        adj_res = self.provisioner.adjust_troops(
+                if needs_army_prep:
+                    if roster is not None and not getattr(roster, "has_reliable_armies", lambda _b: True)(self.city_id):
+                        if self.ctx.notify:
+                            self.ctx.notify(
+                                "⚠️ Không đọc được quân số từ máy chủ (/api/city/pagemytroopslist), bỏ qua san đều/biên chế chu kỳ này để tránh biên chế vượt định mức."
+                            )
+                        return "waiting_troops"
+                    city_gens = (
+                        {g.id: g for g in roster.generals_of(self.city_id) if g.role == "vo"}
+                        if roster
+                        else {}
+                    )
+
+                    # Trị thương, San đều quân & Bổ sung lính
+                    for gid in self.generals:
+                        self.provisioner.heal_general(self.city_id, gid)
+
+                    current_armies = (
+                        {gid: roster.army_of(gid) for gid in self.generals} if roster else {}
+                    )
+                    if self.even_troops and roster is not None:
+                        current_armies, troops_balanced = self.provisioner.balance_troops(
                             base_id=self.city_id,
-                            general_id=gid,
-                            current_army=cur_army,
-                            target_army=self.target_army,
-                            auto_recruit=True,
+                            general_ids=self.generals,
+                            current_armies=current_armies,
+                            base_gens=city_gens,
                             on_log=self.ctx.notify,
                         )
-                        if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
-                            troops_added = True
 
-                # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
-                if self.auto_morale and city_gens:
-                    trainer = MoraleTrainer(self.ctx.gateway)
-                    ready, wait_reasons = trainer.adjust_squad_morale(
-                        base_id=self.city_id,
-                        general_ids=self.generals,
-                        target_morale=self.min_morale,
-                        base_gens=city_gens,
-                        on_notify=self.ctx.notify,
-                        stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
-                        refresh_from_server=troops_added or troops_balanced,
-                    )
-                    if not ready:
-                        return "waiting_morale"
+                    troops_added = False
+                    troops_shortage = False
+                    comfort_attempted: set[int] = set()
+                    exhausted_cities: set[int] = set()
+                    for gid in self.generals:
+                        g = city_gens.get(gid)
+                        if (
+                            self.auto_recruit
+                            and self.target_army
+                            and self.target_army.total > 0
+                            and roster
+                            and not (g and g.upgrading_time > 0)
+                        ):
+                            cur_army = current_armies.get(gid)
+                            adj_res = self.provisioner.adjust_troops(
+                                base_id=self.city_id,
+                                general_id=gid,
+                                current_army=cur_army,
+                                target_army=self.target_army,
+                                auto_recruit=True,
+                                on_log=self.ctx.notify,
+                                comfort_attempted=comfort_attempted,
+                                exhausted_cities=exhausted_cities,
+                            )
+                            added_for_gid = sum(
+                                diff for _, diff, succ, _ in (adj_res or []) if succ and diff > 0
+                            )
+                            if added_for_gid > 0:
+                                added_troops[gid] = added_for_gid
+                                troops_added = True
+                            if has_population_shortage(adj_res):
+                                troops_shortage = True
+
+                    # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
+                    if self.auto_morale and city_gens:
+                        trainer = MoraleTrainer(self.ctx.gateway)
+                        ready, wait_reasons = trainer.adjust_squad_morale(
+                            base_id=self.city_id,
+                            general_ids=self.generals,
+                            target_morale=self.min_morale,
+                            base_gens=city_gens,
+                            on_notify=self.ctx.notify,
+                            stop_event=self.stop_event or getattr(self.ctx, "stop_event", None),
+                            refresh_from_server=troops_added or troops_balanced,
+                        )
+                        if not ready:
+                            return "waiting_morale"
+
+                    if self.auto_recruit and troops_shortage:
+                        if self.ctx.notify:
+                            self.ctx.notify(
+                                "⏳ [Biên chế từng phần] Chưa đủ Định Mức Biên Chế do thiếu dân/tân binh, "
+                                "chờ hồi Tăng Nhân Khẩu để bổ sung tiếp trước khi gọi/xuất quân..."
+                            )
+                        return "waiting_troops"
+
+        # 1.5. Kiểm tra ngưỡng an toàn thể lực / quân lực SAU khi biên chế và luyện sĩ khí
+        threshold_wait = self._check_safety_thresholds(
+            roster,
+            added_troops,
+            army_overrides=current_armies if troops_balanced else None,
+        )
+        if threshold_wait is not None:
+            return threshold_wait
 
         # 2. Chỉ đánh trực tiếp nếu đã có mục tiêu nằm sát thành; nếu ở xa phải gọi/kéo về trước
         target = self._find_existing_near_target()

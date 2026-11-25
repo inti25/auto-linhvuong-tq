@@ -4,22 +4,47 @@ from unittest.mock import MagicMock
 from linhvuong.gateway import GatewayClient
 from linhvuong.roster import Army, General
 from linhvuong.tasks.base import CaptchaRequired
-from linhvuong.troops import ArmyProvisioner, TargetArmy
+from linhvuong.troops import ArmyProvisioner, TargetArmy, has_population_shortage
 
 
 class FakeServer:
     def __init__(self, responses=None):
         self.responses = responses or {}
         self.calls = []
+        self.cookies = {"uid": "95"}
+
+    def _next_payload(self, endpoint):
+        aliases = {
+            "/api/city/pagearmament": "Common.ashx?id=27",
+            "/api/city/info": "City.ashx?id=6",
+        }
+        if endpoint in self.responses:
+            payload = self.responses[endpoint]
+        elif endpoint in aliases and aliases[endpoint] in self.responses:
+            payload = self.responses[aliases[endpoint]]
+        else:
+            payload = {"ret": 0}
+        if isinstance(payload, list):
+            return payload.pop(0) if payload else {"ret": 0}
+        return payload
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+        self.calls.append((path, dict(params or {})))
+        resp_data = self._next_payload(path)
+
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return resp_data
+
+        return Resp()
 
     def post(self, url, data=None, headers=None, timeout=None):
         endpoint = url.split("/GateWay/")[1]
         self.calls.append((endpoint, dict(data)))
-        payload = self.responses.get(endpoint, {"ret": 0})
-        if isinstance(payload, list):
-            resp_data = payload.pop(0) if payload else {"ret": 0}
-        else:
-            resp_data = payload
+        resp_data = self._next_payload(endpoint)
 
         class Resp:
             status_code = 200
@@ -31,7 +56,7 @@ class FakeServer:
 
 def make_provisioner(responses=None):
     server = FakeServer(responses)
-    client = GatewayClient(57, server, sleep=lambda s: None)
+    client = GatewayClient(58, server, sleep=lambda s: None)
     return ArmyProvisioner(client, sleep_fn=lambda s: None), server
 
 
@@ -431,6 +456,598 @@ def test_balance_troops_morale_water_filling_assortative_empty_and_replan():
     assert ok_calls[0]["lFromGeneralID"] == "1"
     assert ok_calls[0]["lToGeneralID"] == "3"
     assert ok_calls[0]["cavalry"] == "500"
+
+
+def test_check_idle_population_parses_city_info_and_legacy_list_and_clamps_negative():
+    prov, _ = make_provisioner({"/api/city/info": {"ret": 0, "population": [123944, 123944, 21399, 94966, 7579]}})
+    assert prov.check_idle_population(15230) == 7579
+
+    prov_neg, _ = make_provisioner({"/api/city/info": {"ret": 0, "population": [100, 100, 80, 30, -10]}})
+    assert prov_neg.check_idle_population(15230) == 0
+
+    prov_dict, _ = make_provisioner({"/api/city/info": {"ret": 0, "data": {"m_lpopulation_idle_man": 133680}}})
+    assert prov_dict.check_idle_population(10129) == 133680
+
+    prov_cap, _ = make_provisioner({"/api/city/info": {"ret": 110}})
+    with pytest.raises(CaptchaRequired):
+        prov_cap.check_idle_population(15230)
+
+
+def test_comfort_population_cooldown_900s_on_success_and_60s_on_ret55():
+    now = [0.0]
+    server = FakeServer({"OPT.ashx?id=4": [{"ret": 0}, {"ret": 55}, {"ret": 0}]})
+    client = GatewayClient(58, server, sleep=lambda s: None)
+    prov = ArmyProvisioner(client, sleep_fn=lambda s: None, clock_fn=lambda: now[0])
+
+    # Lần 1 thành công (ret=0) -> khóa 900s
+    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (True, 0)
+    assert len(server.calls) == 1
+
+    # Trước 900s -> không gửi request lên server
+    now[0] = 899.0
+    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (False, 55)
+    assert len(server.calls) == 1
+
+    # Đúng 900s -> gửi lại; giả sử trả ret=55 -> khóa 60s
+    now[0] = 900.0
+    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (False, 55)
+    assert len(server.calls) == 2
+
+    now[0] = 959.0
+    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (False, 55)
+    assert len(server.calls) == 2
+
+    now[0] = 960.0
+    assert prov.comfort_population(15230, ltype=4, respect_cooldown=True) == (True, 0)
+    assert len(server.calls) == 3
+
+
+def test_adjust_troops_partial_fill_after_comfort_cooldown_and_multi_general_sequential():
+    # 3 tướng mỗi tướng thiếu 2000 Bộ; kho có 500 tân binh; Tăng Nhân Khẩu đang hồi (ret=55); dân rảnh = 2500
+    state = {"recruits": 500, "idle_pop": 2500, "assigned": {1: 0, 2: 0, 3: 0}}
+
+    class StatefulServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}}
+            elif path == "/api/city/info":
+                resp = {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            ep = url.split("/GateWay/")[1]
+            self.calls.append((ep, dict(data or {})))
+            if ep == "OPT.ashx?id=4":
+                resp = {"ret": 55}
+            elif ep == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 34}
+            elif ep == "OPT.ashx?id=6":
+                gid = int(data["lGeneralID"])
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["assigned"][gid] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 53}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+    srv = StatefulServer()
+    prov = ArmyProvisioner(GatewayClient(58, srv, sleep=lambda s: None), sleep_fn=lambda s: None)
+    comfort_attempted = set()
+    exhausted = set()
+    target = TargetArmy(infantry=2000)
+
+    r1 = prov.adjust_troops(15230, 1, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
+    r2 = prov.adjust_troops(15230, 2, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
+    r3 = prov.adjust_troops(15230, 3, Army(0, 0, 0), target, comfort_attempted=comfort_attempted, exhausted_cities=exhausted)
+
+    # Tướng 1 nhận đủ 2000 (500 kho + 1500 mua), Tướng 2 nhận phần còn lại 1000 và báo thiếu 1000, Tướng 3 bỏ qua vì thành đã cạn dân
+    assert r1 == [(1, 2000, True, 0)]
+    assert r2 == [(1, 1000, True, 0), (1, 1000, False, 34)]
+    assert r3 == [(1, 2000, False, 34)]
+    assert state["assigned"] == {1: 2000, 2: 1000, 3: 0}
+    assert state["idle_pop"] == 0
+    assert state["recruits"] == 0
+    assert sum(1 for ep, _ in srv.calls if ep == "OPT.ashx?id=4") == 1
+    assert not any(ep == "OPT.ashx?id=6" and d["lGeneralID"] == "3" for ep, d in srv.calls)
+    assert has_population_shortage(r2) is True
+    assert has_population_shortage(r1) is False
+
+
+def test_adjust_troops_partial_fill_after_comfort_success_still_insufficient():
+    responses = {
+        "/api/city/pagearmament": {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", 0]]}},
+        "OPT.ashx?id=4": {"ret": 0},
+        "/api/city/info": {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": 1200}},
+        # Thử 3000 (ret=34) -> Tăng Nhân Khẩu -> thử lại 3000 (vẫn ret=34) -> mua 1200 (ret=0)
+        "OPT.ashx?id=41": [{"ret": 34}, {"ret": 34}, {"ret": 0}],
+        # Thử biên chế 3000 (ret=53) -> biên chế 1200 (ret=0)
+        "OPT.ashx?id=6": [{"ret": 53}, {"ret": 0}],
+    }
+    prov, srv = make_provisioner(responses)
+    logs = []
+    res = prov.adjust_troops(15230, 101, Army(0, 0, 0), TargetArmy(infantry=3000), on_log=logs.append)
+    assert res == [(1, 1200, True, 0), (1, 1800, False, 34)]
+    opt41 = [d["lAmount"] for ep, d in srv.calls if ep == "OPT.ashx?id=41"]
+    assert opt41 == ["3000", "3000", "1200"]
+    opt6 = [d["lAmount"] for ep, d in srv.calls if ep == "OPT.ashx?id=6"]
+    assert opt6 == ["3000", "1200"]
+    assert any("Biên chế từng phần" in m for m in logs)
+
+
+def test_adjust_troops_anti_micro_drip_guard_while_waiting_but_finishes_small_tail():
+    now = [0.0]
+    state = {"recruits": 0, "idle_pop": 0}
+
+    class DripServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}}
+            elif path == "/api/city/info":
+                resp = {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            ep = url.split("/GateWay/")[1]
+            self.calls.append((ep, dict(data or {})))
+            if ep == "OPT.ashx?id=4":
+                resp = {"ret": 55}
+            elif ep == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 34}
+            elif ep == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 53}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+    srv = DripServer()
+    prov = ArmyProvisioner(GatewayClient(58, srv, sleep=lambda s: None), sleep_fn=lambda s: None, clock_fn=lambda: now[0])
+
+    # Lượt 1: cạn dân -> đánh dấu đang chờ dân và khóa comfort 60s
+    r1 = prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=1000))
+    assert r1 == [(1, 1000, False, 34)]
+
+    # Lượt 2 (10s sau): dân tự tăng nhỏ giọt 15 (< 50) -> bỏ qua không mua/biên chế lắt nhắt
+    now[0] = 10.0
+    state["idle_pop"] = 15
+    srv.calls.clear()
+    r2 = prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=1000))
+    assert r2 == [(1, 1000, False, 34)]
+    assert not any(ep == "OPT.ashx?id=41" for ep, _ in srv.calls)
+
+    # Lượt 3: chỉ còn thiếu 30 để đạt 100% và dân = 30 -> vẫn mua & biên chế dứt điểm!
+    now[0] = 20.0
+    state["idle_pop"] = 30
+    srv.calls.clear()
+    r3 = prov.adjust_troops(15230, 1, Army(970, 0, 0), TargetArmy(infantry=1000))
+    assert r3 == [(1, 30, True, 0)]
+    assert has_population_shortage(r3) is False
+
+
+def test_adjust_troops_non_shortage_error_not_flagged_as_population_shortage():
+    prov42, _ = make_provisioner({"OPT.ashx?id=6": {"ret": 42}})
+    r42 = prov42.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=500))
+    assert r42 == [(1, 500, False, 42)]
+    assert has_population_shortage(r42) is False
+
+    prov43, _ = make_provisioner({"OPT.ashx?id=6": {"ret": 43}})
+    r43 = prov43.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=500))
+    assert r43 == [(1, 500, False, 43)]
+    assert has_population_shortage(r43) is False
+
+
+def test_adjust_troops_partial_assign_preserves_non_population_buy_error_32_33():
+    responses = {
+        "/api/city/pagearmament": {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", 300]]}},
+        "OPT.ashx?id=41": {"ret": 32},
+        "OPT.ashx?id=6": [{"ret": 53}, {"ret": 0}],
+    }
+    prov, _ = make_provisioner(responses)
+    exhausted = set()
+    res = prov.adjust_troops(
+        15230,
+        1,
+        Army(0, 0, 0),
+        TargetArmy(infantry=1000),
+        exhausted_cities=exhausted,
+    )
+    assert res == [(1, 300, True, 0), (1, 700, False, 32)]
+    assert has_population_shortage(res) is False
+    assert not prov._waiting_population.get(15230, False)
+    assert 15230 not in exhausted
+
+
+def test_adjust_troops_small_branch_during_waiting_does_not_clear_guard_for_next_branch():
+    now = [0.0]
+    state = {"recruits": 0, "idle_pop": 0, "assigned": {1: 0, 2: 0}}
+
+    class MultiBranchServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}}
+            elif path == "/api/city/info":
+                resp = {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            ep = url.split("/GateWay/")[1]
+            self.calls.append((ep, dict(data or {})))
+            if ep == "OPT.ashx?id=4":
+                resp = {"ret": 55}
+            elif ep == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 34}
+            elif ep == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                stype = int(data["lSoldierType"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["assigned"][stype] = state["assigned"].get(stype, 0) + amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 53}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+    srv = MultiBranchServer()
+    prov = ArmyProvisioner(GatewayClient(58, srv, sleep=lambda s: None), sleep_fn=lambda s: None, clock_fn=lambda: now[0])
+
+    # Lượt 1: đánh dấu đang chờ dân & khóa comfort 60s
+    r1 = prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(cavalry=5000))
+    assert r1 == [(2, 5000, False, 34)]
+
+    # Lượt 2 (10s sau): idle_pop=25, Bộ thiếu 20 (<50) và Kỵ thiếu 5000
+    now[0] = 10.0
+    state["idle_pop"] = 25
+    res = prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=20, cavalry=5000))
+    assert res == [(1, 20, True, 0), (2, 5000, False, 34)]
+    assert state["idle_pop"] == 5
+    assert state["assigned"] == {1: 20, 2: 0}
+
+
+def test_adjust_troops_micro_drip_guard_does_not_block_next_general_small_tail():
+    now = [0.0]
+    state = {"recruits": 0, "idle_pop": 0, "assigned": {1: 0, 2: 0}}
+
+    class SmallTailServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}}
+            elif path == "/api/city/info":
+                resp = {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            ep = url.split("/GateWay/")[1]
+            self.calls.append((ep, dict(data or {})))
+            if ep == "OPT.ashx?id=4":
+                resp = {"ret": 55}
+            elif ep == "OPT.ashx?id=41":
+                resp = {"ret": 34}
+            elif ep == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                gid = int(data["lGeneralID"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["assigned"][gid] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 53}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+    srv = SmallTailServer()
+    prov = ArmyProvisioner(GatewayClient(58, srv, sleep=lambda s: None), sleep_fn=lambda s: None, clock_fn=lambda: now[0])
+    prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=5000))
+
+    now[0] = 10.0
+    state["recruits"] = 30
+    exhausted = set()
+    r1 = prov.adjust_troops(15230, 1, Army(0, 0, 0), TargetArmy(infantry=5000), exhausted_cities=exhausted)
+    r2 = prov.adjust_troops(15230, 2, Army(0, 0, 0), TargetArmy(infantry=20), exhausted_cities=exhausted)
+    assert r1 == [(1, 5000, False, 34)]
+    assert r2 == [(1, 20, True, 0)]
+    assert state["recruits"] == 10
+    assert state["assigned"] == {1: 0, 2: 20}
+
+
+def test_provision_camp_generals_with_parent_city_respects_apply_min_batch_guard_false():
+    now = [0.0]
+    state = {"recruits": 0, "idle_pop": 20, "assigned": 0}
+
+    class CampManualServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}}
+            elif path == "/api/city/info":
+                resp = {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            ep = url.split("/GateWay/")[1]
+            self.calls.append((ep, dict(data or {})))
+            if ep == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 34}
+            elif ep == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["assigned"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 53}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+    srv = CampManualServer()
+    prov = ArmyProvisioner(GatewayClient(58, srv, sleep=lambda s: None), sleep_fn=lambda s: None, clock_fn=lambda: now[0])
+    prov._waiting_population[15230] = True
+    prov._comfort_next_allowed[15230] = now[0] + 500.0
+
+    prov.provision_camp_generals_with_parent_city(
+        camp_id=-101,
+        parent_city_id=15230,
+        general_ids=[417506],
+        target_army=TargetArmy(infantry=1000),
+        current_armies={417506: Army(0, 0, 0)},
+        apply_min_batch_guard=False,
+    )
+    assert state["assigned"] == 20
+
+
+def test_adjust_troops_partial_by_equipment_on_ret42_single_and_double_slot():
+    # Case A: Ngựa 1 ô (406), kho có 27006逾辉马, diff=43373 -> OPT.ashx?id=6 lần đầu ret=42 -> biên chế từng phần 27006
+    c27_a = {
+        "ret": 0,
+        "data": {
+            "ret": 0,
+            "list": [[21936, "ThienCo", 50000, [[8025897, "讨逆盔甲"]], [[27006, "逾辉马"]]]],
+        },
+    }
+    c12_a = {
+        "ret": 0,
+        "cavalry_equip": [27627, 406, "逾辉马", 0, "", 306, "讨逆盔甲"],
+    }
+    prov_a, srv_a = make_provisioner(
+        {
+            "/api/city/pagearmament": c27_a,
+            "Common.ashx?id=12": c12_a,
+            "OPT.ashx?id=6": [{"ret": 42}, {"ret": 0}],
+        }
+    )
+    res_a = prov_a.adjust_troops(21936, 106412, Army(0, 27627, 0), TargetArmy(cavalry=71000))
+    assert res_a == [(2, 27006, True, 0), (2, 16367, False, 42)]
+    assert has_population_shortage(res_a) is False
+    assert [d["lAmount"] for ep, d in srv_a.calls if ep == "OPT.ashx?id=6"] == ["43373", "27006"]
+
+    # Case B: Ngựa gắn cả 2 ô (406, 406, 306) -> 27006 vẫn ret=42 -> lùi xuống 13503 thành công
+    c12_b = {
+        "ret": 0,
+        "cavalry_equip": [27627, 406, "逾辉马", 406, "逾辉马", 306, "讨逆盔甲"],
+    }
+    prov_b, srv_b = make_provisioner(
+        {
+            "/api/city/pagearmament": c27_a,
+            "Common.ashx?id=12": c12_b,
+            "OPT.ashx?id=6": [{"ret": 42}, {"ret": 42}, {"ret": 0}],
+        }
+    )
+    res_b = prov_b.adjust_troops(21936, 106412, Army(0, 27627, 0), TargetArmy(cavalry=71000))
+    assert res_b == [(2, 13503, True, 0), (2, 29870, False, 42)]
+    assert [d["lAmount"] for ep, d in srv_b.calls if ep == "OPT.ashx?id=6"] == ["43373", "27006", "13503"]
+
+    # Case C: Gặp ret=42 khi thử đủ diff, hạ xuống mức quân giới 27006 lại thiếu tân binh (ret=53) -> tự chiêu mộ từ dân nhàn rỗi và biên chế 25000
+    state_c = {"recruits": 5000, "idle_pop": 20000, "assigned": 0}
+
+    class EquipAndPopServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((path, dict(params or {})))
+            if path == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[21936, "ThienCo", state_c["recruits"], [[8025897, "讨逆盔甲"]], [[27006, "逾辉马"]]]]}}
+            elif path == "/api/city/info":
+                resp = {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state_c["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            ep = url.split("/GateWay/")[1]
+            self.calls.append((ep, dict(data or {})))
+            if ep == "Common.ashx?id=12":
+                resp = c12_a
+            elif ep == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state_c["idle_pop"]:
+                    state_c["idle_pop"] -= amt
+                    state_c["recruits"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 34}
+            elif ep == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt > 27006:
+                    resp = {"ret": 42}
+                elif amt <= state_c["recruits"]:
+                    state_c["recruits"] -= amt
+                    state_c["assigned"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 53}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+    srv_c = EquipAndPopServer()
+    prov_c = ArmyProvisioner(GatewayClient(58, srv_c, sleep=lambda s: None), sleep_fn=lambda s: None)
+    res_c = prov_c.adjust_troops(21936, 106412, Army(0, 27627, 0), TargetArmy(cavalry=71000))
+    assert res_c == [(2, 25000, True, 0), (2, 18373, False, 34)]
+    assert state_c["assigned"] == 25000
+    assert state_c["recruits"] == 0
+    assert state_c["idle_pop"] == 0
+
 
 
 

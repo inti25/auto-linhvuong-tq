@@ -287,6 +287,8 @@ class BaseBinhManConfig:
     camp_id: str = ""
     parent_city_id: str = ""
     threshold: str = "30"
+    stamina_threshold: str = "30"
+    army_threshold: str = "30"
     mantypes: str = "7,8,9,10"
     target_types: list[int] = field(default_factory=lambda: [7, 8, 9, 10])
     generals: list[int] = field(default_factory=list)
@@ -323,6 +325,10 @@ class BaseBinhManConfig:
         raw_gens = data.get("generals", [])
         gens = [int(x) for x in raw_gens if str(x).isdigit()] if isinstance(raw_gens, list) else []
 
+        legacy_thresh = str(data.get("threshold", "30"))
+        stamina_thresh = str(data.get("stamina_threshold", legacy_thresh))
+        army_thresh = str(data.get("army_threshold", legacy_thresh))
+
         return cls(
             name=str(data.get("name", "")),
             enabled=bool(data.get("enabled", False)),
@@ -334,7 +340,9 @@ class BaseBinhManConfig:
             interval=str(data.get("interval", "15")),
             camp_id=str(data.get("camp_id", "")),
             parent_city_id=str(data.get("parent_city_id", "")),
-            threshold=str(data.get("threshold", "30")),
+            threshold=legacy_thresh if "threshold" in data else army_thresh,
+            stamina_threshold=stamina_thresh,
+            army_threshold=army_thresh,
             mantypes=mantypes,
             target_types=t_types,
             generals=gens,
@@ -363,6 +371,8 @@ class BinhManProfile:
     camp_id: str = ""
     parent_city_id: str = ""
     threshold: str = "30"
+    stamina_threshold: str = "30"
+    army_threshold: str = "30"
     mantypes: str = "7,8,9,10"
     target_types: list[int] = field(default_factory=lambda: [7, 8, 9, 10])
     generals: list[int] = field(default_factory=list)
@@ -407,6 +417,10 @@ class BinhManProfile:
         cbid = data.get("current_base_id")
         current_base_id = int(cbid) if cbid is not None and str(cbid).lstrip("-").isdigit() else None
 
+        legacy_thresh = str(data.get("threshold", "30"))
+        stamina_thresh = str(data.get("stamina_threshold", legacy_thresh))
+        army_thresh = str(data.get("army_threshold", legacy_thresh))
+
         return cls(
             mode=int(data.get("mode", 1)),
             radius=str(data.get("radius", "5")),
@@ -416,7 +430,9 @@ class BinhManProfile:
             interval=str(data.get("interval", "15")),
             camp_id=str(data.get("camp_id", "")),
             parent_city_id=str(data.get("parent_city_id", "")),
-            threshold=str(data.get("threshold", "30")),
+            threshold=legacy_thresh if "threshold" in data else army_thresh,
+            stamina_threshold=stamina_thresh,
+            army_threshold=army_thresh,
             mantypes=mantypes,
             target_types=t_types,
             generals=gens,

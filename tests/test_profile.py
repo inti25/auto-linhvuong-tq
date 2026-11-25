@@ -538,9 +538,9 @@ def test_auto_swap_tactician_profile_defaults_and_roundtrip(tmp_path):
         min_tactician_stamina="35",
     )
 
-    store = ProfileStore(tmp_path / "profiles.json")
-    store.save("acc @ S58", prof)
-    reloaded = Profile.from_dict(store.get("acc @ S58").to_dict())
+    path = tmp_path / "profiles.json"
+    ProfileStore.save(prof, path)
+    reloaded = ProfileStore.load(path)
 
     assert reloaded.goi_dan.auto_swap_tactician is True
     assert reloaded.goi_dan.min_tactician_stamina == "45"
@@ -611,6 +611,57 @@ def test_even_troops_profile_defaults_and_roundtrip():
     assert loaded.goi_dan.even_troops is True
     assert loaded.binh_man.even_troops is True
     assert loaded.binh_man.bases["101"].even_troops is True
+
+
+def test_binh_man_split_stamina_and_army_thresholds_roundtrip_and_legacy_migration():
+    from linhvuong.profile import BaseBinhManConfig
+
+    # Hồ sơ cũ chỉ có "threshold" phải tự động ánh xạ sang cả 2 ngưỡng mới
+    legacy_prof = Profile.from_dict(
+        {
+            "binh_man": {
+                "threshold": "45",
+                "bases": {
+                    "15230": {"mode": 2, "threshold": "45"},
+                },
+            }
+        }
+    )
+    assert legacy_prof.binh_man.stamina_threshold == "45"
+    assert legacy_prof.binh_man.army_threshold == "45"
+    assert legacy_prof.binh_man.bases["15230"].stamina_threshold == "45"
+    assert legacy_prof.binh_man.bases["15230"].army_threshold == "45"
+
+    # Hồ sơ mới giữ độc lập stamina_threshold và army_threshold qua from_dict / to_dict
+    new_prof = Profile.from_dict(
+        {
+            "binh_man": {
+                "stamina_threshold": "20",
+                "army_threshold": "60",
+                "bases": {
+                    "15230": {
+                        "mode": 2,
+                        "stamina_threshold": "20",
+                        "army_threshold": "60",
+                    }
+                },
+            }
+        }
+    )
+    assert new_prof.binh_man.stamina_threshold == "20"
+    assert new_prof.binh_man.army_threshold == "60"
+    d = new_prof.to_dict()
+    assert d["binh_man"]["stamina_threshold"] == "20"
+    assert d["binh_man"]["army_threshold"] == "60"
+    assert d["binh_man"]["bases"]["15230"]["stamina_threshold"] == "20"
+    assert d["binh_man"]["bases"]["15230"]["army_threshold"] == "60"
+
+    base_cfg = BaseBinhManConfig.from_dict({"stamina_threshold": "15", "army_threshold": "75"})
+    assert base_cfg.stamina_threshold == "15"
+    assert base_cfg.army_threshold == "75"
+    assert base_cfg.to_dict()["stamina_threshold"] == "15"
+    assert base_cfg.to_dict()["army_threshold"] == "75"
+
 
 
 

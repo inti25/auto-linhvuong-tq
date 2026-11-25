@@ -314,3 +314,44 @@ def test_fetch_roster_resolves_tacticians_for_zero_troop_martial_generals():
     assert [d["lGeneralID"] for _, d in session.post_calls] == ["6331"]
     assert (by_id[15061].stat1, by_id[15061].stat2, by_id[15061].stat3, by_id[15061].skill_point) == (58, 70, 75, 219)
     assert (by_id[6330].stat1, by_id[6330].stat2, by_id[6330].stat3, by_id[6330].skill_point) == (890, 136, 746, 3)
+
+
+def test_fetch_roster_marks_unreliable_armies_when_pagemytroopslist_fails():
+    class _FailTroopsSession:
+        def __init__(self, troops_resp):
+            self.troops_resp = troops_resp
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            if path == "/api/city/list":
+                return Resp({"ret": 0, "data": {"items": [{"m_ltype": 1, "m_lid": 22040, "m_szname": "ThienCo5", "m_lx_pos": 10, "m_ly_pos": 10}]}})
+            if path == "/api/city/pageofficial":
+                if int(p.get("heroType", 2)) == 2:
+                    return Resp(
+                        {
+                            "ret": 0,
+                            "data": {
+                                "ret": 0,
+                                "list": [[22040, "ThienCo5", 10, 10, [[104488, "TC5_10", "", 2, 0, 0, 10, 100, 1750, 1750, 0]]]],
+                            },
+                        }
+                    )
+                return Resp({"ret": 0, "data": {"ret": 0, "list": []}})
+            if path == "/api/city/pagemytroopslist":
+                return Resp(self.troops_resp)
+            return Resp({"ret": 0})
+
+    for bad_resp in ({"ret": 198599}, {"ret": 1}):
+        gw = GatewayClient(58, _FailTroopsSession(bad_resp), sleep=lambda s: None)
+        r = fetch_roster(gw, only_base_ids=[22040], include_civil=False, include_cities=False)
+        assert r.has_reliable_armies(22040) is False
+        assert r.army_of(104488) is None
+
+    # Mạng lỗi hoàn toàn (page_mytroops_list trả về None)
+    gw_none = GatewayClient(58, _FailTroopsSession(None), sleep=lambda s: None)
+    r_none = fetch_roster(gw_none, only_base_ids=[22040], include_civil=False, include_cities=False)
+    assert r_none.has_reliable_armies(22040) is False
+    assert r_none.army_of(104488) is None
+

@@ -1344,3 +1344,395 @@ def test_binh_man_even_troops_balances_before_recruit_and_refreshes_morale():
     )
     assert task_off.run_once() == "attacked"
     assert not any(k == "OPT.ashx?id=39" for k, _ in server.calls)
+
+
+def test_binh_man_city_partial_provision_trains_morale_and_waits_for_100pct_before_marching():
+    from linhvuong.troops import ArmyProvisioner, TargetArmy
+
+    state = {"recruits": 0, "idle_pop": 1000, "troops": 4000, "morale": 85, "comfort_ok": False}
+
+    class StatefulServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/map/query":
+                return Resp({"npc_tent": [man(10, 10, 999, 7)]})
+            if path == "/api/city/pageofficial":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", 0, 0, [[10, "G10", "", 2, 0, 0, 4, 100, 240, 240, 0]]]]}})
+            if path == "/api/city/pagemytroopslist":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, state["morale"], 0, 0]]]]}})
+            if path == "/api/city/pagearmament":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", state["recruits"]]]}})
+            if path == "/api/city/info":
+                return Resp({"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}})
+            return Resp({"ret": 0})
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((key, dict(data or {})))
+            if key == "OPT.ashx?id=4":
+                if not state["comfort_ok"]:
+                    return Resp({"ret": 55})
+                state["idle_pop"] += 1500
+                return Resp({"ret": 0})
+            if key == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 34})
+            if key == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["troops"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 53})
+            if key == "OPT.ashx?id=47":
+                state["morale"] = min(100, state["morale"] + int(data["lAddPoint"]))
+                return Resp({"ret": 0})
+            if key == "OPT.ashx?id=53":
+                return Resp({"ret": 0})
+            return Resp({"ret": 0})
+
+    clock = [0.0]
+    srv = StatefulServer()
+    ctx, alerts = ctx_for(srv)
+    prov = ArmyProvisioner(ctx.gateway, sleep_fn=lambda s: None, clock_fn=lambda: clock[0])
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=6000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        return_threshold=30,  # Dù 5000/6000 = 83% > 30% vẫn phải chờ đủ 100%
+        sleep_fn=lambda s: None,
+        provisioner=prov,
+    )
+
+    out1 = task.run_once()
+    assert out1 in ("waiting_morale", "waiting_troops")
+    assert state["troops"] == 5000
+    assert any(k == "OPT.ashx?id=47" for k, _ in srv.calls)
+    assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+    if out1 == "waiting_morale":
+        out1b = task.run_once()
+        assert out1b == "waiting_troops"
+        assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+    clock[0] = 100.0
+    state["comfort_ok"] = True
+    state["morale"] = 96
+    out2 = task.run_once()
+    assert out2 == "attacked"
+    assert state["troops"] == 6000
+    assert any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+
+def test_binh_man_recover_in_city_partial_provision_still_trains_morale_below_threshold():
+    from linhvuong.troops import ArmyProvisioner, TargetArmy
+
+    state = {"recruits": 0, "idle_pop": 1000, "troops": 0, "morale": 85}
+
+    class BelowThreshServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/city/pageofficial":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", 0, 0, [[10, "G10", "", 2, 0, 0, 4, 100, 240, 240, 0]]]]}})
+            if path == "/api/city/pagemytroopslist":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, state["morale"], 0, 0]]]]}})
+            if path == "/api/city/pagearmament":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", state["recruits"]]]}})
+            if path == "/api/city/info":
+                return Resp({"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}})
+            return Resp({"ret": 0})
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((key, dict(data or {})))
+            if key == "OPT.ashx?id=4":
+                return Resp({"ret": 55})
+            if key == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 34})
+            if key == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["troops"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 53})
+            if key == "OPT.ashx?id=47":
+                state["morale"] = min(100, state["morale"] + int(data["lAddPoint"]))
+                return Resp({"ret": 0})
+            return Resp({"ret": 0})
+
+    srv = BelowThreshServer()
+    ctx, _ = ctx_for(srv)
+    prov = ArmyProvisioner(ctx.gateway, sleep_fn=lambda s: None)
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=6000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        return_threshold=30,
+        sleep_fn=lambda s: None,
+        provisioner=prov,
+    )
+
+    out = task.run_once(remaining_percent=10.0)
+    assert out == "recovered_in_city"
+    assert state["troops"] == 1000
+    assert any(k == "OPT.ashx?id=47" for k, _ in srv.calls)
+    assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+
+def test_binh_man_recover_in_city_trains_morale_when_auto_recruit_false():
+    from linhvuong.troops import ArmyProvisioner, TargetArmy
+
+    calls_morale = []
+
+    class RecruitOffServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/city/pageofficial":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", 0, 0, [[10, "G10", "", 2, 0, 0, 4, 100, 240, 240, 0]]]]}})
+            if path == "/api/city/pagemytroopslist":
+                return Resp({"ret": 0, "data": {"ret": 0, "list": [[1001, "C", [[10, "G10", 0, "", 0, 0, 2000, 0, 0, 80, 0, 0]]]]}})
+            return Resp({"ret": 0})
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            self.calls.append((key, dict(data or {})))
+            if key == "OPT.ashx?id=47":
+                calls_morale.append(dict(data or {}))
+                return Resp({"ret": 0})
+            return Resp({"ret": 0})
+
+    srv = RecruitOffServer()
+    ctx, _ = ctx_for(srv)
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=2000),
+        auto_recruit=False,
+        even_troops=False,
+        auto_morale=True,
+        min_morale=95,
+        return_threshold=30,
+        sleep_fn=lambda s: None,
+        provisioner=ArmyProvisioner(ctx.gateway, sleep_fn=lambda s: None),
+    )
+
+    out = task.run_once(remaining_percent=10.0)
+    assert out == "recovered_in_city"
+    assert len(calls_morale) == 1
+    assert calls_morale[0]["lGeneralID"] == "10"
+
+
+def test_binh_man_independent_stamina_and_army_thresholds():
+    from linhvuong.troops import TargetArmy
+
+    state = {"stamina": 40, "troops": 2000}
+
+    def _make_server():
+        class SplitServer:
+            def __init__(self):
+                self.calls = []
+                self.cookies = {"uid": "95"}
+
+            def get(self, url, params=None, headers=None, timeout=None):
+                path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+                p = dict(params or {})
+                self.calls.append((path, p))
+                if path == "/api/map/query":
+                    return Resp({"npc_tent": [man(10, 10, 999, 7)]})
+                if path == "/api/city/pageofficial":
+                    return Resp(
+                        {
+                            "ret": 0,
+                            "data": {
+                                "ret": 0,
+                                "list": [
+                                    [1001, "C", 0, 0, [[10, "G10", "", 2, 0, 0, 4, 100, state["stamina"], 100, 0]]],
+                                    [-2001, "T", 0, 0, [[10, "G10", "", 2, 0, 0, 4, 100, state["stamina"], 100, 0]]],
+                                ],
+                            },
+                        }
+                    )
+                if path == "/api/city/pagemytroopslist":
+                    return Resp(
+                        {
+                            "ret": 0,
+                            "data": {
+                                "ret": 0,
+                                "list": [
+                                    [1001, "C", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, 100, 0, 0]]],
+                                    [-2001, "T", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, 100, 0, 0]]],
+                                ],
+                            },
+                        }
+                    )
+                return Resp({"ret": 0})
+
+            def post(self, url, data=None, headers=None, timeout=None):
+                key = url.split("/GateWay/")[1] if "/GateWay/" in url else "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+                self.calls.append((key, dict(data or {})))
+                if key == "OPT.ashx?id=6" and str((data or {}).get("tid")) == "-2001":
+                    return Resp({"ret": 53})
+                return Resp({"ret": 0})
+
+        return SplitServer()
+
+    # Case 1: stamina_threshold=50, army_threshold=10 (thể lực 40% < 50%, quân 20% > 10%)
+    srv1 = _make_server()
+    ctx1, _ = ctx_for(srv1)
+    t1 = BinhMan(
+        ctx1,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=1,
+        camp_id=-2001,
+        parent_city_id=1001,
+        target_army=TargetArmy(cavalry=10000),
+        auto_recruit=True,
+        auto_morale=False,
+        stamina_threshold=50,
+        army_threshold=10,
+        sleep_fn=lambda s: None,
+    )
+    assert t1.run_once() == "waiting_stamina"
+    assert not any(k == "OPT.ashx?id=50" for k, _ in srv1.calls)
+
+    # Case 2: stamina_threshold=0, army_threshold=50 trong Doanh trại (Mode 1)
+    state["stamina"] = 10
+    state["troops"] = 4000
+    srv2 = _make_server()
+    ctx2, _ = ctx_for(srv2)
+    t2 = BinhMan(
+        ctx2,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=1,
+        camp_id=-2001,
+        parent_city_id=1001,
+        target_army=TargetArmy(cavalry=10000),
+        auto_recruit=True,
+        auto_morale=False,
+        stamina_threshold=0,
+        army_threshold=50,
+        sleep_fn=lambda s: None,
+    )
+    assert t2.run_once() == "retreated_below_threshold"
+    assert any(k == "OPT.ashx?id=50" for k, _ in srv2.calls)
+
+    state["troops"] = 8000
+    srv2.calls.clear()
+    assert t2.run_once() == "attacked"
+
+    # Case 3: Mode 2 Thành với auto_recruit=False, stamina_threshold=0, army_threshold=50
+    state["stamina"] = 10
+    state["troops"] = 4000
+    srv3 = _make_server()
+    ctx3, _ = ctx_for(srv3)
+    t3 = BinhMan(
+        ctx3,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=10000),
+        auto_recruit=False,
+        auto_morale=False,
+        stamina_threshold=0,
+        army_threshold=50,
+        sleep_fn=lambda s: None,
+    )
+    assert t3.run_once() == "waiting_troops"
+    state["troops"] = 6000
+    assert t3.run_once() == "attacked"
+
+
+def test_binh_man_skips_provisioning_when_troops_list_fails_preventing_over_provision():
+    from linhvuong.troops import TargetArmy
+
+    for bad_troops in ({"ret": 198599}, {"ret": 1}):
+        server = FakeServer(
+            handlers={
+                "/api/city/pageofficial": {
+                    "ret": 0,
+                    "data": {
+                        "ret": 0,
+                        "list": [[22040, "ThienCo5", 10, 10, [[104488, "TC5_10", "", 2, 0, 0, 10, 100, 1750, 1750, 0]]]],
+                    },
+                },
+                "/api/city/pagemytroopslist": bad_troops,
+            }
+        )
+        ctx, logs = ctx_for(server)
+        task = BinhMan(
+            ctx,
+            generals=[104488],
+            origin=(10, 10),
+            radius=5,
+            man_types=[7],
+            mode=2,
+            city_id=22040,
+            target_army=TargetArmy(cavalry=37000),
+            auto_recruit=True,
+            auto_morale=True,
+            even_troops=True,
+            sleep_fn=lambda s: None,
+        )
+        out = task.run_once()
+        assert out == "waiting_troops"
+        assert not any(k in ("OPT.ashx?id=6", "OPT.ashx?id=39", "OPT.ashx?id=41") for k, _ in server.calls)
+        assert any("pagemytroopslist" in msg for msg in logs)
+

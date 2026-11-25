@@ -1,5 +1,6 @@
 """Tab Gọi Man & Vong Linh trên giao diện Dashboard."""
 
+from contextlib import nullcontext
 import threading
 import time
 import tkinter as tk
@@ -702,129 +703,140 @@ class GoiDanMixin:
             try:
                 self.after(0, self._append_gd_log, "⚔️ Bắt đầu tiến trình biên chế Gọi Man & Luyện sĩ khí...")
                 prov = ArmyProvisioner(self.gateway, sleep_fn=time.sleep)
-
-                # 1. Trị thương
-                for gid in sel_gens:
-                    prov.heal_general(city_id, gid)
-
-                fresh_roster = None
-                city_gens = {}
-                current_armies = {}
-                troops_added = False
-                troops_balanced = False
-
-                if even_troops or (target_army.total > 0 and auto_recruit):
-                    if auto_swap_tac:
-                        fresh_roster = fetch_roster_fn(
-                            self.gateway,
-                            only_base_ids=[city_id],
-                            include_civil=True,
-                        )
-                    else:
-                        fresh_roster = fetch_roster_fn(self.gateway, only_base_ids=[city_id])
-                    city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
-                    current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
-
-                if even_troops and fresh_roster is not None:
-                    current_armies, troops_balanced = prov.balance_troops(
-                        base_id=city_id,
-                        general_ids=sel_gens,
-                        current_armies=current_armies,
-                        base_gens=city_gens,
-                        on_log=lambda m: self.after(0, self._append_gd_log, f"   {m}"),
-                    )
-
-                # 2. Bổ sung lính
-                if target_army.total > 0 and auto_recruit and fresh_roster is not None:
-                    total_needed = 0
+                lock_fn = getattr(getattr(self, "shared_target_locks", None), "base_provision_lock", None)
+                with (lock_fn(city_id) if callable(lock_fn) else nullcontext()):
+                    # 1. Trị thương
                     for gid in sel_gens:
-                        army = current_armies.get(gid)
-                        cur_inf = army.infantry if army else 0
-                        cur_cav = army.cavalry if army else 0
-                        cur_arc = army.archers if army else 0
-                        total_needed += max(0, target_army.infantry - cur_inf)
-                        total_needed += max(0, target_army.cavalry - cur_cav)
-                        total_needed += max(0, target_army.archers - cur_arc)
+                        prov.heal_general(city_id, gid)
 
-                    if total_needed > 0:
-                        avail = prov.check_recruits(city_id)
-                        if avail is not None and avail < total_needed:
-                            missing = total_needed - avail
-                            self.after(0, self._append_gd_log, f"📦 [Tân binh] Kho có {avail}/{total_needed}, tự động chiêu mộ thêm {missing} tân binh...")
-                            b_succ, b_ret = prov.buy_recruits(city_id, missing)
-                            if b_succ:
-                                self.after(0, self._append_gd_log, f"   [Chiêu mộ] ✅ Đã chiêu mộ thành công {missing} tân binh!")
-                            else:
-                                err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
-                                self.after(0, self._append_gd_log, f"   [Chiêu mộ] ⚠️ Chiêu mộ thất bại ({err_desc})")
+                    fresh_roster = None
+                    city_gens = {}
+                    current_armies = {}
+                    troops_added = False
+                    troops_balanced = False
 
-                    for gid in sel_gens:
-                        g = city_gens.get(gid)
-                        gname = g.name if g else str(gid)
-                        cur_army = current_armies.get(gid)
-                        results = prov.adjust_troops(
-                            base_id=city_id,
-                            general_id=gid,
-                            current_army=cur_army,
-                            target_army=target_army,
-                            auto_recruit=True,
-                            on_log=lambda m: self.after(0, self._append_gd_log, m),
-                        )
-                        if results:
-                            for stype, diff, succ, ret_code in results:
-                                tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(stype, "Quân")
-                                if succ:
-                                    if diff > 0:
-                                        troops_added = True
-                                    self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ✅ Thành công")
-                                else:
-                                    err_desc = ERROR_MESSAGES.get(ret_code, f"Mã lỗi: {ret_code}")
-                                    self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
+                    if auto_swap_tac or even_troops or (target_army.total > 0 and auto_recruit):
+                        if even_troops or (target_army.total > 0 and auto_recruit):
+                            fresh_roster = fetch_roster_fn(
+                                self.gateway,
+                                only_base_ids=[city_id],
+                                include_civil=auto_swap_tac,
+                            )
                         else:
-                            self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
-
-                # 2.5 Tự động đổi mưu sĩ nếu bật
-                if auto_swap_tac:
-                    if fresh_roster is None:
-                        fresh_roster = fetch_roster_fn(
-                            self.gateway,
-                            only_base_ids=[city_id],
-                            include_civil=True,
-                            include_cities=False,
-                        )
+                            fresh_roster = fetch_roster_fn(
+                                self.gateway,
+                                only_base_ids=[city_id],
+                                include_civil=True,
+                                include_cities=False,
+                            )
+                        if not getattr(fresh_roster, "has_reliable_armies", lambda _b: True)(city_id):
+                            self.after(0, self._append_gd_log, "⚠️ Không đọc được quân số từ máy chủ (/api/city/pagemytroopslist), bỏ qua biên chế để tránh vượt định mức.")
+                            return
                         city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
-                    auto_swap_low_stamina_tacticians(
-                        self.gateway,
-                        roster=fresh_roster,
-                        base_id=city_id,
-                        general_ids=sel_gens,
-                        min_stamina_pct=min_tac_stam,
-                        on_log=lambda m: self.after(0, self._append_gd_log, f"   {m}"),
-                    )
+                        current_armies = {gid: fresh_roster.army_of(gid) for gid in sel_gens}
 
-                # 3. Luyện sĩ khí đồng loạt bằng MoraleTrainer (ADR-0032)
-                if auto_morale:
-                    if fresh_roster is None:
-                        fresh_roster = fetch_roster_fn(
-                            self.gateway,
-                            only_base_ids=[city_id],
-                            include_civil=False,
-                            include_cities=False,
+                    # Đổi mưu sĩ nếu bật
+                    if auto_swap_tac and fresh_roster is not None:
+                        auto_swap_low_stamina_tacticians(
+                            gateway=self.gateway,
+                            roster=fresh_roster,
+                            base_id=city_id,
+                            general_ids=sel_gens,
+                            min_stamina_pct=min_tac_stam,
+                            on_log=lambda m: self.after(0, self._append_gd_log, f"   {m}"),
                         )
-                        city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
-                    trainer = trainer_cls(self.gateway)
 
-                    def _on_notify_gd(msg):
-                        self.after(0, self._append_gd_log, f"   {msg}")
+                    if even_troops and fresh_roster is not None:
+                        current_armies, troops_balanced = prov.balance_troops(
+                            base_id=city_id,
+                            general_ids=sel_gens,
+                            current_armies=current_armies,
+                            base_gens=city_gens,
+                            on_log=lambda m: self.after(0, self._append_gd_log, f"   {m}"),
+                        )
 
-                    trainer.adjust_squad_morale(
-                        base_id=city_id,
-                        general_ids=sel_gens,
-                        target_morale=min_morale,
-                        base_gens=city_gens,
-                        on_notify=_on_notify_gd,
-                        refresh_from_server=troops_added or troops_balanced,
-                    )
+                    # 2. Bổ sung lính
+                    if target_army.total > 0 and auto_recruit and fresh_roster is not None:
+                        comfort_attempted: set[int] = set()
+                        exhausted_cities: set[int] = set()
+                        total_needed = 0
+                        for gid in sel_gens:
+                            army = current_armies.get(gid)
+                            cur_inf = army.infantry if army else 0
+                            cur_cav = army.cavalry if army else 0
+                            cur_arc = army.archers if army else 0
+                            total_needed += max(0, target_army.infantry - cur_inf)
+                            total_needed += max(0, target_army.cavalry - cur_cav)
+                            total_needed += max(0, target_army.archers - cur_arc)
+
+                        if total_needed > 0:
+                            avail = prov.check_recruits(city_id)
+                            if avail is not None and avail < total_needed:
+                                missing = total_needed - avail
+                                self.after(0, self._append_gd_log, f"📦 [Tân binh] Kho có {avail}/{total_needed}, tự động chiêu mộ thêm {missing} tân binh...")
+                                b_succ, b_ret = prov.buy_recruits(
+                                    city_id,
+                                    missing,
+                                    comfort_attempted=comfort_attempted,
+                                    on_log=lambda m: self.after(0, self._append_gd_log, m),
+                                )
+                                if b_succ:
+                                    self.after(0, self._append_gd_log, f"   [Chiêu mộ] ✅ Đã chiêu mộ thành công {missing} tân binh!")
+                                else:
+                                    err_desc = ERROR_MESSAGES.get(b_ret, f"Mã lỗi: {b_ret}")
+                                    self.after(0, self._append_gd_log, f"   [Chiêu mộ] ⚠️ Chiêu mộ thất bại ({err_desc})")
+
+                        for gid in sel_gens:
+                            g = city_gens.get(gid)
+                            gname = g.name if g else str(gid)
+                            cur_army = current_armies.get(gid)
+                            results = prov.adjust_troops(
+                                base_id=city_id,
+                                general_id=gid,
+                                current_army=cur_army,
+                                target_army=target_army,
+                                auto_recruit=True,
+                                on_log=lambda m: self.after(0, self._append_gd_log, m),
+                                comfort_attempted=comfort_attempted,
+                                exhausted_cities=exhausted_cities,
+                                apply_min_batch_guard=False,
+                            )
+                            if results:
+                                for stype, diff, succ, ret_code in results:
+                                    tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(stype, "Quân")
+                                    if succ:
+                                        if diff > 0:
+                                            troops_added = True
+                                        self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ✅ Thành công")
+                                    else:
+                                        err_desc = ERROR_MESSAGES.get(ret_code, f"Mã lỗi: {ret_code}")
+                                        self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Bổ sung {tname} +{diff} ❌ Thất bại ({err_desc})")
+                            else:
+                                self.after(0, self._append_gd_log, f"   [Biên chế] Tướng {gname}: Quân số đã đủ, không cần bổ sung.")
+
+                    # 3. Luyện sĩ khí đồng loạt bằng MoraleTrainer (ADR-0032)
+                    if auto_morale:
+                        if fresh_roster is None:
+                            fresh_roster = fetch_roster_fn(
+                                self.gateway,
+                                only_base_ids=[city_id],
+                                include_civil=False,
+                                include_cities=False,
+                            )
+                            city_gens = {g.id: g for g in fresh_roster.generals_of(city_id) if g.role == "vo"}
+                        trainer = trainer_cls(self.gateway)
+
+                        def _on_notify_gd(msg):
+                            self.after(0, self._append_gd_log, f"   {msg}")
+
+                        trainer.adjust_squad_morale(
+                            base_id=city_id,
+                            general_ids=sel_gens,
+                            target_morale=min_morale,
+                            base_gens=city_gens,
+                            on_notify=_on_notify_gd,
+                            refresh_from_server=troops_added or troops_balanced,
+                        )
 
                 self.after(0, self._append_gd_log, "🏁 Hoàn tất tiến trình biên chế Gọi Man!")
                 new_roster = fetch_roster_fn(self.gateway)

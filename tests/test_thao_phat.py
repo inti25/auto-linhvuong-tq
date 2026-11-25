@@ -1026,6 +1026,113 @@ def test_thao_phat_reduced_server_requests():
     assert endpoints.count("/api/city/pagemytroopslist") == 1
 
 
+def test_thao_phat_partial_provision_trains_morale_before_waiting():
+    """Khi biên chế từng phần vì thiếu dân, Thảo Phạt phải luyện sĩ khí phần quân vừa biên chế rồi mới chờ 30s (không xuất quân sớm)."""
+    state = {"recruits": 0, "idle_pop": 300, "infantry": 0, "morale": 85}
+
+    class PartialTPServer:
+        def __init__(self):
+            self.calls = []
+            self.cookies = {"uid": "95"}
+
+        def get(self, url, params=None, headers=None, timeout=None):
+            path = "/" + url.split("://", 1)[1].split("/", 1)[1].split("?", 1)[0]
+            p = dict(params or {})
+            self.calls.append((path, p))
+            if path == "/api/city/pageofficial":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", 0, 0, [[417506, "G", "", 2, 0, 0, 4, 100, 240, 240]]]]}}
+            elif path == "/api/city/pagemytroopslist":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", [[417506, "G", 0, "", 0, state["infantry"], 0, 0, 0, state["morale"], 0, 0]]]]}}
+            elif path == "/api/city/pagearmament":
+                resp = {"ret": 0, "data": {"ret": 0, "list": [[15230, "NB", state["recruits"]]]}}
+            elif path == "/api/city/info":
+                resp = {"ret": 0, "data": {"ret": 0, "m_lpopulation_idle_man": state["idle_pop"]}}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            ep = url.split("/GateWay/")[1]
+            self.calls.append((ep, dict(data or {})))
+            if ep == "OPT.ashx?id=4":
+                resp = {"ret": 55}
+            elif ep == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 34}
+            elif ep == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["infantry"] += amt
+                    resp = {"ret": 0}
+                else:
+                    resp = {"ret": 53}
+            elif ep == "OPT.ashx?id=47":
+                state["morale"] = min(100, state["morale"] + int(data["lAddPoint"]))
+                resp = {"ret": 0}
+            elif ep == "OPT.ashx?id=62":
+                resp = {"ret": 0}
+            else:
+                resp = {"ret": 0}
+
+            class R:
+                status_code = 200
+
+                def json(self_inner):
+                    return resp
+
+            return R()
+
+    srv = PartialTPServer()
+    client = GatewayClient(58, srv, sleep=lambda s: None)
+    stop_event = threading.Event()
+    logs = []
+    runner = ThaoPhatAutoRunner(
+        gateway=client,
+        city_id=15230,
+        task_id=0,
+        general_ids=[417506],
+        target_army=TargetArmy(infantry=1000),
+        min_morale=95,
+        auto_morale=True,
+        auto_recruit=True,
+        stop_event=stop_event,
+        log_fn=logs.append,
+        check_interval=0.01,
+    )
+
+    wait_calls = []
+
+    def mock_wait(s):
+        wait_calls.append(s)
+        if s == 30.0:
+            stop_event.set()
+            return True
+        return False
+
+    runner.wait = mock_wait
+    runner.wait_cycle = lambda s: True
+    runner.run()
+
+    assert state["infantry"] == 300
+    assert any(ep == "OPT.ashx?id=47" for ep, _ in srv.calls)
+    assert not any(ep == "OPT.ashx?id=62" for ep, _ in srv.calls)
+    assert 30.0 in wait_calls
+
+
+
 
 
 

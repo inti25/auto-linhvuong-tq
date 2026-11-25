@@ -4217,7 +4217,7 @@ def test_dashboard_auto_swap_tactician_controls_profile_and_manual_provision():
 
         dash.gateway = MagicMock()
         dash.gateway.call.return_value = {"ret": 0}
-        with patch("linhvuong.dashboard.binhman._default_fetch_roster", side_effect=fake_fetch_roster), patch.object(
+        with patch("linhvuong.dashboard.fetch_roster", side_effect=fake_fetch_roster), patch.object(
             ArmyProvisioner, "heal_general", return_value=(True, 0, "")
         ):
             dash._provision_base_troops(15230, "ThanhChinh", dash.bm_base_configs[15230], ArmyProvisioner(dash.gateway))
@@ -4231,7 +4231,7 @@ def test_dashboard_auto_swap_tactician_controls_profile_and_manual_provision():
         dash.gd_target_cav_var.set("0")
         dash.gd_target_arc_var.set("0")
         dash.gd_gen_tree.item("417506", values=("☑", 417506, "TrieuVan", "Bộ:100 Kỵ:200 Cung:300", 10, 100, 95))
-        with patch("linhvuong.dashboard.goidan._default_fetch_roster", side_effect=fake_fetch_roster), patch.object(
+        with patch("linhvuong.dashboard.fetch_roster", side_effect=fake_fetch_roster), patch.object(
             ArmyProvisioner, "heal_general", return_value=(True, 0, "")
         ), patch("linhvuong.dashboard.goidan.threading.Thread") as mock_gd_thread:
             dash._manual_adjust_gd_troops()
