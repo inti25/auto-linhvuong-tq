@@ -142,6 +142,10 @@ _Avoid_: Báo lẻ kênh, notification đơn lẻ, log thông thường
 Hành động tế trời hoặc phát lương thực (`OPT.ashx?id=4`) khôi phục lòng dân và sĩ khí thành trì, triệt tiêu dân nộ để ngăn ngừa bạo loạn.
 _Avoid_: Khuyên dân, vỗ về
 
+**Tăng Nhân Khẩu**:
+Hành động gọi Quan Phủ (`OPT.ashx?id=4`, `lType=4`) bổ sung dân số cho Thành khi thiếu dân chiêu mộ tân binh.
+_Avoid_: Gọi dân, hồi dân
+
 **Cống quận**:
 Hoạt động đóng góp hoặc cống hiến từ một **Thành** cho công trình cấp quận tương ứng (Quan Phủ hoặc Tường Thành), không áp dụng cho **Doanh trại**.
 _Avoid_: Cống hiến thành, tribute
@@ -162,7 +166,7 @@ _Avoid_: Queue xây, slot xây
 Danh sách các Kỹ Thuật Đại Học được tích chọn và xếp thứ tự ưu tiên nâng cấp tự động.
 
 **Ngưỡng An Toàn**:
-Ngưỡng thể lực hoặc quân số tối thiểu của Võ tướng; khi chạm ngưỡng này, đạo quân tự rút về thành mẹ để trị thương và bổ sung quân lực.
+Ngưỡng thể lực tối thiểu của Võ tướng (khi chạm ngưỡng tại Thành sẽ chờ hồi phục thể lực tại chỗ) và ngưỡng quân số rút Doanh trại về Thành mẹ khi hao quân trong Bình Man Chế độ 1; riêng khi biên chế tại Thành có bật Biên Chế Quân Tự Động và Định Mức Biên Chế dương, hệ thống luôn chờ bổ sung đủ 100% Định Mức Biên Chế và Luyện Sĩ Khí đạt ngưỡng mới xuất quân.
 _Avoid_: Mức an toàn, return threshold
 
 **Thời Gian Đóng Băng**:
@@ -200,6 +204,10 @@ _Avoid_: Mức lính mục tiêu, target army, biên chế cố định
 **Biên Chế Quân Tự Động**:
 Quy trình chuẩn bị quân lực trước khi xuất kích (Thảo Phạt, Bình Man, Gọi Man): trị thương Võ tướng, chiêu mộ tân binh tại Thành hoặc lấy từ quân đồn trú sẵn có tại Doanh trại để bù theo Định Mức Biên Chế, sau đó Luyện Sĩ Khí đạt ngưỡng tối thiểu.
 _Avoid_: Bổ sung lính, refill lính, auto recruit
+
+**Biên Chế Từng Phần**:
+Cơ chế khi không đủ tân binh hoặc dân nhàn rỗi cho toàn bộ Định Mức Biên Chế (kể cả sau khi thử Tăng Nhân Khẩu), bot tự động chiêu mộ hết số dân nhàn rỗi hiện có và biên chế ngay phần quân khả dụng cho Võ tướng xuất kích để kịp thời Luyện Sĩ Khí trong lúc chờ hồi Quan Phủ.
+_Avoid_: biên chế thiếu rồi đi luôn, partial refill
 
 **San Đều Quân**:
 Cơ chế tự động cân bằng quân số hiện có theo từng binh chủng (Bộ binh, Kỵ binh, Cung binh) giữa các **Võ tướng xuất kích** đang rảnh rỗi trong cùng một **Căn Cứ** trước khi tiến hành **Biên Chế Quân Tự Động** và **Luyện Sĩ Khí**, sử dụng trực tiếp API điều động quân giữa hai tướng tại Binh trường (`OPT.ashx?id=39`) nhằm bảo toàn sĩ khí thay vì rút quân về kho.

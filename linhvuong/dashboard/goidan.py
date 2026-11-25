@@ -726,6 +726,8 @@ class GoiDanMixin:
                     )
 
                 if target_army.total > 0 and auto_recruit and fresh_roster is not None:
+                    comfort_attempted: set[int] = set()
+                    exhausted_cities: set[int] = set()
                     total_needed = 0
                     for gid in sel_gens:
                         army = current_armies.get(gid)
@@ -741,7 +743,12 @@ class GoiDanMixin:
                         if avail is not None and avail < total_needed:
                             missing = total_needed - avail
                             self.after(0, self._append_gd_log, f"📦 [Tân binh] Kho có {avail}/{total_needed}, tự động chiêu mộ thêm {missing} tân binh...")
-                            b_succ, b_ret = prov.buy_recruits(city_id, missing)
+                            b_succ, b_ret = prov.buy_recruits(
+                                city_id,
+                                missing,
+                                comfort_attempted=comfort_attempted,
+                                on_log=lambda m: self.after(0, self._append_gd_log, m),
+                            )
                             if b_succ:
                                 self.after(0, self._append_gd_log, f"   [Chiêu mộ] ✅ Đã chiêu mộ thành công {missing} tân binh!")
                             else:
@@ -759,6 +766,9 @@ class GoiDanMixin:
                             target_army=target_army,
                             auto_recruit=True,
                             on_log=lambda m: self.after(0, self._append_gd_log, m),
+                            comfort_attempted=comfort_attempted,
+                            exhausted_cities=exhausted_cities,
+                            apply_min_batch_guard=False,
                         )
                         if results:
                             for stype, diff, succ, ret_code in results:

@@ -1234,6 +1234,8 @@ class BinhManMixin:
                         on_log=lambda m: self.after(0, self._append_bm_log, f"   {prefix}{m}"),
                     )
                 if target_army.total > 0 and auto_recruit:
+                    comfort_attempted: set[int] = set()
+                    exhausted_cities: set[int] = set()
                     for gid in sel_gens:
                         army = current_armies.get(gid)
                         adj_res = prov.adjust_troops(
@@ -1243,6 +1245,9 @@ class BinhManMixin:
                             target_army=target_army,
                             auto_recruit=True,
                             on_log=lambda m: self.after(0, self._append_bm_log, f"{prefix}{m}"),
+                            comfort_attempted=comfort_attempted,
+                            exhausted_cities=exhausted_cities,
+                            apply_min_batch_guard=False,
                         )
                         if any(succ and diff > 0 for _, diff, succ, _ in (adj_res or [])):
                             troops_added = True

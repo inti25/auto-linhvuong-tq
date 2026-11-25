@@ -25,7 +25,7 @@ from ..generals import auto_swap_low_stamina_tacticians
 from ..locks import TargetLocks
 from ..roster import Army, fetch_roster
 from ..scan import BasePeer, Target
-from ..troops import ArmyProvisioner, TargetArmy
+from ..troops import ArmyProvisioner, TargetArmy, has_population_shortage
 from .base import (
     RET_CAPTCHA_REQUIRED,
     RET_OK,
@@ -339,6 +339,8 @@ class BinhMan:
             except Exception:
                 roster = None
 
+        comfort_attempted: set[int] = set()
+        exhausted_cities: set[int] = set()
         for gid in self.generals:
             # 1. Điều tướng về thành mẹ (OPT.ashx?id=50)
             self.ctx.gateway.call(
@@ -364,6 +366,8 @@ class BinhMan:
                     target_army=self.target_army,
                     auto_recruit=True,
                     on_log=self.ctx.notify,
+                    comfort_attempted=comfort_attempted,
+                    exhausted_cities=exhausted_cities,
                 )
             elif self.target_army is None:
                 self.ctx.gateway.call(
@@ -428,6 +432,8 @@ class BinhMan:
                 on_log=self.ctx.notify,
             )
 
+        comfort_attempted: set[int] = set()
+        exhausted_cities: set[int] = set()
         for gid in self.generals:
             if self.target_army and self.target_army.total > 0 and self.auto_recruit:
                 cur_army = current_armies.get(gid)
@@ -438,6 +444,8 @@ class BinhMan:
                     target_army=self.target_army,
                     auto_recruit=True,
                     on_log=self.ctx.notify,
+                    comfort_attempted=comfort_attempted,
+                    exhausted_cities=exhausted_cities,
                 )
             elif self.target_army is None:
                 self.ctx.gateway.call(
@@ -541,6 +549,9 @@ class BinhMan:
                     )
 
                 troops_added = False
+                troops_shortage = False
+                comfort_attempted: set[int] = set()
+                exhausted_cities: set[int] = set()
                 for gid in self.generals:
                     g = base_gens.get(gid)
                     if (
@@ -559,6 +570,8 @@ class BinhMan:
                             target_army=self.target_army,
                             auto_recruit=is_city,
                             on_log=self.ctx.notify,
+                            comfort_attempted=comfort_attempted,
+                            exhausted_cities=exhausted_cities,
                         )
                         added_for_gid = sum(
                             diff for _, diff, succ, _ in (adj_res or []) if succ and diff > 0
@@ -566,6 +579,8 @@ class BinhMan:
                         if added_for_gid > 0:
                             added_troops[gid] = added_for_gid
                             troops_added = True
+                        if is_city and has_population_shortage(adj_res):
+                            troops_shortage = True
 
                 # Chế độ 1 (Doanh trại): chỉ rút về Thành mẹ khi quân số thực sự dưới Ngưỡng An Toàn (không rút vì thể lực)
                 if (
@@ -609,6 +624,14 @@ class BinhMan:
                     )
                     if not ready:
                         return "waiting_morale"
+
+                if is_city and self.auto_recruit and troops_shortage:
+                    if self.ctx.notify:
+                        self.ctx.notify(
+                            "⏳ [Biên chế từng phần] Chưa đủ Định Mức Biên Chế do thiếu dân/tân binh, "
+                            "chờ hồi Tăng Nhân Khẩu để bổ sung tiếp trước khi xuất quân..."
+                        )
+                    return "waiting_troops"
 
         # 3. Kiểm tra ngưỡng an toàn thể lực / quân lực SAU khi biên chế và luyện sĩ khí
         threshold_wait = self._check_safety_thresholds(

@@ -18,6 +18,28 @@ from .roster import Army
 
 logger = logging.getLogger("linhvuong.troops")
 
+POPULATION_COMFORT_SUCCESS_COOLDOWN = 900.0
+POPULATION_COMFORT_RETRY_COOLDOWN = 60.0
+MIN_PARTIAL_PROVISION_BATCH = 50
+POPULATION_SHORTAGE_RETS = frozenset({34, 53, 55})
+
+
+def has_population_shortage(results: Optional[list[tuple[int, int, bool, int]]]) -> bool:
+    """Kiểm tra kết quả adjust_troops có phản ánh thiếu dân hoặc tân binh hay không."""
+    if not results:
+        return False
+    return any(
+        (not succ) and ret_code in POPULATION_SHORTAGE_RETS
+        for _, _, succ, ret_code in results
+    )
+
+
+def _raise_if_captcha(ret: Any) -> None:
+    if ret in (110, 73):
+        from .tasks.base import CaptchaRequired
+
+        raise CaptchaRequired()
+
 ERROR_MESSAGES = {
     0: "Thành công",
     1: "Thao tác thất bại, vui lòng thử lại sau",
@@ -231,9 +253,17 @@ def _plan_branch_morale_transfers(
 class ArmyProvisioner:
     """Dịch vụ điều phối kiểm tra kho, chiêu mộ tân binh, biên chế lính và luyện sĩ khí."""
 
-    def __init__(self, gateway: GatewayClient, sleep_fn: Callable[[float], None] = time.sleep):
+    def __init__(
+        self,
+        gateway: GatewayClient,
+        sleep_fn: Callable[[float], None] = time.sleep,
+        clock_fn: Callable[[], float] = time.monotonic,
+    ):
         self.gateway = gateway
         self.sleep_fn = sleep_fn
+        self.clock_fn = clock_fn
+        self._comfort_next_allowed: dict[int, float] = {}
+        self._waiting_population: dict[int, bool] = {}
 
     def check_recruits(self, city_id: int) -> Optional[int]:
         """Kiểm tra số lượng tân binh có sẵn trong kho của thành từ API Common.ashx?id=27."""
@@ -248,42 +278,222 @@ class ArmyProvisioner:
                         continue
         return None
 
-    def comfort_population(self, city_id: int, ltype: int = 4) -> tuple[bool, int]:
+    def check_idle_population(self, city_id: int) -> Optional[int]:
+        """Đọc số dân nhàn rỗi hiện có của Thành từ API City.ashx?id=6."""
+        resp = self.gateway.call("City.ashx", 6, {"tid": str(int(city_id)), "_": ""}) or {}
+        if not isinstance(resp, dict):
+            return None
+        ret = resp.get("ret", 0)
+        _raise_if_captcha(ret)
+        if ret != 0:
+            return None
+        data = (
+            resp.get("data")
+            if isinstance(resp.get("data"), dict) and resp.get("data")
+            else resp
+        )
+        if "m_lpopulation_idle_man" in data:
+            try:
+                return max(0, int(data["m_lpopulation_idle_man"]))
+            except (ValueError, TypeError):
+                return None
+        pop = data.get("population")
+        if isinstance(pop, list) and len(pop) > 4:
+            try:
+                return max(0, int(pop[4]))
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    def comfort_population(
+        self,
+        city_id: int,
+        ltype: int = 4,
+        respect_cooldown: bool = False,
+    ) -> tuple[bool, int]:
         """Gọi API an dân / tăng nhân khẩu (OPT.ashx?id=4). lType=4: Tăng nhân khẩu."""
+        cid = int(city_id)
+        if respect_cooldown and int(ltype) == 4 and cid in self._comfort_next_allowed:
+            if self.clock_fn() < self._comfort_next_allowed[cid]:
+                return False, 55
         payload = {
             "lType": str(ltype),
-            "tid": str(city_id),
+            "tid": str(cid),
             "_": "",
         }
         resp = self.gateway.call("OPT.ashx", 4, payload) or {}
         ret = resp.get("ret", -1)
+        _raise_if_captcha(ret)
+        if int(ltype) == 4:
+            now = self.clock_fn()
+            if ret == 0:
+                self._comfort_next_allowed[cid] = now + POPULATION_COMFORT_SUCCESS_COOLDOWN
+            elif ret == 55:
+                self._comfort_next_allowed[cid] = now + POPULATION_COMFORT_RETRY_COOLDOWN
         return ret == 0, ret
+
+    def buy_recruits_partial(
+        self,
+        city_id: int,
+        amount: int,
+        *,
+        auto_comfort: bool = True,
+        comfort_attempted: Optional[set[int]] = None,
+        warehouse_avail: int = 0,
+        total_needed_for_branch: Optional[int] = None,
+        apply_min_batch_guard: bool = True,
+        on_log: Optional[Callable[[str], None]] = None,
+    ) -> tuple[int, int]:
+        """Chiêu mộ tân binh (OPT.ashx?id=41), tự Tăng Nhân Khẩu và vét 100% dân nhàn rỗi nếu thiếu.
+
+        Trả về (bought_amount, status_ret):
+          - Mua đủ `amount`: (amount, 0)
+          - Thiếu dân nhưng mua được một phần `to_buy < amount`: (to_buy, 34)
+          - Không mua được do thiếu dân / lỗi khác: (0, ret)
+        """
+        if amount <= 0:
+            return 0, 0
+
+        cid = int(city_id)
+        need_total = (
+            total_needed_for_branch if total_needed_for_branch is not None else amount
+        )
+        was_waiting = bool(self._waiting_population.get(cid, False))
+        comfort_on_cd = (
+            cid in self._comfort_next_allowed
+            and self.clock_fn() < self._comfort_next_allowed[cid]
+        )
+
+        # Khi đang chờ hồi Quan Phủ giữa các chu kỳ, đọc dân nhàn rỗi trước để tránh spam OPT.ashx?id=41 với số quá lớn
+        if was_waiting and (
+            comfort_on_cd
+            or not auto_comfort
+            or (comfort_attempted is not None and cid in comfort_attempted)
+        ):
+            idle_pop = self.check_idle_population(cid)
+            if idle_pop is not None and idle_pop < amount:
+                if idle_pop <= 0:
+                    return 0, 34
+                if apply_min_batch_guard and (warehouse_avail + idle_pop) < min(
+                    need_total, MIN_PARTIAL_PROVISION_BATCH
+                ):
+                    return 0, 34
+                to_buy = min(amount, idle_pop)
+                resp_part = (
+                    self.gateway.call(
+                        "OPT.ashx",
+                        41,
+                        {"lAmount": str(to_buy), "tid": str(cid), "_": ""},
+                    )
+                    or {}
+                )
+                ret_part = resp_part.get("ret", -1)
+                _raise_if_captcha(ret_part)
+                if ret_part == 0:
+                    if on_log:
+                        on_log(
+                            f"   [Chiêu mộ] 📦 Dân chưa đủ ({to_buy}/{amount}), đã chiêu mộ hết {to_buy} dân nhàn rỗi!"
+                        )
+                    return to_buy, 34
+                return 0, ret_part
+
+        payload = {
+            "lAmount": str(amount),
+            "tid": str(cid),
+            "_": "",
+        }
+        resp = self.gateway.call("OPT.ashx", 41, payload) or {}
+        ret = resp.get("ret", -1)
+        _raise_if_captcha(ret)
+        if ret == 0:
+            self._waiting_population[cid] = False
+            return amount, 0
+        if ret != 34:
+            return 0, ret
+
+        just_comforted = False
+        if auto_comfort and (comfort_attempted is None or cid not in comfort_attempted):
+            if comfort_attempted is not None:
+                comfort_attempted.add(cid)
+            c_ok, c_ret = self.comfort_population(cid, ltype=4, respect_cooldown=True)
+            if c_ok:
+                just_comforted = True
+                if on_log:
+                    on_log(
+                        f"   [Quan Phủ] ✅ Tăng Nhân Khẩu thành công tại Thành {cid}, thử chiêu mộ lại {amount} tân binh..."
+                    )
+                self.sleep_fn(1.0)
+                resp = self.gateway.call("OPT.ashx", 41, payload) or {}
+                ret = resp.get("ret", -1)
+                _raise_if_captcha(ret)
+                if ret == 0:
+                    self._waiting_population[cid] = False
+                    return amount, 0
+                if ret != 34:
+                    return 0, ret
+            elif on_log:
+                err_desc = ERROR_MESSAGES.get(c_ret, f"Mã lỗi: {c_ret}")
+                on_log(
+                    f"   [Quan Phủ] ⏳ Không thể Tăng Nhân Khẩu ({err_desc}), kiểm tra dân nhàn rỗi hiện có..."
+                )
+
+        # Fallback Biên Chế Từng Phần: chiêu mộ hết 100% dân nhàn rỗi đang có
+        self._waiting_population[cid] = True
+        idle_pop = self.check_idle_population(cid)
+        if idle_pop is None or idle_pop <= 0:
+            return 0, 34
+
+        to_buy = min(amount, idle_pop)
+        if (
+            apply_min_batch_guard
+            and was_waiting
+            and not just_comforted
+            and to_buy < amount
+            and (warehouse_avail + to_buy)
+            < min(need_total, MIN_PARTIAL_PROVISION_BATCH)
+        ):
+            return 0, 34
+
+        resp_part = (
+            self.gateway.call(
+                "OPT.ashx", 41, {"lAmount": str(to_buy), "tid": str(cid), "_": ""}
+            )
+            or {}
+        )
+        ret_part = resp_part.get("ret", -1)
+        _raise_if_captcha(ret_part)
+        if ret_part == 0:
+            if to_buy >= amount:
+                self._waiting_population[cid] = False
+                return to_buy, 0
+            if on_log:
+                on_log(
+                    f"   [Chiêu mộ] 📦 Dân chưa đủ ({to_buy}/{amount}), đã chiêu mộ hết {to_buy} dân nhàn rỗi!"
+                )
+            return to_buy, 34
+        return 0, ret_part
 
     def buy_recruits(
         self,
         city_id: int,
         amount: int,
         auto_comfort: bool = True,
+        *,
+        comfort_attempted: Optional[set[int]] = None,
+        on_log: Optional[Callable[[str], None]] = None,
     ) -> tuple[bool, int]:
         """Chiêu mộ tân binh bằng API OPT.ashx?id=41."""
         if amount <= 0:
             return True, 0
-
-        payload = {
-            "lAmount": str(amount),
-            "tid": str(city_id),
-            "_": "",
-        }
-        resp = self.gateway.call("OPT.ashx", 41, payload) or {}
-        ret = resp.get("ret", -1)
-
-        if ret == 34 and auto_comfort:
-            self.comfort_population(city_id, ltype=4)
-            self.sleep_fn(1.0)
-            resp = self.gateway.call("OPT.ashx", 41, payload) or {}
-            ret = resp.get("ret", -1)
-
-        return ret == 0, ret
+        bought, ret = self.buy_recruits_partial(
+            city_id,
+            amount,
+            auto_comfort=auto_comfort,
+            comfort_attempted=comfort_attempted,
+            apply_min_batch_guard=True,
+            on_log=on_log,
+        )
+        return bought >= amount and ret == 0, ret
 
     def heal_general(self, base_id: int, general_id: int) -> tuple[bool, int]:
         """Trị thương cho danh tướng bằng API OPT.ashx?id=31."""
@@ -304,12 +514,17 @@ class ArmyProvisioner:
         target_army: TargetArmy,
         auto_recruit: bool = True,
         on_log: Optional[Callable[[str], None]] = None,
+        *,
+        comfort_attempted: Optional[set[int]] = None,
+        exhausted_cities: Optional[set[int]] = None,
+        apply_min_batch_guard: bool = True,
     ) -> list[tuple[int, int, bool, int]]:
         """Thiết lập biên chế quân cho tướng bằng API OPT.ashx?id=6.
 
         Chỉ bổ sung phần thiếu hụt (diff > 0), không tháo phần quân vượt mức (diff <= 0).
         Nếu thiếu tân binh (ret=53) và base_id > 0 (Thành) và auto_recruit=True:
-            Tự động chiêu mộ tân binh (API id=41) và thử lại biên chế.
+            Tự động chiêu mộ tân binh (API id=41), gọi Tăng Nhân Khẩu (id=4, lType=4) nếu cần,
+            và nếu dân vẫn chưa đủ thì Biên Chế Từng Phần hết tân binh/dân nhàn rỗi hiện có.
         """
         current_inf = current_army.infantry if current_army else 0
         current_cav = current_army.cavalry if current_army else 0
@@ -321,10 +536,21 @@ class ArmyProvisioner:
             (3, target_army.archers - current_arc),
         ]
 
+        cid = int(base_id)
         results = []
         for soldier_type, diff in adjustments:
             if diff <= 0:
                 continue
+
+            if (
+                auto_recruit
+                and cid > 0
+                and exhausted_cities is not None
+                and cid in exhausted_cities
+            ):
+                results.append((soldier_type, diff, False, 34))
+                continue
+
             payload = {
                 "lGeneralID": str(general_id),
                 "lSoldierType": str(soldier_type),
@@ -334,24 +560,113 @@ class ArmyProvisioner:
             }
             resp = self.gateway.call("OPT.ashx", 6, payload) or {}
             ret = resp.get("ret", -1)
+            _raise_if_captcha(ret)
+
+            if ret == 0:
+                results.append((soldier_type, diff, True, 0))
+                continue
 
             # Nếu tân binh không đủ để biên chế (ret=53) và căn cứ là Thành (ID > 0)
-            if ret == 53 and auto_recruit and int(base_id) > 0:
+            if ret == 53 and auto_recruit and cid > 0:
                 tname = {1: "Bộ", 2: "Kỵ", 3: "Cung"}.get(soldier_type, "Quân")
-                if on_log:
-                    on_log(f"   [Chiêu mộ] Tân binh không đủ để bổ sung {tname} +{diff}, tự động chiêu mộ...")
-                buy_succ, buy_ret = self.buy_recruits(int(base_id), diff)
-                if buy_succ:
-                    if on_log:
-                        on_log(f"   [Chiêu mộ] ✅ Chiêu mộ thành công {diff} tân binh, tiếp tục biên chế...")
-                    resp = self.gateway.call("OPT.ashx", 6, payload) or {}
-                    ret = resp.get("ret", -1)
+                was_waiting = bool(self._waiting_population.get(cid, False))
+                avail = self.check_recruits(cid)
+                if avail is not None and 0 <= avail < diff:
+                    known_avail = avail
+                    missing = diff - avail
                 else:
-                    err_desc = ERROR_MESSAGES.get(buy_ret, f"Mã lỗi: {buy_ret}")
-                    if on_log:
-                        on_log(f"   [Chiêu mộ] ❌ Chiêu mộ thất bại ({err_desc})")
+                    known_avail = 0
+                    missing = diff
 
-            results.append((soldier_type, diff, ret == 0, ret))
+                if on_log:
+                    on_log(
+                        f"   [Chiêu mộ] Tân binh không đủ để bổ sung {tname} +{diff}, tự động chiêu mộ..."
+                    )
+                bought, buy_ret = self.buy_recruits_partial(
+                    cid,
+                    missing,
+                    auto_comfort=True,
+                    comfort_attempted=comfort_attempted,
+                    warehouse_avail=known_avail,
+                    total_needed_for_branch=diff,
+                    apply_min_batch_guard=apply_min_batch_guard,
+                    on_log=on_log,
+                )
+                total_avail = known_avail + bought
+
+                if bought >= missing and buy_ret == 0:
+                    if on_log:
+                        on_log(
+                            f"   [Chiêu mộ] ✅ Chiêu mộ thành công {missing} tân binh, tiếp tục biên chế..."
+                        )
+                    resp2 = self.gateway.call("OPT.ashx", 6, payload) or {}
+                    ret2 = resp2.get("ret", -1)
+                    _raise_if_captcha(ret2)
+                    results.append((soldier_type, diff, ret2 == 0, ret2))
+                    continue
+
+                assignable = min(diff, total_avail)
+                if assignable > 0:
+                    if (
+                        apply_min_batch_guard
+                        and was_waiting
+                        and bought == 0
+                        and assignable < min(diff, MIN_PARTIAL_PROVISION_BATCH)
+                    ):
+                        if exhausted_cities is not None:
+                            exhausted_cities.add(cid)
+                        shortage_ret = buy_ret if buy_ret != 0 else 34
+                        results.append((soldier_type, diff, False, shortage_ret))
+                        continue
+
+                    part_payload = {
+                        "lGeneralID": str(general_id),
+                        "lSoldierType": str(soldier_type),
+                        "lAmount": str(assignable),
+                        "tid": str(base_id),
+                        "_": "",
+                    }
+                    resp_part = self.gateway.call("OPT.ashx", 6, part_payload) or {}
+                    ret_part = resp_part.get("ret", -1)
+                    _raise_if_captcha(ret_part)
+                    if ret_part == 0:
+                        remaining = diff - assignable
+                        if on_log:
+                            if remaining > 0:
+                                on_log(
+                                    f"   [Biên chế từng phần] 📦 Đã biên chế {tname} +{assignable}/{diff} (còn thiếu {remaining}, luyện sĩ khí trước và chờ hồi Tăng Nhân Khẩu)"
+                                )
+                            else:
+                                on_log(
+                                    f"   [Biên chế] ✅ Đã biên chế {tname} +{assignable}"
+                                )
+                        results.append((soldier_type, assignable, True, 0))
+                        if remaining > 0:
+                            shortage_ret = (
+                                buy_ret if buy_ret in POPULATION_SHORTAGE_RETS else 34
+                            )
+                            self._waiting_population[cid] = True
+                            if exhausted_cities is not None:
+                                exhausted_cities.add(cid)
+                            results.append(
+                                (soldier_type, remaining, False, shortage_ret)
+                            )
+                        continue
+                    results.append((soldier_type, diff, False, ret_part))
+                    continue
+
+                shortage_ret = buy_ret if buy_ret != 0 else 53
+                if shortage_ret in POPULATION_SHORTAGE_RETS:
+                    self._waiting_population[cid] = True
+                    if exhausted_cities is not None:
+                        exhausted_cities.add(cid)
+                err_desc = ERROR_MESSAGES.get(shortage_ret, f"Mã lỗi: {shortage_ret}")
+                if on_log:
+                    on_log(f"   [Chiêu mộ] ❌ Chiêu mộ thất bại ({err_desc})")
+                results.append((soldier_type, diff, False, shortage_ret))
+                continue
+
+            results.append((soldier_type, diff, False, ret))
         return results
 
     def adjust_morale(
@@ -662,6 +977,8 @@ class ArmyProvisioner:
 
         current_armies = current_armies or {}
         current_morales = current_morales or {}
+        comfort_attempted: set[int] = set()
+        exhausted_cities: set[int] = set()
 
         for gid in general_ids:
             if on_log:
@@ -691,6 +1008,8 @@ class ArmyProvisioner:
                     target_army=target_army,
                     auto_recruit=True,
                     on_log=on_log,
+                    comfort_attempted=comfort_attempted,
+                    exhausted_cities=exhausted_cities,
                 )
 
             # 4. Tái phái tướng ra Trại (sĩ khí sẽ luyện tại Doanh trại theo ADR-0032)

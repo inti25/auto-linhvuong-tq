@@ -2215,16 +2215,26 @@ class AccountSession:
                         needed += max(0, target_army.infantry - (a.infantry if a else 0))
                         needed += max(0, target_army.cavalry - (a.cavalry if a else 0))
                         needed += max(0, target_army.archers - (a.archers if a else 0))
+                    comfort_attempted: set[int] = set()
+                    exhausted_cities: set[int] = set()
                     if needed > 0:
                         avail = self.tp_executor.check_recruits(cid)
                         if avail is not None and avail < needed:
-                            self.tp_executor.buy_recruits(cid, needed - avail)
+                            self.tp_executor.buy_recruits(
+                                cid,
+                                needed - avail,
+                                comfort_attempted=comfort_attempted,
+                                on_log=lambda m: self.append_log("thaophat", m),
+                            )
                 fresh = fetch_roster(self.gateway)
                 for gid in tp.generals:
                     self.tp_executor.adjust_troops(
                         cid, gid, fresh.army_of(gid), target_army,
                         auto_recruit=tp.auto_recruit,
                         on_log=lambda m: self.append_log("thaophat", m),
+                        comfort_attempted=comfort_attempted if tp.auto_recruit else None,
+                        exhausted_cities=exhausted_cities if tp.auto_recruit else None,
+                        apply_min_batch_guard=False,
                     )
                 self.append_log("thaophat", "🏁 Hoàn tất biên chế quân Thảo Phạt!")
                 self.reload_roster()
@@ -2535,6 +2545,8 @@ class AccountSession:
                     )
                 troops_added = False
                 if target_army.total > 0 and gd.auto_recruit:
+                    comfort_attempted: set[int] = set()
+                    exhausted_cities: set[int] = set()
                     needed = 0
                     for gid in gd.generals:
                         a = current_armies.get(gid)
@@ -2544,12 +2556,20 @@ class AccountSession:
                     if needed > 0:
                         avail = prov.check_recruits(cid)
                         if avail is not None and avail < needed:
-                            prov.buy_recruits(cid, needed - avail)
+                            prov.buy_recruits(
+                                cid,
+                                needed - avail,
+                                comfort_attempted=comfort_attempted,
+                                on_log=lambda m: self.append_log("goidan", m),
+                            )
                     for gid in gd.generals:
                         res = prov.adjust_troops(
                             base_id=cid, general_id=gid, current_army=current_armies.get(gid),
                             target_army=target_army, auto_recruit=True,
                             on_log=lambda m: self.append_log("goidan", m),
+                            comfort_attempted=comfort_attempted,
+                            exhausted_cities=exhausted_cities,
+                            apply_min_batch_guard=False,
                         )
                         if any(succ and diff > 0 for _, diff, succ, _ in (res or [])):
                             troops_added = True
@@ -2741,12 +2761,17 @@ class AccountSession:
                             on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
                         )
                     troops_added = False
+                    comfort_attempted: set[int] = set()
+                    exhausted_cities: set[int] = set()
                     if target_army.total > 0:
                         for gid in cfg.generals:
                             res = prov.adjust_troops(
                                 base_id=b.id, general_id=gid, current_army=current_armies.get(gid),
                                 target_army=target_army, auto_recruit=(cfg.mode == 2 and cfg.auto_recruit),
                                 on_log=lambda m, bn=b.name: self.append_log("binhman", f"[{bn}] {m}"),
+                                comfort_attempted=comfort_attempted,
+                                exhausted_cities=exhausted_cities,
+                                apply_min_batch_guard=False,
                             )
                             if any(succ and diff > 0 for _, diff, succ, _ in (res or [])):
                                 troops_added = True

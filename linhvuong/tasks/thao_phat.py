@@ -71,6 +71,9 @@ class ThaoPhatExecutor:
         city_id: int,
         amount: int,
         auto_comfort: bool = True,
+        *,
+        comfort_attempted: Optional[set[int]] = None,
+        on_log: Optional[Callable[[str], None]] = None,
     ) -> tuple[bool, int]:
         """
         Chiêu mộ tân binh bằng API OPT.ashx?id=41.
@@ -78,7 +81,13 @@ class ThaoPhatExecutor:
             Tự động gọi an dân (lType=4) tăng nhân khẩu rồi thử lại.
         Trả về (success, ret_code).
         """
-        return self.provisioner.buy_recruits(city_id, amount, auto_comfort=auto_comfort)
+        return self.provisioner.buy_recruits(
+            city_id,
+            amount,
+            auto_comfort=auto_comfort,
+            comfort_attempted=comfort_attempted,
+            on_log=on_log,
+        )
 
     def adjust_troops(
         self,
@@ -88,6 +97,10 @@ class ThaoPhatExecutor:
         target_army: TargetArmy,
         auto_recruit: bool = True,
         on_log: Optional[Callable[[str], None]] = None,
+        *,
+        comfort_attempted: Optional[set[int]] = None,
+        exhausted_cities: Optional[set[int]] = None,
+        apply_min_batch_guard: bool = True,
     ) -> list[tuple[int, int, bool, int]]:
         """
         Thiết lập biên chế quân cho tướng bằng API id=6.
@@ -102,6 +115,9 @@ class ThaoPhatExecutor:
             target_army=target_army,
             auto_recruit=auto_recruit,
             on_log=on_log,
+            comfort_attempted=comfort_attempted,
+            exhausted_cities=exhausted_cities,
+            apply_min_batch_guard=apply_min_batch_guard,
         )
 
     def adjust_morale(
@@ -352,6 +368,8 @@ class ThaoPhatAutoRunner:
                 # -------------------------------------------------------------
                 recruit_failed = False
                 troops_added = False
+                comfort_attempted: set[int] = set()
+                exhausted_cities: set[int] = set()
 
                 if self.auto_recruit:
                     # Kiểm tra tổng quân cần bổ sung và chủ động chiêu mộ trước nếu thiếu
@@ -370,7 +388,12 @@ class ThaoPhatAutoRunner:
                         if avail is not None and avail < total_needed:
                             missing = total_needed - avail
                             self.log(f"📦 [Tân binh] Kho hiện có {avail}/{total_needed}, tự động chiêu mộ thêm {missing} tân binh...")
-                            b_succ, b_ret = self.executor.buy_recruits(self.city_id, missing)
+                            b_succ, b_ret = self.executor.buy_recruits(
+                                self.city_id,
+                                missing,
+                                comfort_attempted=comfort_attempted,
+                                on_log=self.log,
+                            )
                             if b_succ:
                                 self.log(f"   [Chiêu mộ] ✅ Đã chiêu mộ thành công {missing} tân binh!")
                             else:
@@ -391,6 +414,8 @@ class ThaoPhatAutoRunner:
                             self.target_army,
                             auto_recruit=self.auto_recruit,
                             on_log=self.log,
+                            comfort_attempted=comfort_attempted,
+                            exhausted_cities=exhausted_cities,
                         )
                         if adj_results:
                             for stype, diff, succ, ret_code in adj_results:
@@ -409,14 +434,17 @@ class ThaoPhatAutoRunner:
                     if self.stop_event.is_set():
                         break
 
-                    if recruit_failed:
+                    if recruit_failed and not (troops_added and self.auto_morale):
                         self.log("⚠️ Có lỗi khi biên chế lính (ví dụ thiếu tân binh/tài nguyên). Chờ 30s trước khi thử lại...")
                         if self.wait(30.0):
                             break
                         continue
 
                     if troops_added:
-                        self.log("📦 Đã bổ sung tân binh vào đội hình. Quét lại sỹ khí thực tế sau khi biên chế...")
+                        if recruit_failed:
+                            self.log("📦 Đã biên chế từng phần theo dân nhàn rỗi. Ưu tiên luyện sỹ khí trước khi chờ gọi dân tiếp...")
+                        else:
+                            self.log("📦 Đã bổ sung tân binh vào đội hình. Quét lại sỹ khí thực tế sau khi biên chế...")
                 else:
                     self.log("⏭️ [Biên chế] Tự động bổ sung lính đang tắt, bỏ qua bước bổ sung quân.")
 
@@ -526,6 +554,12 @@ class ThaoPhatAutoRunner:
 
                 if self.stop_event.is_set():
                     break
+
+                if recruit_failed:
+                    self.log("⏳ [Biên chế từng phần] Đã luyện sĩ khí xong, chờ 30s để tiếp tục Tăng Nhân Khẩu và bổ sung đủ Định Mức Biên Chế...")
+                    if self.wait(30.0):
+                        break
+                    continue
 
                 # -------------------------------------------------------------
                 # KIỂM TRA LẠI: Xác nhận sĩ khí đạt chuẩn trước khi xuất quân (tái sử dụng morale_state)

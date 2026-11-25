@@ -1692,3 +1692,97 @@ def test_binh_man_even_troops_balances_before_recruit_and_refreshes_morale():
     assert task_off.run_once() == "attacked"
     assert not any(k == "OPT.ashx?id=39" for k, _ in server.calls)
 
+
+def test_binh_man_city_partial_provision_trains_morale_and_waits_for_100pct_before_marching():
+    from linhvuong.troops import ArmyProvisioner, TargetArmy
+
+    mid = mid_from_coords(10, 10)
+    state = {"recruits": 0, "idle_pop": 1000, "troops": 4000, "morale": 85, "comfort_ok": False}
+
+    class StatefulServer:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            key = url.split("/GateWay/")[1]
+            self.calls.append((key, dict(data or {})))
+            if key == "Map.ashx?id=6":
+                return Resp({"npc_tent": [man(10, 10, 999, 7)]})
+            if key == "Common.ashx?id=32":
+                return Resp({"ret": 0, "list": [[1001, "C", 0, 0, [[10, "G10", "", 2, 0, 0, 4, 100, 240, 240, 0]]]]})
+            if key == "Common.ashx?id=76":
+                return Resp({"ret": 0, "list": [[1001, "C", [[10, "G10", 0, "", 0, 0, state["troops"], 0, 0, state["morale"], 0, 0]]]]})
+            if key == "Common.ashx?id=27":
+                return Resp({"ret": 0, "list": [[1001, "C", state["recruits"]]]})
+            if key == "City.ashx?id=6":
+                return Resp({"ret": 0, "population": [10000, 10000, 2000, 0, state["idle_pop"]]})
+            if key == "OPT.ashx?id=4":
+                if not state["comfort_ok"]:
+                    return Resp({"ret": 55})
+                state["idle_pop"] += 1500
+                return Resp({"ret": 0})
+            if key == "OPT.ashx?id=41":
+                amt = int(data["lAmount"])
+                if amt <= state["idle_pop"]:
+                    state["idle_pop"] -= amt
+                    state["recruits"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 34})
+            if key == "OPT.ashx?id=6":
+                amt = int(data["lAmount"])
+                if amt <= state["recruits"]:
+                    state["recruits"] -= amt
+                    state["troops"] += amt
+                    return Resp({"ret": 0})
+                return Resp({"ret": 53})
+            if key == "OPT.ashx?id=47":
+                state["morale"] = min(100, state["morale"] + int(data["lAddPoint"]))
+                return Resp({"ret": 0})
+            if key == "OPT.ashx?id=53":
+                return Resp({"ret": 0})
+            return Resp({"ret": 0})
+
+    clock = [0.0]
+    srv = StatefulServer()
+    ctx, alerts = ctx_for(srv)
+    prov = ArmyProvisioner(ctx.gateway, sleep_fn=lambda s: None, clock_fn=lambda: clock[0])
+    task = BinhMan(
+        ctx,
+        generals=[10],
+        origin=(10, 10),
+        radius=5,
+        man_types=[7],
+        mode=2,
+        city_id=1001,
+        target_army=TargetArmy(cavalry=6000),
+        auto_recruit=True,
+        auto_morale=True,
+        min_morale=95,
+        return_threshold=30,  # Dù 5000/6000 = 83% > 30% vẫn phải chờ đủ 100%
+        sleep_fn=lambda s: None,
+        provisioner=prov,
+    )
+
+    # Chu kỳ 1: chỉ có 1000 dân nhàn rỗi -> lên 5000/6000, luyện sĩ khí (85->95) xong trả waiting_troops, KHÔNG xuất quân
+    out1 = task.run_once()
+    assert out1 in ("waiting_morale", "waiting_troops")
+    assert state["troops"] == 5000
+    assert any(k == "OPT.ashx?id=47" for k, _ in srv.calls)
+    assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+    # Giả sử MoraleTrainer vừa nâng từ 85 -> 95 (waiting_morale), lượt kế tiếp đã 95 nhưng vẫn thiếu 1000 quân -> vẫn giữ waiting_troops
+    if out1 == "waiting_morale":
+        out1b = task.run_once()
+        assert out1b == "waiting_troops"
+        assert not any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+    # Chu kỳ 2: hết cooldown Tăng Nhân Khẩu -> bổ sung đủ 6000 -> đủ sĩ khí -> xuất quân
+    clock[0] = 100.0
+    state["comfort_ok"] = True
+    state["morale"] = 96
+    out2 = task.run_once()
+    assert out2 == "attacked"
+    assert state["troops"] == 6000
+    assert any(k == "OPT.ashx?id=53" for k, _ in srv.calls)
+
+

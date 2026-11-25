@@ -27,7 +27,7 @@ from ..helper_caller import HelperCallerLoginError
 from ..locks import LockReason
 from ..roster import Army, fetch_roster
 from ..scan import Target
-from ..troops import ArmyProvisioner, TargetArmy
+from ..troops import ArmyProvisioner, TargetArmy, has_population_shortage
 from .base import (
     RET_CAPTCHA_REQUIRED,
     RET_OK,
@@ -604,6 +604,8 @@ class GoiDan:
                 on_log=self.ctx.notify,
             )
 
+        comfort_attempted: set[int] = set()
+        exhausted_cities: set[int] = set()
         for gid in self.generals:
             if self.target_army and self.target_army.total > 0 and self.auto_recruit and self.city_id:
                 cur_army = current_armies.get(gid)
@@ -614,6 +616,8 @@ class GoiDan:
                     target_army=self.target_army,
                     auto_recruit=True,
                     on_log=self.ctx.notify,
+                    comfort_attempted=comfort_attempted,
+                    exhausted_cities=exhausted_cities,
                 )
             elif self.refill_amount > 0 and self.city_id:
                 self.ctx.gateway.call(
@@ -765,6 +769,9 @@ class GoiDan:
                     )
 
                 troops_added = False
+                troops_shortage = False
+                comfort_attempted: set[int] = set()
+                exhausted_cities: set[int] = set()
                 for gid in self.generals:
                     g = city_gens.get(gid)
                     if (
@@ -782,6 +789,8 @@ class GoiDan:
                             target_army=self.target_army,
                             auto_recruit=True,
                             on_log=self.ctx.notify,
+                            comfort_attempted=comfort_attempted,
+                            exhausted_cities=exhausted_cities,
                         )
                         added_for_gid = sum(
                             diff for _, diff, succ, _ in (adj_res or []) if succ and diff > 0
@@ -789,6 +798,8 @@ class GoiDan:
                         if added_for_gid > 0:
                             added_troops[gid] = added_for_gid
                             troops_added = True
+                        if has_population_shortage(adj_res):
+                            troops_shortage = True
 
                 # Luyện sĩ khí đồng loạt và chờ hoàn tất đếm ngược trước khi quét/gọi mục tiêu (ADR-0032)
                 if self.auto_morale and city_gens:
@@ -804,6 +815,14 @@ class GoiDan:
                     )
                     if not ready:
                         return "waiting_morale"
+
+                if self.auto_recruit and troops_shortage:
+                    if self.ctx.notify:
+                        self.ctx.notify(
+                            "⏳ [Biên chế từng phần] Chưa đủ Định Mức Biên Chế do thiếu dân/tân binh, "
+                            "chờ hồi Tăng Nhân Khẩu để bổ sung tiếp trước khi gọi/xuất quân..."
+                        )
+                    return "waiting_troops"
 
         # 1.5. Kiểm tra ngưỡng an toàn thể lực / quân lực SAU khi biên chế và luyện sĩ khí
         threshold_wait = self._check_safety_thresholds(
