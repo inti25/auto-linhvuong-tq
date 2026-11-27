@@ -102,7 +102,8 @@
   }
 
   function triggerWebNotification(ev) {
-    showToast(ev.title || "Thông báo", ev.body || "", ev.kind === "captcha" ? "warn" : "info");
+    const toastKind = ev.kind === "captcha" ? "warn" : ev.kind === "attack" ? "error" : "info";
+    showToast(ev.title || "Thông báo", ev.body || "", toastKind);
     if (ev.sound !== false) playAlertBeep();
     if ("Notification" in window && Notification.permission === "granted") {
       try { new Notification(ev.title || "Linh Vương", { body: ev.body || "" }); } catch {}
@@ -278,12 +279,15 @@
       .map((a) => {
         const icon = a.status === "connected" ? "🟢" : a.status === "captcha" ? "⚠️" : a.status === "error" ? "🔴" : "⚪";
         const active = a.account_key === state.currentKey ? "active" : "";
+        const underAttackCls = a.under_attack ? "under-attack" : "";
+        const atkCount = Number(a.incoming_attack_count || 0);
+        const atkBadge = a.under_attack ? `<span class="attack-badge" title="Đang có quân tấn công">🚨 ${atkCount}</span>` : "";
         const vaultBadge = a.has_vault_password ? "🔐" : "";
         return `
-          <div class="account-card ${active}" data-key="${esc(a.account_key)}">
+          <div class="account-card ${active} ${underAttackCls}" data-key="${esc(a.account_key)}">
             <div class="account-card-top">
               <span>${esc(a.account_key)}</span>
-              <span>${vaultBadge}</span>
+              <span>${atkBadge}${vaultBadge}</span>
             </div>
             <div class="account-card-badge">${icon} ${esc(a.status_text || "Chưa đăng nhập")}</div>
             <div class="account-card-tasks">${esc(a.tasks_summary || "Nghỉ")}</div>
@@ -408,6 +412,7 @@
     $("dashboard-view").classList.add("hidden");
     $("profile-header-bar").classList.add("hidden");
     $("captcha-banner").classList.add("hidden");
+    if ($("attack-banner")) $("attack-banner").classList.add("hidden");
     $("btn-reload-roster").classList.add("hidden");
     $("btn-rotate-proxy").classList.add("hidden");
     $("btn-notify-settings").classList.add("hidden");
@@ -480,6 +485,7 @@
     $("btn-account-logout").classList.remove("hidden");
     $("btn-relogin").classList.remove("hidden");
     renderTopbar();
+    renderAttackBanner();
     renderHeaderProfileBar();
     renderActiveTab();
   }
@@ -679,11 +685,57 @@
       const rem = Math.max(0, Number(el.dataset.slotRem || 0) - elapsed);
       el.textContent = rem > 0 ? `Còn ${fmtSec(rem)}` : "✅ Sẵn sàng";
     });
+    document.querySelectorAll(".atk-cd[data-atk-rem]").forEach((el) => {
+      const rem = Math.max(0, Number(el.dataset.atkRem || 0) - elapsed);
+      el.textContent = rem > 0 ? `Còn ${fmtSec(rem)}` : "Đã tới / Đang giao chiến";
+    });
+  }
+
+  function renderAttackBanner() {
+    const banner = $("attack-banner");
+    const listEl = $("attack-banner-list");
+    if (!banner || !listEl) return;
+    const inc = state.snapshot?.aux?.incoming_attacks;
+    const attacks = inc?.attacks || [];
+    const battles = inc?.battles || [];
+    if (!inc || (!attacks.length && !battles.length)) {
+      banner.classList.add("hidden");
+      listEl.innerHTML = "";
+      return;
+    }
+    const elapsed = state.auxSyncedAt ? Math.max(0, Math.floor((Date.now() - state.auxSyncedAt) / 1000)) : 0;
+    const rows = [];
+    for (const b of battles) {
+      const prefix = b.target_is_camp ? "[Trại]" : "[Thành]";
+      const coords = (b.target_x || b.target_y) ? ` (${b.target_x}, ${b.target_y})` : "";
+      const enemyTxt = (b.attackers || []).length ? ` — Địch: ${esc(b.attackers.join(", "))}` : "";
+      rows.push(
+        `<div>⚔️ <strong>${esc(prefix)} ${esc(b.target_base_name)}${esc(coords)}</strong> đang giao chiến${enemyTxt} ` +
+        `<a href="${esc(b.battle_url)}" target="_blank" rel="noopener">Mở chiến trường</a></div>`
+      );
+    }
+    for (const a of attacks) {
+      const prefix = a.target_is_camp ? "[Trại]" : "[Thành]";
+      const coords = (a.target_x || a.target_y) ? ` (${a.target_x}, ${a.target_y})` : "";
+      const tag = a.is_pvp ? "[PvP]" : "[NPC]";
+      const who = a.is_pvp && a.attacker_name ? `${a.attacker_name} — ${a.source_name}` : a.source_name;
+      const baseRem = Math.max(0, Number(a.remaining_seconds || 0));
+      const liveRem = Math.max(0, baseRem - elapsed);
+      const cdTxt = liveRem > 0 ? `Còn ${fmtSec(liveRem)}` : "Đã tới / Đang giao chiến";
+      rows.push(
+        `<div>🚨 <strong>${esc(tag)} ${esc(who)} (${a.source_x}, ${a.source_y})</strong> → ` +
+        `<strong>${esc(prefix)} ${esc(a.target_base_name)}${esc(coords)}</strong> · ` +
+        `<span class="atk-cd" data-atk-rem="${baseRem}">${esc(cdTxt)}</span></div>`
+      );
+    }
+    listEl.innerHTML = rows.join("");
+    banner.classList.remove("hidden");
   }
 
   function renderAuxDomOnly() {
     const aux = state.snapshot?.aux;
     if (!aux) return;
+    renderAttackBanner();
     renderAuxCountdownsOnly();
     const dtEl = $("dt-status-lbl");
     if (dtEl) dtEl.textContent = aux.ditrai_status || "Sẵn sàng";
@@ -3126,11 +3178,21 @@
        <div class="field"><label>Telegram Bot Token</label><input id="nf-tok" type="password" value="${esc(np.telegram_bot_token)}"/></div>
        <div class="field"><label>Telegram Chat ID</label><input id="nf-cid" type="text" value="${esc(np.telegram_chat_id)}"/></div>
        <hr style="border-color:var(--border);margin:12px 0;"/>
+       <div class="form-row"><label><input id="nf-atk-en" type="checkbox" ${np.attack_alert_enabled !== false ? "checked" : ""}/> 🚨 Cảnh báo khi có quân tấn công</label></div>
+       <div class="form-row" style="padding-left:20px;">
+         <label><input id="nf-atk-pvp" type="checkbox" ${np.attack_alert_pvp_only ? "checked" : ""}/> Chỉ báo người chơi PvP (bỏ qua NPC/Man)</label>
+       </div>
+       <div class="form-row" style="padding-left:20px;">
+         <label>Chu kỳ kiểm tra (phút):</label>
+         <input id="nf-atk-int" type="number" min="1" max="60" value="${esc(String(np.attack_check_interval_minutes || 5))}" style="width:70px;"/>
+       </div>
+       <hr style="border-color:var(--border);margin:12px 0;"/>
        <div class="form-row"><label><input id="nf-autocap" type="checkbox" ${cb.auto_capture_boss ? "checked" : ""}/> 👑 Tự động bắt sống BOSS bằng Coin khi sĩ khí &lt; </label><input id="nf-mor" type="number" value="${esc(cb.capture_boss_max_morale)}" style="width:65px;"/></div>`,
       `<button id="btn-nf-test" class="btn-sm">🧪 Thử nghiệm</button>
        <button id="btn-nf-save" class="btn-primary btn-sm">💾 Lưu cấu hình</button>`
     );
     $("btn-nf-save").onclick = async () => {
+      const atkInt = Math.max(1, Math.min(60, parseInt($("nf-atk-int").value || "5", 10) || 5));
       await saveProfileImmediate({
         notifications: {
           web_enabled: $("nf-web").checked,
@@ -3138,6 +3200,9 @@
           telegram_enabled: $("nf-tele").checked,
           telegram_alert_captcha: $("nf-cap").checked,
           telegram_alert_disconnect: $("nf-disc").checked,
+          attack_alert_enabled: $("nf-atk-en").checked,
+          attack_alert_pvp_only: $("nf-atk-pvp").checked,
+          attack_check_interval_minutes: atkInt,
           telegram_bot_token: $("nf-tok").value.trim(),
           telegram_chat_id: $("nf-cid").value.trim(),
         },
@@ -4181,6 +4246,16 @@
     $("btn-notify-settings").onclick = openNotificationModal;
     $("btn-account-logout").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/logout`, { method: "POST" });
     $("btn-resume-captcha").onclick = () => api(`/api/accounts/${encodeURIComponent(state.currentKey)}/captcha/resume`, { method: "POST" });
+    if ($("btn-check-attacks-now")) {
+      $("btn-check-attacks-now").onclick = async () => {
+        if (!state.currentKey) return;
+        try {
+          const res = await api(`/api/accounts/${encodeURIComponent(state.currentKey)}/attacks/check`, { method: "POST" });
+          const cnt = res?.incoming_attacks?.count || 0;
+          showToast("Kiểm tra quân tình", cnt > 0 ? `Phát hiện ${cnt} mối đe dọa!` : "An toàn: Chưa có quân tấn công.", cnt > 0 ? "error" : "info");
+        } catch (e) { showToast("Lỗi kiểm tra quân tình", e.message, "error"); }
+      };
+    }
 
     $("hdr-profile-import").onchange = async (e) => {
       const f = e.target.files?.[0];

@@ -8,12 +8,15 @@ Chịu trách nhiệm:
 - Chạy bất đồng bộ đa luồng (daemon thread) không gây nghẽn tiến trình tác chiến hoặc giao diện.
 """
 
+import html
 import json
 import logging
 import platform
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional, Set, Tuple
 
 import requests
@@ -53,8 +56,19 @@ class NotificationConfig:
     telegram_enabled: bool = False
     telegram_alert_captcha: bool = True
     telegram_alert_disconnect: bool = True
+    attack_alert_enabled: bool = True
+    attack_alert_pvp_only: bool = False
+    attack_check_interval_minutes: int = 5
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    @staticmethod
+    def _parse_attack_interval(val: Any) -> int:
+        try:
+            iv = int(str(val).strip())
+        except (ValueError, TypeError):
+            return 5
+        return max(1, min(60, iv))
 
     def __init__(
         self,
@@ -70,6 +84,9 @@ class NotificationConfig:
         notify_web: Optional[bool] = None,
         telegram_alert_captcha: Optional[bool] = None,
         telegram_alert_disconnect: Optional[bool] = None,
+        attack_alert_enabled: Optional[bool] = None,
+        attack_alert_pvp_only: Optional[bool] = None,
+        attack_check_interval_minutes: Optional[int] = None,
         **kwargs,
     ):
         d_val = notify_desktop_toast if notify_desktop_toast is not None else desktop_enabled
@@ -86,6 +103,11 @@ class NotificationConfig:
 
         self.telegram_alert_captcha = True if telegram_alert_captcha is None else bool(telegram_alert_captcha)
         self.telegram_alert_disconnect = True if telegram_alert_disconnect is None else bool(telegram_alert_disconnect)
+        self.attack_alert_enabled = True if attack_alert_enabled is None else bool(attack_alert_enabled)
+        self.attack_alert_pvp_only = False if attack_alert_pvp_only is None else bool(attack_alert_pvp_only)
+        self.attack_check_interval_minutes = (
+            5 if attack_check_interval_minutes is None else self._parse_attack_interval(attack_check_interval_minutes)
+        )
 
         self.telegram_bot_token = str(kwargs.get("telegram_bot_token", telegram_bot_token)).strip()
         self.telegram_chat_id = str(kwargs.get("telegram_chat_id", telegram_chat_id)).strip()
@@ -149,6 +171,11 @@ class NotificationConfig:
             telegram_enabled=bool(t_val),
             telegram_alert_captcha=bool(data.get("telegram_alert_captcha", True)),
             telegram_alert_disconnect=bool(data.get("telegram_alert_disconnect", True)),
+            attack_alert_enabled=bool(data.get("attack_alert_enabled", True)),
+            attack_alert_pvp_only=bool(data.get("attack_alert_pvp_only", False)),
+            attack_check_interval_minutes=cls._parse_attack_interval(
+                data.get("attack_check_interval_minutes", 5)
+            ),
             telegram_bot_token=str(data.get("telegram_bot_token", "")).strip(),
             telegram_chat_id=str(data.get("telegram_chat_id", "")).strip(),
         )
@@ -161,6 +188,9 @@ class NotificationConfig:
             "telegram_enabled": self.telegram_enabled,
             "telegram_alert_captcha": self.telegram_alert_captcha,
             "telegram_alert_disconnect": self.telegram_alert_disconnect,
+            "attack_alert_enabled": self.attack_alert_enabled,
+            "attack_alert_pvp_only": self.attack_alert_pvp_only,
+            "attack_check_interval_minutes": self.attack_check_interval_minutes,
             "notify_desktop_toast": self.desktop_enabled,
             "notify_sound": self.sound_enabled,
             "notify_web": self.web_enabled,
@@ -403,4 +433,183 @@ def dispatch_system_alert(
                 pass
 
     threading.Thread(target=_worker, name="SystemNotificationWorker", daemon=True).start()
+    return True
+
+
+_VN_TZ = timezone(timedelta(hours=7))
+
+
+def format_duration_hms(seconds: int) -> str:
+    """Định dạng thời lượng (giây) thành HH:MM:SS (hoặc MM:SS nếu dưới 1 giờ)."""
+    s = max(0, int(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{sec:02d}"
+    return f"{m:02d}:{sec:02d}"
+
+
+def _format_attack_forces(attack: Any) -> str:
+    gens = list(getattr(attack, "generals", None) or [])
+    gen_names = [str(g[1] or f"Tướng #{g[0]}").strip() for g in gens if g]
+    parts: list[str] = []
+    if gen_names:
+        parts.append(", ".join(gen_names))
+    inf = int(getattr(attack, "infantry", -1))
+    cav = int(getattr(attack, "cavalry", -1))
+    arc = int(getattr(attack, "archers", -1))
+    sie = int(getattr(attack, "siege", -1))
+    if any(v >= 0 for v in (inf, cav, arc, sie)):
+        fmt = lambda v: f"{v:,}" if v >= 0 else "?"
+        parts.append(f"Bộ {fmt(inf)} / Kỵ {fmt(cav)} / Cung {fmt(arc)} / Xe {fmt(sie)}")
+    return " | ".join(parts) if parts else "Chưa lộ"
+
+
+def dispatch_attack_alert(
+    *,
+    account_key: str,
+    server_id: int = 0,
+    stage: str = "initial",
+    attack: Optional[Any] = None,
+    battle: Optional[Any] = None,
+    config: Optional[NotificationConfig] = None,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_web_event: Optional[Callable[[dict], None]] = None,
+) -> bool:
+    """Điều phối cảnh báo quân tấn công (initial / urgent / battle) qua Thông Báo Đa Kênh."""
+    cfg = config or NotificationConfig()
+    srv = int(server_id) if int(server_id or 0) > 0 else 53
+    acc_label = account_key or f"S{srv}"
+
+    if stage == "battle" and battle is not None:
+        title = "⚔️ ĐANG GIAO CHIẾN TẠI CĂN CỨ!"
+        b_prefix = "[Trại]" if getattr(battle, "target_is_camp", False) else "[Thành]"
+        b_name = getattr(battle, "target_base_name", "") or f"ID {getattr(battle, 'target_base_id', 0)}"
+        bx = int(getattr(battle, "target_x", 0) or 0)
+        by = int(getattr(battle, "target_y", 0) or 0)
+        b_coords = f" ({bx}, {by})" if (bx or by) else ""
+        target_label = f"{b_prefix} {b_name}{b_coords}"
+
+        attackers = [str(x).strip() for x in (getattr(battle, "attackers", None) or []) if str(x).strip()]
+        attacker_label = ", ".join(attackers) if attackers else "Địch đang giao chiến"
+        next_left = int(getattr(battle, "next_round_left", 0) or 0)
+        battle_id = int(getattr(battle, "battle_id", 0) or 0)
+        battle_url = getattr(battle, "battle_url", "") or f"http://sg{srv}.dipan.com/battle/{battle_id}"
+
+        plain_body = (
+            f"Tài khoản: {acc_label} | Căn cứ: {target_label}\n"
+            f"Địch: {attacker_label} | Hiệp tiếp theo: {format_duration_hms(next_left)}\n"
+            f"Link: {battle_url}"
+        )
+        telegram_msg = (
+            f"⚔️ <b>[Linh Vương] ĐANG GIAO CHIẾN TẠI CĂN CỨ!</b>\n"
+            f"👤 <b>Tài khoản:</b> {html.escape(acc_label)}\n"
+            f"🏰 <b>Căn cứ:</b> {html.escape(target_label)}\n"
+            f"🎯 <b>Địch:</b> {html.escape(attacker_label)}\n"
+            f"⏱️ <b>Hiệp tiếp theo:</b> {format_duration_hms(next_left)}\n"
+            f"🔗 <b>Chiến trường:</b> <a href=\"{html.escape(battle_url)}\">{html.escape(battle_url)}</a>"
+        )
+        log_line = (
+            f"⚔️ [QUÂN TẤN CÔNG] {target_label} đang giao chiến ({attacker_label})! "
+            f"Chiến trường: {battle_url}"
+        )
+    elif attack is not None:
+        title = (
+            "🚨 KHẨN CẤP: QUÂN ĐỊCH SẮP TỚI (≤ 5 PHÚT)!"
+            if stage == "urgent"
+            else "🚨 CẢNH BÁO QUÂN TẤN CÔNG!"
+        )
+        b_prefix = "[Trại]" if getattr(attack, "target_is_camp", False) else "[Thành]"
+        b_name = getattr(attack, "target_base_name", "") or f"ID {getattr(attack, 'target_base_id', 0)}"
+        bx = int(getattr(attack, "target_x", 0) or 0)
+        by = int(getattr(attack, "target_y", 0) or 0)
+        b_coords = f" ({bx}, {by})" if (bx or by) else ""
+        target_label = f"{b_prefix} {b_name}{b_coords}"
+
+        is_pvp = bool(getattr(attack, "is_pvp", False))
+        src_name = str(getattr(attack, "source_name", "") or "Quân địch")
+        sx = int(getattr(attack, "source_x", 0) or 0)
+        sy = int(getattr(attack, "source_y", 0) or 0)
+        atk_name = str(getattr(attack, "attacker_name", "") or "").strip()
+        if is_pvp and atk_name:
+            attacker_label = f"[PvP] {atk_name} — {src_name} ({sx}, {sy})"
+        elif is_pvp:
+            attacker_label = f"[PvP] {src_name} ({sx}, {sy})"
+        else:
+            attacker_label = f"[NPC] {src_name} ({sx}, {sy})"
+
+        forces_label = _format_attack_forces(attack)
+        now_ep = time.time()
+        rem = int(attack.current_remaining_seconds(now_epoch=now_ep)) if hasattr(attack, "current_remaining_seconds") else int(getattr(attack, "remaining_seconds", 0) or 0)
+        arr_ep = float(getattr(attack, "arrival_epoch", 0.0) or 0.0) or (now_ep + rem)
+        eta_str = datetime.fromtimestamp(arr_ep, tz=_VN_TZ).strftime("%H:%M:%S")
+        time_label = f"Còn {format_duration_hms(rem)} (dự kiến ~{eta_str})"
+        battle_url = ""
+
+        plain_body = (
+            f"Tài khoản: {acc_label} | Căn cứ: {target_label}\n"
+            f"Kẻ tấn công: {attacker_label}\n"
+            f"Quân lực: {forces_label}\n"
+            f"Thời gian: {time_label}"
+        )
+        header_tg = (
+            "🚨 <b>[Linh Vương] KHẨN CẤP: QUÂN ĐỊCH SẮP TỚI!</b>"
+            if stage == "urgent"
+            else "🚨 <b>[Linh Vương] CẢNH BÁO QUÂN TẤN CÔNG!</b>"
+        )
+        telegram_msg = (
+            f"{header_tg}\n"
+            f"👤 <b>Tài khoản:</b> {html.escape(acc_label)}\n"
+            f"🏰 <b>Căn cứ bị đánh:</b> {html.escape(target_label)}\n"
+            f"🏴 <b>Kẻ tấn công:</b> {html.escape(attacker_label)}\n"
+            f"🪖 <b>Quân lực:</b> {html.escape(forces_label)}\n"
+            f"⏳ <b>Thời gian:</b> {html.escape(time_label)}"
+        )
+        tag = "KHẨN CẤP" if stage == "urgent" else "CẢNH BÁO"
+        log_line = (
+            f"🚨 [{tag} QUÂN TẤN CÔNG] {attacker_label} đang tiến đánh {target_label} | "
+            f"{time_label} | Quân lực: {forces_label}"
+        )
+    else:
+        return False
+
+    if on_log:
+        try:
+            on_log(log_line)
+        except Exception:
+            pass
+
+    if on_web_event and cfg.web_enabled:
+        try:
+            on_web_event({
+                "kind": "attack",
+                "stage": stage,
+                "account_key": acc_label,
+                "title": title,
+                "body": plain_body,
+                "sound": cfg.sound_enabled,
+                "battle_url": battle_url,
+            })
+        except Exception:
+            pass
+
+    def _worker():
+        if cfg.desktop_enabled:
+            send_desktop_toast(title, plain_body, sound=cfg.sound_enabled)
+        elif cfg.sound_enabled:
+            play_alert_sound()
+
+        if cfg.telegram_enabled and cfg.telegram_bot_token and cfg.telegram_chat_id:
+            ok, res_msg = send_telegram_message(
+                bot_token=cfg.telegram_bot_token,
+                chat_id=cfg.telegram_chat_id,
+                message=telegram_msg,
+            )
+            if not ok and on_log:
+                try:
+                    on_log(f"⚠️ [Telegram] {res_msg}")
+                except Exception:
+                    pass
+
+    threading.Thread(target=_worker, name="AttackNotificationWorker", daemon=True).start()
     return True

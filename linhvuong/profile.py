@@ -572,8 +572,19 @@ class NotificationProfile:
     telegram_enabled: bool = False
     telegram_alert_captcha: bool = True
     telegram_alert_disconnect: bool = True
+    attack_alert_enabled: bool = True
+    attack_alert_pvp_only: bool = False
+    attack_check_interval_minutes: int = 5
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    @staticmethod
+    def _parse_attack_interval(val: Any) -> int:
+        try:
+            iv = int(str(val).strip())
+        except (ValueError, TypeError):
+            return 5
+        return max(1, min(60, iv))
 
     def __init__(
         self,
@@ -589,6 +600,9 @@ class NotificationProfile:
         notify_web: Optional[bool] = None,
         telegram_alert_captcha: Optional[bool] = None,
         telegram_alert_disconnect: Optional[bool] = None,
+        attack_alert_enabled: Optional[bool] = None,
+        attack_alert_pvp_only: Optional[bool] = None,
+        attack_check_interval_minutes: Optional[int] = None,
         **kwargs,
     ):
         d_val = notify_desktop_toast if notify_desktop_toast is not None else desktop_enabled
@@ -605,6 +619,11 @@ class NotificationProfile:
 
         self.telegram_alert_captcha = True if telegram_alert_captcha is None else bool(telegram_alert_captcha)
         self.telegram_alert_disconnect = True if telegram_alert_disconnect is None else bool(telegram_alert_disconnect)
+        self.attack_alert_enabled = True if attack_alert_enabled is None else bool(attack_alert_enabled)
+        self.attack_alert_pvp_only = False if attack_alert_pvp_only is None else bool(attack_alert_pvp_only)
+        self.attack_check_interval_minutes = (
+            5 if attack_check_interval_minutes is None else self._parse_attack_interval(attack_check_interval_minutes)
+        )
 
         self.telegram_bot_token = str(kwargs.get("telegram_bot_token", telegram_bot_token)).strip()
         self.telegram_chat_id = str(kwargs.get("telegram_chat_id", telegram_chat_id)).strip()
@@ -668,6 +687,11 @@ class NotificationProfile:
             telegram_enabled=bool(t_val),
             telegram_alert_captcha=bool(data.get("telegram_alert_captcha", True)),
             telegram_alert_disconnect=bool(data.get("telegram_alert_disconnect", True)),
+            attack_alert_enabled=bool(data.get("attack_alert_enabled", True)),
+            attack_alert_pvp_only=bool(data.get("attack_alert_pvp_only", False)),
+            attack_check_interval_minutes=cls._parse_attack_interval(
+                data.get("attack_check_interval_minutes", 5)
+            ),
             telegram_bot_token=str(data.get("telegram_bot_token", "")).strip(),
             telegram_chat_id=str(data.get("telegram_chat_id", "")).strip(),
         )
@@ -680,6 +704,9 @@ class NotificationProfile:
             "telegram_enabled": self.telegram_enabled,
             "telegram_alert_captcha": self.telegram_alert_captcha,
             "telegram_alert_disconnect": self.telegram_alert_disconnect,
+            "attack_alert_enabled": self.attack_alert_enabled,
+            "attack_alert_pvp_only": self.attack_alert_pvp_only,
+            "attack_check_interval_minutes": self.attack_check_interval_minutes,
             "notify_desktop_toast": self.desktop_enabled,
             "notify_sound": self.sound_enabled,
             "notify_web": self.web_enabled,

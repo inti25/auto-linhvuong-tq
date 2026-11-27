@@ -31,6 +31,7 @@ from ..paths import logs_dir
 from ..proxy import DEFAULT_FREE_PROXY_URL
 from ..runtime import AUTO_START_TASK_LABELS, LOG_CHANNELS, AccountSession, WorkspaceManager
 from ..security import SESSION_COOKIE_NAME, VaultError, WebAdminAuth
+from ..tasks.base import CaptchaRequired
 from ..tasks.binh_man import MAN_TARGET_OPTIONS
 from ..tasks.building import BUILDING_NAMES, CHEST_MAPPING, chest_needs_city_switch
 from ..tasks.crafting import WEAPONS_DATA
@@ -983,6 +984,16 @@ def create_app(
     def notifications_test(account_key: str) -> dict:
         _get_session(account_key).test_notification()
         return {"ok": True}
+
+    @app.post("/api/accounts/{account_key}/attacks/check", dependencies=[Depends(require_admin)])
+    def attacks_check_now(account_key: str) -> dict:
+        try:
+            snap = _get_session(account_key).check_incoming_attacks_once(force=True)
+            return {"ok": True, "incoming_attacks": snap}
+        except CaptchaRequired as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/accounts/{account_key}/logs/clear", dependencies=[Depends(require_admin)])
     def logs_clear(account_key: str, body: dict = Body(default={})) -> dict:

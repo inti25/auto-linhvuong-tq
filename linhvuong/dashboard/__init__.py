@@ -19,6 +19,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Optional
 
+from ..attack_monitor import IncomingAttackMonitor
 from ..auth import login
 from ..battle import (
     ATTACK_ACTION_COMBO_OPTIONS,
@@ -37,9 +38,15 @@ from ..gateway import GatewayClient
 from ..gui import set_app_icon
 from ..locks import TargetLocks
 from ..logger import open_logs_directory, setup_logger
-from ..notifications import NotificationConfig, dispatch_boss_alert
+from ..notifications import (
+    NotificationConfig,
+    dispatch_attack_alert,
+    dispatch_boss_alert,
+    format_duration_hms,
+)
 from ..profile import BaseBinhManConfig, CityCraftConfig, CraftProfile, NotificationProfile, Profile, ProfileStore
 from ..roster import Army, City, General, Roster, fetch_roster
+from ..tasks.base import CaptchaRequired
 from ..tasks.building import BuildingPlan, BuildingTask
 from ..tasks.crafting import WEAPONS_DATA, WeaponCrafter, get_weapon_name
 from ..tasks.logistics import ArmyTransferOrder, LogisticsTask
@@ -320,6 +327,17 @@ class Dashboard(
         self.bt_capture_morale_var = tk.StringVar(value="60")
         self._notify_win = None
 
+        # Giám sát Quân Tấn Công (ADR-0050)
+        self._attack_monitor = IncomingAttackMonitor()
+        self._attack_stop_event = threading.Event()
+        self._attack_wakeup_event = threading.Event()
+        self._attack_thread: Optional[threading.Thread] = None
+        self._attack_countdown_after_id: Optional[str] = None
+        self._attack_lock = threading.Lock()
+        self._attack_next_check_at: float = 0.0
+        self._attack_banner_visible = False
+        self._attack_latest_battle_url = ""
+
         # Cấu hình Chế Tạo Quân Giới (ADR-0031)
         self.craft_configs: dict[int, CityCraftConfig] = {}
         self._craft_running: bool = False
@@ -467,6 +485,34 @@ class Dashboard(
             self.rotate_proxy_btn.pack(side="right", padx=(0, 6))
 
         self._update_title_and_proxy_status()
+
+        # Banner Cảnh Báo Quân Tấn Công (ẩn khi an toàn, pack trước notebook khi có địch)
+        self.attack_banner_frame = tk.Frame(
+            self, bg="#4a151b", highlightbackground="#dc3545", highlightthickness=1, padx=10, pady=6
+        )
+        self.attack_banner_lbl = tk.Label(
+            self.attack_banner_frame,
+            text="",
+            bg="#4a151b",
+            fg="#fecaca",
+            font=("Segoe UI", 9, "bold"),
+            justify="left",
+            anchor="w",
+        )
+        self.attack_banner_lbl.pack(side="left", fill="x", expand=True)
+        self.attack_open_battle_btn = ttk.Button(
+            self.attack_banner_frame,
+            text="⚔️ Mở Chiến Trường",
+            style="Warning.TButton",
+            command=self._open_attack_battle_url,
+        )
+        self.attack_check_now_btn = ttk.Button(
+            self.attack_banner_frame,
+            text="🔄 Kiểm tra ngay",
+            style="Danger.TButton",
+            command=self._trigger_attack_check_now,
+        )
+        self.attack_check_now_btn.pack(side="right", padx=(6, 0))
 
         # Notebook chứa các Tab
         self.notebook = ttk.Notebook(self)
@@ -730,6 +776,164 @@ class Dashboard(
             except Exception as exc:
                 logger.debug(f"Đồng bộ hồ sơ sau khi tải roster thất bại: {exc}")
 
+        self._start_attack_monitor_loop()
+
+    @property
+    def incoming_attack_count(self) -> int:
+        mon = getattr(self, "_attack_monitor", None)
+        return mon.active_count if mon is not None else 0
+
+    def _open_attack_battle_url(self) -> None:
+        url = getattr(self, "_attack_latest_battle_url", "")
+        if url:
+            import webbrowser
+
+            webbrowser.open(url)
+
+    def _trigger_attack_check_now(self) -> None:
+        if getattr(self, "_destroyed", False):
+            return
+        threading.Thread(
+            target=lambda: self._run_attack_check_once(force=True),
+            name="AttackCheckNow",
+            daemon=True,
+        ).start()
+
+    def _start_attack_monitor_loop(self) -> None:
+        if getattr(self, "_attack_thread", None) and self._attack_thread.is_alive():
+            self._attack_wakeup_event.set()
+            return
+        self._attack_stop_event.clear()
+        self._attack_wakeup_event.clear()
+
+        def _loop():
+            while not self._attack_stop_event.is_set() and not getattr(self, "_destroyed", False):
+                try:
+                    self._run_attack_check_once(force=False)
+                except Exception as exc:
+                    logger.debug(f"Lỗi vòng kiểm tra quân tấn công Desktop: {exc}")
+                cfg = getattr(self, "notification_config", None) or NotificationConfig()
+                if not cfg.attack_alert_enabled:
+                    wait_sec = 60.0
+                else:
+                    wait_sec = max(10.0, self._attack_next_check_at - time.monotonic())
+                self._attack_wakeup_event.wait(wait_sec)
+                self._attack_wakeup_event.clear()
+
+        self._attack_thread = threading.Thread(
+            target=_loop,
+            name=f"DesktopAttackMonitor-{getattr(self, 'username', 'user')}",
+            daemon=True,
+        )
+        self._attack_thread.start()
+
+    def _run_attack_check_once(self, *, force: bool = False) -> None:
+        if getattr(self, "_destroyed", False) or not getattr(self, "gateway", None):
+            return
+        cfg = getattr(self, "notification_config", None) or NotificationConfig()
+        if not cfg.attack_alert_enabled and not force:
+            if self._attack_monitor.active_count > 0:
+                self._attack_monitor.clear()
+                if not getattr(self, "_destroyed", False):
+                    self.after(0, self._refresh_attack_banner)
+            self._attack_next_check_at = time.monotonic() + 60.0
+            return
+
+        if not force and time.monotonic() < self._attack_next_check_at:
+            return
+        if not self._attack_lock.acquire(blocking=False):
+            return
+        try:
+            srv_id = int(getattr(self.gateway, "server_id", 0) or 0)
+            acc_key = f"{getattr(self, 'username', '')} @ S{srv_id}" if getattr(self, "username", "") else f"S{srv_id}"
+            snapshot, events = self._attack_monitor.check_once(
+                self.gateway,
+                roster=getattr(self, "roster", None),
+                server_id=srv_id,
+                pvp_only=bool(cfg.attack_alert_pvp_only),
+            )
+            self._attack_next_check_at = time.monotonic() + self._attack_monitor.next_check_delay(
+                cfg.attack_check_interval_minutes
+            )
+            for ev in events:
+                def _on_log(msg: str, stage: str = ev.stage) -> None:
+                    if not getattr(self, "_destroyed", False):
+                        self.after(0, self._log_global, msg)
+                        if stage == "battle" and hasattr(self, "_append_bt_log"):
+                            self.after(0, self._append_bt_log, msg)
+
+                dispatch_attack_alert(
+                    account_key=acc_key,
+                    server_id=srv_id,
+                    stage=ev.stage,
+                    attack=ev.attack,
+                    battle=ev.battle,
+                    config=cfg,
+                    on_log=_on_log,
+                )
+            if not getattr(self, "_destroyed", False):
+                self.after(0, self._refresh_attack_banner)
+        except CaptchaRequired:
+            self._attack_next_check_at = time.monotonic() + 60.0
+        finally:
+            self._attack_lock.release()
+
+    def _refresh_attack_banner(self) -> None:
+        if getattr(self, "_destroyed", False):
+            return
+        snap = self._attack_monitor.get_snapshot()
+        if not snap.under_attack:
+            self._attack_latest_battle_url = ""
+            if self._attack_banner_visible:
+                self.attack_banner_frame.pack_forget()
+                self._attack_banner_visible = False
+            if getattr(self, "_attack_countdown_after_id", None) is not None:
+                try:
+                    self.after_cancel(self._attack_countdown_after_id)
+                except Exception:
+                    pass
+                self._attack_countdown_after_id = None
+            return
+
+        lines: list[str] = []
+        battle_url = ""
+        for bat in snap.battles:
+            if not battle_url:
+                battle_url = bat.battle_url
+            prefix = "[Trại]" if bat.target_is_camp else "[Thành]"
+            enemy = f" — Địch: {', '.join(bat.attackers)}" if bat.attackers else ""
+            lines.append(f"⚔️ {prefix} {bat.target_base_name} đang giao chiến{enemy} ({bat.battle_url})")
+        now_ep = time.time()
+        for atk in snap.attacks:
+            prefix = "[Trại]" if atk.target_is_camp else "[Thành]"
+            tag = "[PvP]" if atk.is_pvp else "[NPC]"
+            who = f"{atk.attacker_name} — {atk.source_name}" if (atk.is_pvp and atk.attacker_name) else atk.source_name
+            rem = atk.current_remaining_seconds(now_epoch=now_ep)
+            rem_str = f"Còn {format_duration_hms(rem)}" if rem > 0 else "Đã tới / Đang giao chiến"
+            lines.append(f"🚨 {tag} {who} ({atk.source_x}, {atk.source_y}) → {prefix} {atk.target_base_name} · {rem_str}")
+
+        self.attack_banner_lbl.config(text="\n".join(lines))
+        self._attack_latest_battle_url = battle_url
+        if battle_url:
+            if not self.attack_open_battle_btn.winfo_ismapped():
+                self.attack_open_battle_btn.pack(side="right", padx=(6, 0))
+        else:
+            if self.attack_open_battle_btn.winfo_ismapped():
+                self.attack_open_battle_btn.pack_forget()
+
+        if not self._attack_banner_visible:
+            self.attack_banner_frame.pack(fill="x", padx=12, pady=(0, 6), before=self.notebook)
+            self._attack_banner_visible = True
+
+        if getattr(self, "_attack_countdown_after_id", None) is None:
+            self._attack_countdown_after_id = self.after(1000, self._tick_attack_banner_countdown)
+
+    def _tick_attack_banner_countdown(self) -> None:
+        self._attack_countdown_after_id = None
+        if getattr(self, "_destroyed", False) or not self._attack_banner_visible:
+            return
+        self._refresh_attack_banner()
+
     def _apply_loaded_roster(self, roster: Roster) -> bool:
         had_loaded_profile_cities = bool(getattr(self, "_loaded_profile_city_names", None))
         self.roster = roster
@@ -929,6 +1133,16 @@ class Dashboard(
         except Exception:
             pass
         self._res_monitor_running = False
+        try:
+            if getattr(self, "_attack_stop_event", None):
+                self._attack_stop_event.set()
+            if getattr(self, "_attack_wakeup_event", None):
+                self._attack_wakeup_event.set()
+            if getattr(self, "_attack_countdown_after_id", None) is not None:
+                self.after_cancel(self._attack_countdown_after_id)
+                self._attack_countdown_after_id = None
+        except Exception:
+            pass
         try:
             if getattr(self, "_boost_after_id", None) is not None:
                 self.after_cancel(self._boost_after_id)

@@ -879,6 +879,16 @@ class AccountCard(tk.Frame):
         )
         self.title_lbl.pack(side="left", fill="x", expand=True)
 
+        self.attack_badge_lbl = tk.Label(
+            self.header_frame,
+            text="",
+            font=("Segoe UI", 8, "bold"),
+            fg="#ff4d4f",
+            bg=CARD,
+            anchor="e",
+        )
+        self.attack_badge_lbl.pack(side="right")
+
         # Dòng 2: Trạng thái kết nối
         self.status_frame = tk.Frame(self, bg=CARD)
         self.status_frame.pack(fill="x", expand=True, pady=(3, 0))
@@ -935,6 +945,7 @@ class AccountCard(tk.Frame):
         self.configure(bg=bg_col, highlightbackground=border_col, highlightthickness=2 if selected else 0)
         self.header_frame.configure(bg=bg_col)
         self.title_lbl.configure(bg=bg_col)
+        self.attack_badge_lbl.configure(bg=bg_col)
         self.status_frame.configure(bg=bg_col)
         self.badge_lbl.configure(bg=bg_col)
         self.task_lbl.configure(bg=bg_col)
@@ -954,6 +965,10 @@ class AccountCard(tk.Frame):
 
     def set_tasks_summary(self, summary_text: str):
         self.task_lbl.configure(text=summary_text or "Nghỉ")
+
+    def set_attack_count(self, count: int):
+        cnt = max(0, int(count or 0))
+        self.attack_badge_lbl.configure(text=f"🚨 {cnt}" if cnt > 0 else "")
 
 
 class MultiAccountApp(tk.Tk):
@@ -1335,6 +1350,7 @@ class MultiAccountApp(tk.Tk):
         if card:
             card.set_status("disconnected", "Chưa đăng nhập")
             card.set_tasks_summary("Nghỉ")
+            card.set_attack_count(0)
 
         if self.current_key == account_key:
             self._select_account(account_key)
@@ -1537,6 +1553,7 @@ class MultiAccountApp(tk.Tk):
                     else:
                         card.set_status("connected", "Đang chạy" if active else "Đã kết nối")
                     card.set_tasks_summary(" | ".join(active) if active else "Nghỉ")
+                    card.set_attack_count(getattr(dash, "incoming_attack_count", 0))
 
                 if key == self.current_key:
                     if needs_captcha:

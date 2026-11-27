@@ -88,7 +88,7 @@ class BattleMixin:
 
         win = tk.Toplevel(self)
         win.title("🔔 Cài Đặt Thông Báo & Bắt Sống BOSS")
-        win.geometry("490x460")
+        win.geometry("490x585")
         win.configure(bg=BG)
         win.resizable(False, False)
         set_app_icon(win)
@@ -99,6 +99,9 @@ class BattleMixin:
         v_tele = tk.BooleanVar(value=self.notification_config.notify_telegram)
         v_token = tk.StringVar(value=self.notification_config.telegram_bot_token)
         v_chat_id = tk.StringVar(value=self.notification_config.telegram_chat_id)
+        v_atk_en = tk.BooleanVar(value=getattr(self.notification_config, "attack_alert_enabled", True))
+        v_atk_pvp = tk.BooleanVar(value=getattr(self.notification_config, "attack_alert_pvp_only", False))
+        v_atk_int = tk.StringVar(value=str(getattr(self.notification_config, "attack_check_interval_minutes", 5)))
         v_capture = tk.BooleanVar(
             value=bool(self.bt_auto_capture_boss_var.get()) if hasattr(self, "bt_auto_capture_boss_var") else False
         )
@@ -147,6 +150,33 @@ class BattleMixin:
         tk.Label(r_cid, text="Chat ID:", bg=CARD, fg=FG, width=10, anchor="w", font=("Segoe UI", 9)).pack(side="left")
         e_cid = ttk.Entry(r_cid, textvariable=v_chat_id, width=38)
         e_cid.pack(side="left", fill="x", expand=True)
+
+        f_atk = ttk.LabelFrame(win, text="🚨 Cảnh Báo Quân Tấn Công", style="Card.TLabelframe")
+        f_atk.pack(fill="x", padx=16, pady=(4, 8))
+
+        a1 = tk.Frame(f_atk, bg=CARD)
+        a1.pack(fill="x", padx=8, pady=2)
+        ttk.Checkbutton(
+            a1,
+            text="Cảnh báo khi có quân tấn công Thành / Doanh trại",
+            variable=v_atk_en,
+            style="TCheckbutton",
+        ).pack(anchor="w")
+
+        a2 = tk.Frame(f_atk, bg=CARD)
+        a2.pack(fill="x", padx=20, pady=2)
+        ttk.Checkbutton(
+            a2,
+            text="Chỉ báo người chơi PvP (bỏ qua NPC/Man)",
+            variable=v_atk_pvp,
+            style="TCheckbutton",
+        ).pack(anchor="w")
+
+        a3 = tk.Frame(f_atk, bg=CARD)
+        a3.pack(fill="x", padx=20, pady=(2, 6))
+        tk.Label(a3, text="Chu kỳ kiểm tra (phút):", bg=CARD, fg=FG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        ttk.Entry(a3, textvariable=v_atk_int, width=6).pack(side="left", padx=(0, 6))
+        tk.Label(a3, text="(Mặc định 5 phút, tối thiểu 1)", bg=CARD, fg=MUTED, font=("Segoe UI", 8)).pack(side="left")
 
         f_boss = ttk.LabelFrame(win, text="👑 Tự Động Bắt Sống BOSS Bằng Coin", style="Card.TLabelframe")
         f_boss.pack(fill="x", padx=16, pady=(4, 8))
@@ -202,6 +232,11 @@ class BattleMixin:
             self.notification_config.notify_telegram = bool(v_tele.get())
             self.notification_config.telegram_bot_token = v_token.get().strip()
             self.notification_config.telegram_chat_id = v_chat_id.get().strip()
+            self.notification_config.attack_alert_enabled = bool(v_atk_en.get())
+            self.notification_config.attack_alert_pvp_only = bool(v_atk_pvp.get())
+            self.notification_config.attack_check_interval_minutes = NotificationConfig._parse_attack_interval(
+                v_atk_int.get()
+            )
 
             if hasattr(self, "bt_auto_capture_boss_var"):
                 self.bt_auto_capture_boss_var.set(bool(v_capture.get()))
@@ -211,6 +246,9 @@ class BattleMixin:
 
             self._auto_save_dirty = True
             self._flush_auto_save()
+            self._attack_next_check_at = 0.0
+            if hasattr(self, "_attack_wakeup_event") and self._attack_wakeup_event:
+                self._attack_wakeup_event.set()
 
             if hasattr(self, "_append_bt_log"):
                 self._append_bt_log("🔔 Đã lưu cài đặt Thông báo và Tự động bắt sống BOSS bằng Coin.")

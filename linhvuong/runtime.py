@@ -26,6 +26,7 @@ def _game_today_str(now: Optional[datetime] = None) -> str:
 
 import requests
 
+from .attack_monitor import IncomingAttackMonitor
 from .auth import LoginError, login, normalize_proxy_url, parse_server_id
 from .armament import (
     ALL_SCOPES as ARM_ALL_SCOPES,
@@ -91,6 +92,7 @@ from .market import (
 )
 from .notifications import (
     NotificationConfig,
+    dispatch_attack_alert,
     dispatch_boss_alert,
     dispatch_system_alert,
     reset_system_alert,
@@ -560,6 +562,10 @@ class AccountSession:
         self._nien_thu_ann: Optional[dict] = None
         self._last_roster_err: Optional[str] = None
 
+        self._attack_monitor = IncomingAttackMonitor()
+        self._attack_next_check_at: float = 0.0
+        self._attack_lock = threading.Lock()
+
         # Auxiliary periodic timer (boost/explore/daily)
         self._aux_stop = threading.Event()
         self._aux_wakeup = threading.Event()
@@ -581,6 +587,9 @@ class AccountSession:
             telegram_enabled=np.telegram_enabled,
             telegram_alert_captcha=np.telegram_alert_captcha,
             telegram_alert_disconnect=np.telegram_alert_disconnect,
+            attack_alert_enabled=np.attack_alert_enabled,
+            attack_alert_pvp_only=np.attack_alert_pvp_only,
+            attack_check_interval_minutes=np.attack_check_interval_minutes,
             telegram_bot_token=np.telegram_bot_token,
             telegram_chat_id=np.telegram_chat_id,
         )
@@ -710,6 +719,7 @@ class AccountSession:
             ("daily_reward", self._check_daily_reward_once),
             ("tribute", self._check_tribute_once),
             ("training", self._check_training_once),
+            ("incoming_attack", self._check_incoming_attack_once),
         )
 
         def _loop():
@@ -733,6 +743,8 @@ class AccountSession:
                     wait_sec = min(wait_sec, max(1.0, float(aux["explore_left_seconds"])))
                 if self.profile.training.enabled and self._training_next_check_at > 0:
                     wait_sec = min(wait_sec, max(1.0, self._training_next_check_at - time.monotonic()))
+                if self.profile.notifications.attack_alert_enabled and self._attack_next_check_at > 0:
+                    wait_sec = min(wait_sec, max(1.0, self._attack_next_check_at - time.monotonic()))
                 self._aux_wakeup.wait(wait_sec)
                 self._aux_wakeup.clear()
 
@@ -789,6 +801,66 @@ class AccountSession:
         if claimed:
             self._last_daily_claim_date = today
 
+    def _check_incoming_attack_once(self) -> None:
+        self.check_incoming_attacks_once(force=False)
+
+    def check_incoming_attacks_once(self, *, force: bool = False) -> dict:
+        if self.captcha_required:
+            return self._attack_monitor.serialize_snapshot()
+        np = self.profile.notifications
+        if not np.attack_alert_enabled and not force:
+            had_active = self._attack_monitor.active_count > 0
+            if had_active:
+                self._attack_monitor.clear()
+                self._emit("aux_updated", self.get_aux_status())
+                self._emit("status_changed", self.get_status_snapshot())
+            self._attack_next_check_at = time.monotonic() + 60.0
+            return self._attack_monitor.serialize_snapshot()
+
+        now_mono = time.monotonic()
+        if not force and now_mono < self._attack_next_check_at:
+            return self._attack_monitor.serialize_snapshot()
+
+        if not self._attack_lock.acquire(blocking=False):
+            return self._attack_monitor.serialize_snapshot()
+        try:
+            prev_count = self._attack_monitor.active_count
+            snapshot, events = self._attack_monitor.check_once(
+                self.gateway,
+                roster=self.roster,
+                server_id=self.server_id,
+                pvp_only=bool(np.attack_alert_pvp_only),
+                now_monotonic=time.monotonic(),
+            )
+            self._attack_next_check_at = time.monotonic() + self._attack_monitor.next_check_delay(
+                np.attack_check_interval_minutes
+            )
+            cfg = self._notification_config()
+            for ev in events:
+                def _on_log(msg: str, stage: str = ev.stage) -> None:
+                    self.append_log("global", msg)
+                    if stage == "battle":
+                        self.append_log("battle", msg)
+
+                dispatch_attack_alert(
+                    account_key=self.account_key,
+                    server_id=self.server_id,
+                    stage=ev.stage,
+                    attack=ev.attack,
+                    battle=ev.battle,
+                    config=cfg,
+                    on_log=_on_log,
+                    on_web_event=lambda payload: self._emit("notification", payload),
+                )
+
+            snap_dict = snapshot.to_dict()
+            self._emit("aux_updated", self.get_aux_status())
+            if snapshot.count != prev_count or (snapshot.count > 0) != (prev_count > 0):
+                self._emit("status_changed", self.get_status_snapshot())
+            return snap_dict
+        finally:
+            self._attack_lock.release()
+
     # -------------------------------------------------------------------------
     # HỒ SƠ & TRẠNG THÁI TỔNG HỢP
     # -------------------------------------------------------------------------
@@ -815,7 +887,9 @@ class AccountSession:
         self._emit("profile_updated", data)
         if "training" in patch:
             self._training_next_check_at = 0.0
-        if "building" in patch or "logistics" in patch or "training" in patch:
+        if "notifications" in patch:
+            self._attack_next_check_at = 0.0
+        if "building" in patch or "logistics" in patch or "training" in patch or "notifications" in patch:
             self._aux_wakeup.set()
         if "goi_dan" in patch or "goi_man" in patch:
             self._emit("aux_updated", self.get_aux_status())
@@ -830,6 +904,7 @@ class AccountSession:
             out = self.profile.to_dict()
         self._emit("profile_updated", out)
         self._training_next_check_at = 0.0
+        self._attack_next_check_at = 0.0
         self._aux_wakeup.set()
         return out
 
@@ -906,6 +981,7 @@ class AccountSession:
             "training": self._serialize_training_status(),
             "nien_thu_announcement": self._nien_thu_ann,
             "goidan_caller": self.get_goidan_caller_status(),
+            "incoming_attacks": self._attack_monitor.serialize_snapshot(),
         }
 
     def get_task_states(self) -> dict[str, dict]:
@@ -946,6 +1022,7 @@ class AccountSession:
         active = [lbl for tid, lbl in label_map.items() if states.get(tid, {}).get("running")]
         eff_status = "captcha" if self.captcha_required else ("connected" if self.status != "error" else "error")
         eff_text = "Cần giải Captcha" if self.captcha_required else ("Đang chạy" if active else self.status_text)
+        atk_count = self._attack_monitor.active_count
         return {
             "account_key": self.account_key,
             "server_id": self.server_id,
@@ -954,6 +1031,8 @@ class AccountSession:
             "status_text": eff_text,
             "captcha_required": self.captcha_required,
             "captcha_reason": self.captcha_reason,
+            "incoming_attack_count": atk_count,
+            "under_attack": atk_count > 0,
             "tasks_summary": " | ".join(active) if active else "Nghỉ",
             "tasks": states,
             "proxy": self.get_proxy_status(),
@@ -3856,6 +3935,8 @@ class WorkspaceManager:
                         "status_text": "Chưa đăng nhập",
                         "captcha_required": False,
                         "captcha_reason": "",
+                        "incoming_attack_count": 0,
+                        "under_attack": False,
                         "tasks_summary": "Nghỉ",
                         "tasks": {},
                         "proxy": {
